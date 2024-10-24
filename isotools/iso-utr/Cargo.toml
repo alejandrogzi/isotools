@@ -1,0 +1,8 @@
+[package]
+name = "iso-utr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+packbed = { path = "../packbed/packbed" }
+config = { path = "../config" }
