@@ -1,0 +1,34 @@
+[package]
+name = "packbed"
+version = "0.0.3"
+authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
+description = "pack a .bed into overlapping components"
+keywords = ["components", "overlap", "transcript", "bed"]
+readme = "README.md"
+homepage = "https://github.com/alejandrogzi/packbed"
+repository = "https://github.com/alejandrogzi/packbed"
+categories = ["command-line-utilities", "science"]
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+dashmap.workspace = true
+clap.workspace = true
+rayon.workspace = true
+num_cpus.workspace = true
+hashbrown.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
+rand.workspace = true
+log.workspace = true
+config.workspace = true
+simple_logger.workspace = true
+
+[[bin]]
+name = "packbed"
+path = "src/main.rs"
+
+[lib]
+name = "packbed"
+path = "src/lib.rs"

@@ -1,20 +1,24 @@
 [package]
 name = "iso-intron"
-version = "0.1.0"
-edition = "2021"
+version = "0.0.1"
+authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
+description = "detect intron retentions on iso-seq reads"
+keywords = ["intron", "retention", "transcript", "isoseq"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+license.workspace = true
+edition.workspace = true
 
 [dependencies]
-packbed = { path = "../packbed/packbed" }
-config = { path = "../config" }
-dashmap = { version = "5.5.3", features = ["rayon"] }
-rayon = "1.8.1"
-log = "0.4.14"
-simple_logger = "4.3.3"
-clap = { version = "4.5.3", features = ["derive"] }
-num_cpus = "1.16.0"
-hashbrown = { version = "0.14", features = ["rayon"] }
-thiserror = "1.0"
-anyhow = "1.0"
-
-[profile.release]
-lto = true
+packbed = { path = "../packbed" }
+config.workspace = true
+dashmap.workspace = true
+rayon.workspace = true
+log.workspace = true
+clap.workspace = true
+num_cpus.workspace = true
+hashbrown.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+simple_logger.workspace = true

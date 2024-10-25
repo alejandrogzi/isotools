@@ -1,8 +1,15 @@
 [package]
 name = "iso-utr"
-version = "0.1.0"
-edition = "2021"
+version = "0.0.1"
+authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
+description = "detect UTR truncations on iso-seq reads"
+keywords = ["utr", "truncation", "transcript", "isoseq"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+license.workspace = true
+edition.workspace = true
 
 [dependencies]
-packbed = { path = "../packbed/packbed" }
-config = { path = "../config" }
+packbed = { path = "../packbed" }
+config.workspace = true
