@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use config::get_progress_bar;
+use dashmap::DashMap;
 use hashbrown::HashMap;
 use log::info;
 use rand::Rng;
@@ -93,10 +94,7 @@ fn parse_tracks<'a>(
     });
 
     pb.finish_and_clear();
-
-    let mut count = 0;
-    count += tracks.values().map(|x| x.len()).sum::<usize>();
-    info!("Records parsed: {}", count);
+    info!("Records parsed: {}", tracks.values().flatten().count());
 
     Ok(tracks)
 }
@@ -132,68 +130,60 @@ fn buckerize(
 ) -> HashMap<String, Vec<Vec<Arc<GenePred>>>> {
     info!("Packing transcripts...");
     let pb = get_progress_bar(amount as u64, "Buckerizing transcripts");
-    let cmap = Mutex::new(HashMap::new());
+    let cmap = DashMap::new();
 
     tracks.into_par_iter().for_each(|(chr, records)| {
         let mut acc: Vec<(u64, u64, Vec<Arc<GenePred>>, &str)> = Vec::new();
 
         for tx in records {
             pb.inc(1);
-            let group = acc.iter_mut().any(
-                |(ref mut group_start, ref mut group_end, txs, group_color)| {
-                    let (tx_start, tx_end) = if overlap_cds {
-                        (tx.cds_start, tx.cds_end)
-                    } else {
-                        (tx.start, tx.end)
-                    };
+            let tx_start = if overlap_cds { tx.cds_start } else { tx.start };
+            let tx_end = if overlap_cds { tx.cds_end } else { tx.end };
 
-                    if tx_start >= *group_start && tx_start <= *group_end {
-                        // loop over txs exons and see if they overlap
-                        let exon_overlap = txs
-                            .iter()
-                            .any(|group| exonic_overlap(&group.exons, &tx.exons));
+            let mut added = false;
 
-                        if exon_overlap {
-                            *group_start = (*group_start).min(tx_start);
-                            *group_end = (*group_end).max(tx_end);
+            for (ref mut group_start, ref mut group_end, txs, group_color) in &mut acc {
+                if tx_start < *group_end && tx_end > *group_start {
+                    let exon_overlap = txs
+                        .iter()
+                        .any(|group_tx| exonic_overlap(&group_tx.exons, &tx.exons));
 
-                            let tx = Arc::new(tx.clone());
+                    if exon_overlap {
+                        *group_start = (*group_start).min(tx_start);
+                        *group_end = (*group_end).max(tx_end);
+                        let tx_arc = Arc::new(tx.clone());
 
-                            if colorize {
-                                txs.push(tx.clone().colorline(*group_color));
-                            } else {
-                                txs.push(tx.clone());
-                            }
-
-                            return true;
+                        if colorize {
+                            txs.push(tx_arc.colorline(*group_color));
                         } else {
-                            return false;
+                            txs.push(tx_arc);
                         }
-                    } else {
-                        false
-                    }
-                },
-            );
 
-            if !group {
+                        added = true;
+                        break;
+                    }
+                }
+            }
+
+            if !added {
                 let color = choose_color();
-                let tx = Arc::new(tx);
+                let tx_arc = Arc::new(tx);
 
                 if colorize {
-                    acc.push((tx.start, tx.end, vec![tx.clone().colorline(color)], color));
+                    acc.push((tx_start, tx_end, vec![tx_arc.colorline(color)], color));
                 } else {
-                    acc.push((tx.start, tx.end, vec![tx.clone()], color));
+                    acc.push((tx_start, tx_end, vec![tx_arc], color));
                 }
             }
         }
 
         let acc_map: Vec<Vec<Arc<GenePred>>> = acc.into_iter().map(|(_, _, txs, _)| txs).collect();
-        cmap.lock().unwrap().insert(chr.to_string(), acc_map);
+        cmap.insert(chr.to_string(), acc_map);
     });
 
     pb.finish_and_clear();
     info!("Transcripts packed!");
-    cmap.into_inner().unwrap()
+    cmap.into_iter().collect()
 }
 
 fn choose_color<'a>() -> &'a str {
@@ -219,21 +209,22 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
 
 fn combine(refs: GenePredMap, queries: GenePredMap) -> (GenePredMap, usize) {
     info!("Combining reference and query tracks...");
-    let mut tracks = refs;
-    let mut count = 0;
-
     let pb = get_progress_bar(queries.values().len() as u64, "Combining tracks");
+    let count = queries.values().flatten().count() + refs.values().flatten().count();
+    let tracks = Arc::new(Mutex::new(refs));
 
-    for (chr, records) in queries {
+    queries.into_par_iter().for_each(|(chr, records)| {
+        let mut tracks = tracks.lock().expect("Mutex lock failed");
         let acc = tracks.entry(chr).or_default();
-        count += records.len();
+        pb.inc(1);
 
-        for tx in records {
-            acc.push(tx);
-            count += 1;
-            pb.inc(1);
-        }
-    }
+        acc.extend(records);
+    });
+
+    let tracks = Arc::try_unwrap(tracks)
+        .expect("Arc has more than one reference")
+        .into_inner()
+        .unwrap();
 
     pb.finish_and_clear();
     info!("Number of transcripts combined: {}", count);

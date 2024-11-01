@@ -1,7 +1,7 @@
 use packbed::*;
 
 use clap::{self, Parser, ValueEnum};
-use log::{error, info, Level};
+use log::{info, Level};
 use simple_logger::init_with_level;
 use std::path::PathBuf;
 

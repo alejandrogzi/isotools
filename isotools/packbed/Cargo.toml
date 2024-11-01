@@ -1,6 +1,6 @@
 [package]
 name = "packbed"
-version = "0.0.3"
+version = "0.0.4"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "pack a .bed into overlapping components"
 keywords = ["components", "overlap", "transcript", "bed"]
