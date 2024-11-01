@@ -52,11 +52,15 @@ impl<'a> Bed4<'a> {
     }
 }
 
-pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Result<HashMap<String, HashSet<(u64, u64)>>> {
-    let contents = par_reader(paths)?;
-    let tracks = parse_bed4(&contents)?;
+pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
+    if paths.is_empty() {
+        return None;
+    }
 
-    Ok(tracks)
+    let contents = par_reader(paths).unwrap();
+    let tracks = parse_bed4(&contents).unwrap();
+
+    Some(tracks)
 }
 
 pub fn parse_bed4<'a>(
