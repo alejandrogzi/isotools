@@ -44,6 +44,15 @@ pub struct Args {
         default_value_t = num_cpus::get()
     )]
     pub threads: usize,
+
+    #[arg(
+        short = 'p',
+        long = "plot",
+        help = "Flag to output retentions in a BED4 file",
+        value_name = "FLAG",
+        default_value = "false"
+    )]
+    pub plot: bool,
 }
 
 impl Args {
