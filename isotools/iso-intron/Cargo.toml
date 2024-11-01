@@ -22,3 +22,4 @@ hashbrown.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 simple_logger.workspace = true
+tempfile.workspace = true
