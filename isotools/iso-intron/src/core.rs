@@ -109,10 +109,10 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
 /// # Description
 ///
 /// This function processes a bucket of overlapping transcripts to
-/// identify retained introns. In brief, loops over all query transcripts
-/// in the bucket and check if any of their exons completely overlap with
-/// any reference intron. If so, the transcript is considered to have a
-/// retained intron.
+/// identify retained introns. In brief, loops over all consensus query
+/// transcripts in the bucket and check if any of their exons completely
+/// overlap with any reference intron. If so, the transcript is considered
+/// to have a retained intron.
 pub fn process_bucket<'a>(
     bucket: &'a Vec<Arc<GenePred>>,
     ban: &HashSet<(u64, u64)>,
