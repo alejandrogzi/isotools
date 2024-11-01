@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 indicatif = "0.17.8"
+dashmap.workspace = true
+log.workspace = true
