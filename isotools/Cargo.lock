@@ -162,6 +162,7 @@ dependencies = [
  "dashmap",
  "indicatif",
  "log",
+ "thiserror",
 ]
 
 [[package]]
@@ -325,9 +326,9 @@ dependencies = [
  "config",
  "dashmap",
  "hashbrown",
+ "iso-pack",
  "log",
  "num_cpus",
- "packbed",
  "rayon",
  "simple_logger",
  "tempfile",
@@ -335,11 +336,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "iso-pack"
+version = "0.0.5"
+dependencies = [
+ "anyhow",
+ "clap",
+ "config",
+ "dashmap",
+ "hashbrown",
+ "log",
+ "num_cpus",
+ "rand",
+ "rayon",
+ "serde",
+ "simple_logger",
+]
+
+[[package]]
 name = "iso-utr"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
+ "clap",
  "config",
- "packbed",
+ "dashmap",
+ "hashbrown",
+ "iso-pack",
+ "log",
+ "num_cpus",
+ "rayon",
+ "simple_logger",
 ]
 
 [[package]]
@@ -389,15 +415,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
 
 [[package]]
-name = "num-traits"
-version = "0.2.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "num_cpus"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -429,24 +446,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1261fe7e33c73b354eab43b1273a57c8f967d0391e80353e51f764ac02cf6775"
 
 [[package]]
-name = "packbed"
-version = "0.0.4"
-dependencies = [
- "anyhow",
- "clap",
- "config",
- "dashmap",
- "hashbrown",
- "log",
- "num_cpus",
- "rand",
- "rayon",
- "rmp-serde",
- "serde",
- "simple_logger",
-]
-
-[[package]]
 name = "parking_lot_core"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -458,12 +457,6 @@ dependencies = [
  "smallvec",
  "windows-targets 0.52.6",
 ]
-
-[[package]]
-name = "paste"
-version = "1.0.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "portable-atomic"
@@ -561,28 +554,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b6dfecf2c74bce2466cabf93f6664d6998a69eb21e39f4207930065b27b771f"
 dependencies = [
  "bitflags",
-]
-
-[[package]]
-name = "rmp"
-version = "0.8.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "228ed7c16fa39782c3b3468e974aec2795e9089153cd08ee2e9aefb3613334c4"
-dependencies = [
- "byteorder",
- "num-traits",
- "paste",
-]
-
-[[package]]
-name = "rmp-serde"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52e599a477cf9840e92f2cde9a7189e67b42c57532749bf90aea6ec10facd4db"
-dependencies = [
- "byteorder",
- "rmp",
- "serde",
 ]
 
 [[package]]
