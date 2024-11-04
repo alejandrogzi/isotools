@@ -1,4 +1,5 @@
 use clap::{self, Parser};
+use config::ArgCheck;
 use log::{error, info, Level};
 use simple_logger::init_with_level;
 

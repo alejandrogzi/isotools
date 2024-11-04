@@ -1,6 +1,6 @@
 use clap::Parser;
+use config::ArgCheck;
 use std::path::PathBuf;
-use thiserror::Error;
 
 #[derive(Debug, Parser)]
 pub struct Args {
@@ -14,6 +14,7 @@ pub struct Args {
         help = "Paths to BED12 files delimited by comma"
     )]
     pub refs: Vec<PathBuf>,
+
     #[arg(
         short = 'q',
         long = "query",
@@ -55,87 +56,16 @@ pub struct Args {
     pub plot: bool,
 }
 
-impl Args {
-    pub fn check(&self) -> Result<(), CliError> {
-        self.validate_args()
+impl ArgCheck for Args {
+    fn get_blacklist(&self) -> &Vec<PathBuf> {
+        &self.blacklist
     }
 
-    fn validate_args(&self) -> Result<(), CliError> {
-        self.check_dbs()?;
-        self.check_query()?;
-
-        if !self.blacklist.is_empty() {
-            self.check_blacklist()?;
-        } else {
-            log::warn!("No blacklist provided. Skipping...");
-        }
-        Ok(())
+    fn get_ref(&self) -> &Vec<PathBuf> {
+        &self.refs
     }
 
-    fn check_dbs(&self) -> Result<(), CliError> {
-        if self.refs.is_empty() {
-            let err = "No reference files provided".to_string();
-            return Err(CliError::InvalidInput(err));
-        }
-        for db in &self.refs {
-            validate(db)?;
-        }
-
-        if self.query.is_empty() {
-            let err = "No query file provided".to_string();
-            return Err(CliError::InvalidInput(err));
-        }
-        for query in &self.query {
-            validate(query)?;
-        }
-
-        Ok(())
-    }
-
-    fn check_query(&self) -> Result<(), CliError> {
-        validate(&self.query[0])
-    }
-
-    fn check_blacklist(&self) -> Result<(), CliError> {
-        for bl in &self.blacklist {
-            validate(bl)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum CliError {
-    #[error("Invalid input: {0}")]
-    InvalidInput(String),
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-}
-
-pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
-    if !arg.exists() {
-        return Err(CliError::InvalidInput(format!("{:?} does not exist", arg)));
-    }
-
-    if !arg.is_file() {
-        return Err(CliError::InvalidInput(format!("{:?} is not a file", arg)));
-    }
-
-    match arg.extension() {
-        Some(ext) if ext == "bed" => (),
-        _ => {
-            return Err(CliError::InvalidInput(format!(
-                "file {:?} is not a BED file",
-                arg
-            )))
-        }
-    }
-
-    match std::fs::metadata(arg) {
-        Ok(metadata) if metadata.len() == 0 => {
-            Err(CliError::InvalidInput(format!("file {:?} is empty", arg)))
-        }
-        Ok(_) => Ok(()),
-        Err(e) => Err(CliError::IoError(e)),
+    fn get_query(&self) -> &Vec<PathBuf> {
+        &self.query
     }
 }

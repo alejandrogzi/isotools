@@ -2,7 +2,9 @@ use dashmap::DashSet;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 use std::time::Duration;
+use thiserror::Error;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const INTRON: &str = "intron";
@@ -23,7 +25,7 @@ pub const F5: &str = "5ends.txt";
 
 // flags
 pub const COLORIZE: bool = false;
-pub const OVERLAP: bool = true;
+pub const OVERLAP: bool = false;
 
 #[cfg(not(windows))]
 const TICK_SETTINGS: (&str, u64) = ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", 80);
@@ -47,6 +49,7 @@ pub fn get_progress_bar(length: u64, msg: &str) -> ProgressBar {
     progress_bar
 }
 
+/// Write a DashSet to a file
 pub fn write_objs<T>(data: &DashSet<T>, fname: &str)
 where
     T: AsRef<str> + Sync + Send + Eq + std::hash::Hash,
@@ -62,5 +65,99 @@ where
         writeln!(writer, "{}", line.as_ref()).unwrap_or_else(|e| {
             panic!("Error writing to file: {}", e);
         });
+    }
+}
+
+/// Argument checker for all subcommands
+pub trait ArgCheck {
+    fn check(&self) -> Result<(), CliError> {
+        self.validate_args()
+    }
+
+    fn validate_args(&self) -> Result<(), CliError> {
+        self.check_dbs()?;
+        self.check_query()?;
+
+        if !self.get_blacklist().is_empty() {
+            self.check_blacklist()?;
+        } else {
+            log::warn!("No blacklist provided. Skipping...");
+        };
+
+        Ok(())
+    }
+
+    fn check_dbs(&self) -> Result<(), CliError> {
+        if self.get_ref().is_empty() {
+            let err = "No reference files provided".to_string();
+            return Err(CliError::InvalidInput(err));
+        }
+        for db in self.get_ref() {
+            validate(db)?;
+        }
+
+        if self.get_query().is_empty() {
+            let err = "No query file provided".to_string();
+            return Err(CliError::InvalidInput(err));
+        }
+        for query in self.get_query() {
+            validate(query)?;
+        }
+
+        Ok(())
+    }
+
+    fn check_query(&self) -> Result<(), CliError> {
+        for q in self.get_query() {
+            validate(q)?;
+        }
+        Ok(())
+    }
+
+    fn check_blacklist(&self) -> Result<(), CliError> {
+        for bl in self.get_blacklist() {
+            validate(bl)?;
+        }
+        Ok(())
+    }
+
+    fn get_blacklist(&self) -> &Vec<PathBuf>;
+    fn get_ref(&self) -> &Vec<PathBuf>;
+    fn get_query(&self) -> &Vec<PathBuf>;
+}
+
+#[derive(Debug, Error)]
+pub enum CliError {
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+}
+
+pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
+    if !arg.exists() {
+        return Err(CliError::InvalidInput(format!("{:?} does not exist", arg)));
+    }
+
+    if !arg.is_file() {
+        return Err(CliError::InvalidInput(format!("{:?} is not a file", arg)));
+    }
+
+    match arg.extension() {
+        Some(ext) if ext == "bed" => (),
+        _ => {
+            return Err(CliError::InvalidInput(format!(
+                "file {:?} is not a BED file",
+                arg
+            )))
+        }
+    }
+
+    match std::fs::metadata(arg) {
+        Ok(metadata) if metadata.len() == 0 => {
+            Err(CliError::InvalidInput(format!("file {:?} is empty", arg)))
+        }
+        Ok(_) => Ok(()),
+        Err(e) => Err(CliError::IoError(e)),
     }
 }
