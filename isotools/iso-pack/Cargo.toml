@@ -1,6 +1,6 @@
 [package]
-name = "packbed"
-version = "0.0.4"
+name = "iso-pack"
+version = "0.0.5"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "pack a .bed into overlapping components"
 keywords = ["components", "overlap", "transcript", "bed"]
@@ -19,15 +19,10 @@ num_cpus.workspace = true
 hashbrown.workspace = true
 anyhow.workspace = true
 serde.workspace = true
-rmp-serde.workspace = true
 rand.workspace = true
 log.workspace = true
 config.workspace = true
 simple_logger.workspace = true
-
-[[bin]]
-name = "packbed"
-path = "src/main.rs"
 
 [lib]
 name = "packbed"

@@ -1,3 +1,10 @@
+> [!WARNING]
+>
+> This is vanilla version of packbed only working as a library.
+> For the complete version of this software please visit the main
+> repository at [https://github.com/alejandrogzi/packbed](https://github.com/alejandrogzi/packbed)
+
+
 <p align="center">
   <h1 align="center">
     packbed

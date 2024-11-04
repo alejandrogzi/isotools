@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::fs::File;
-use std::io::{BufWriter, Read, Write};
+use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +10,6 @@ use hashbrown::HashMap;
 use log::info;
 use rand::Rng;
 use rayon::prelude::*;
-use rmp_serde::{decode, encode};
 
 pub mod record;
 pub use record::{Bed12, GenePred};
@@ -90,7 +89,7 @@ fn parse_tracks<'a>(
 
     // sort by start/end in descending order
     tracks.par_iter_mut().for_each(|(_, v)| {
-        v.par_sort_unstable_by_key(|x| (x.start, x.end));
+        v.par_sort_unstable_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
     });
 
     pb.finish_and_clear();
@@ -144,13 +143,29 @@ fn buckerize(
 
             for (ref mut group_start, ref mut group_end, txs, group_color) in &mut acc {
                 if tx_start < *group_end && tx_end > *group_start {
-                    let exon_overlap = txs
-                        .iter()
-                        .any(|group_tx| exonic_overlap(&group_tx.exons, &tx.exons));
+                    if overlap_cds {
+                        let exon_overlap = txs
+                            .iter()
+                            .any(|group_tx| exonic_overlap(&group_tx.exons, &tx.exons));
 
-                    if exon_overlap {
+                        if exon_overlap {
+                            *group_start = (*group_start).min(tx_start);
+                            *group_end = (*group_end).max(tx_end);
+                            let tx_arc = Arc::new(tx.clone());
+
+                            if colorize {
+                                txs.push(tx_arc.colorline(*group_color));
+                            } else {
+                                txs.push(tx_arc);
+                            }
+
+                            added = true;
+                            break;
+                        }
+                    } else {
                         *group_start = (*group_start).min(tx_start);
                         *group_end = (*group_end).max(tx_end);
+
                         let tx_arc = Arc::new(tx.clone());
 
                         if colorize {
@@ -230,86 +245,4 @@ fn combine(refs: GenePredMap, queries: GenePredMap) -> (GenePredMap, usize) {
     info!("Number of transcripts combined: {}", count);
 
     (tracks, count)
-}
-
-pub fn binwriter<P: AsRef<Path> + Debug>(
-    file: P,
-    contents: HashMap<String, Vec<Vec<Arc<GenePred>>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = File::create(file)?;
-
-    encode::write(&mut file, &contents)?;
-    Ok(())
-}
-
-pub fn bedwriter<P: AsRef<Path> + Debug>(
-    file: P,
-    contents: HashMap<String, Vec<Vec<Arc<GenePred>>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = BufWriter::new(File::create(file)?);
-
-    for (_, components) in contents {
-        for component in components {
-            for tx in component {
-                writeln!(file, "{}", tx.line())?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub fn binreader<P: AsRef<Path> + Debug>(
-    file: P,
-) -> Result<HashMap<String, Vec<Vec<GenePred>>>, Box<dyn std::error::Error>> {
-    let file = File::open(file)?;
-    let data: HashMap<String, Vec<Vec<GenePred>>> = decode::from_read(file)?;
-
-    Ok(data)
-}
-
-pub fn compwriter<T: AsRef<Path> + Debug + Sync>(
-    contents: HashMap<String, Vec<Vec<Arc<GenePred>>>>,
-    output: T,
-    subdirs: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(&output)?;
-
-    contents.iter().par_bridge().for_each(|(chr, buckets)| {
-        buckets
-            .iter()
-            .enumerate()
-            .par_bridge()
-            .for_each(|(i, bucket)| {
-                let filename = if subdirs {
-                    std::fs::create_dir_all(format!(
-                        "{}/comp_{}_{}",
-                        output.as_ref().display(),
-                        chr,
-                        i
-                    ))
-                    .expect("ERROR: Could not create directory");
-
-                    format!(
-                        "{}/comp_{}_{}/{}_{}.bed",
-                        output.as_ref().display(),
-                        chr,
-                        i,
-                        chr,
-                        i
-                    )
-                } else {
-                    format!("{}/{}_{}.bed", output.as_ref().display(), chr, i)
-                };
-
-                let mut file =
-                    BufWriter::new(File::create(&filename).expect("ERROR: Could not create file"));
-
-                bucket.iter().for_each(|x| {
-                    writeln!(file, "{}", x.line()).unwrap();
-                });
-            });
-    });
-
-    Ok(())
 }
