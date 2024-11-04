@@ -11,5 +11,13 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
-packbed = { path = "../packbed" }
+iso-pack = { path = "../iso-pack" }
 config.workspace = true
+clap.workspace = true
+log.workspace = true
+simple_logger.workspace = true
+num_cpus.workspace = true
+rayon.workspace = true
+anyhow.workspace = true
+hashbrown.workspace = true
+dashmap.workspace = true
