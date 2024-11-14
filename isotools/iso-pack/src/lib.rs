@@ -12,7 +12,7 @@ use rand::Rng;
 use rayon::prelude::*;
 
 pub mod record;
-pub use record::{Bed12, GenePred};
+pub use record::{Bed12, GenePred, RefGenePred};
 
 pub type GenePredMap = HashMap<String, Vec<GenePred>>;
 
@@ -98,109 +98,107 @@ fn parse_tracks<'a>(
     Ok(tracks)
 }
 
-#[inline(always)]
-fn exonic_overlap(exons_a: &Vec<(u64, u64)>, exons_b: &Vec<(u64, u64)>) -> bool {
-    let mut i = 0;
-    let mut j = 0;
+#[derive(Debug, Clone)]
+struct UnionFind {
+    parent: Vec<usize>,
+}
 
-    while i < exons_a.len() && j < exons_b.len() {
-        let (start_a, end_a) = exons_a[i];
-        let (start_b, end_b) = exons_b[j];
-
-        if start_a < end_b && start_b < end_a {
-            return true;
-        }
-
-        if end_a < end_b {
-            i += 1;
-        } else {
-            j += 1;
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
         }
     }
 
-    false
+    #[inline(always)]
+    fn find(&mut self, x: usize) -> usize {
+        if self.parent[x] != x {
+            self.parent[x] = self.find(self.parent[x]);
+        }
+        self.parent[x]
+    }
+
+    #[inline(always)]
+    fn union(&mut self, x: usize, y: usize) {
+        let root_x = self.find(x);
+        let root_y = self.find(y);
+        if root_x != root_y {
+            self.parent[root_y] = root_x;
+        }
+    }
 }
 
 fn buckerize(
     tracks: GenePredMap,
     overlap_cds: bool,
-    colorize: bool,
+    overlap_exon: bool,
     amount: usize,
-) -> HashMap<String, Vec<Vec<Arc<GenePred>>>> {
-    info!("Packing transcripts...");
-    let pb = get_progress_bar(amount as u64, "Buckerizing transcripts");
+) -> DashMap<String, Vec<(RefGenePred, Vec<GenePred>)>> {
     let cmap = DashMap::new();
+    let pb = get_progress_bar(amount as u64, "Buckerizing transcripts");
 
-    tracks.into_par_iter().for_each(|(chr, records)| {
-        let mut acc: Vec<(u64, u64, Vec<Arc<GenePred>>, &str)> = Vec::new();
+    tracks.into_par_iter().for_each(|(chr, transcripts)| {
+        let mut exons = Vec::new();
+        let mut id_map = HashMap::new();
+        let mut uf = UnionFind::new(transcripts.len());
 
-        for tx in records {
-            pb.inc(1);
-            let tx_start = if overlap_cds { tx.cds_start } else { tx.start };
-            let tx_end = if overlap_cds { tx.cds_end } else { tx.end };
+        // if base mode, tx boundaries will behave as exons ranges
+        for (i, transcript) in transcripts.iter().enumerate() {
+            id_map.insert(i, transcript);
 
-            let mut added = false;
-
-            for (ref mut group_start, ref mut group_end, txs, group_color) in &mut acc {
-                if tx_start < *group_end && tx_end > *group_start {
-                    if overlap_cds {
-                        let exon_overlap = txs
-                            .iter()
-                            .any(|group_tx| exonic_overlap(&group_tx.exons, &tx.exons));
-
-                        if exon_overlap {
-                            *group_start = (*group_start).min(tx_start);
-                            *group_end = (*group_end).max(tx_end);
-                            let tx_arc = Arc::new(tx.clone());
-
-                            if colorize {
-                                txs.push(tx_arc.colorline(*group_color));
-                            } else {
-                                txs.push(tx_arc);
-                            }
-
-                            added = true;
-                            break;
-                        }
-                    } else {
-                        *group_start = (*group_start).min(tx_start);
-                        *group_end = (*group_end).max(tx_end);
-
-                        let tx_arc = Arc::new(tx.clone());
-
-                        if colorize {
-                            txs.push(tx_arc.colorline(*group_color));
-                        } else {
-                            txs.push(tx_arc);
-                        }
-
-                        added = true;
-                        break;
-                    }
-                }
-            }
-
-            if !added {
-                let color = choose_color();
-                let tx_arc = Arc::new(tx);
-
-                if colorize {
-                    acc.push((tx_start, tx_end, vec![tx_arc.colorline(color)], color));
-                } else {
-                    acc.push((tx_start, tx_end, vec![tx_arc], color));
+            if !overlap_exon && !overlap_cds {
+                exons.push((transcript.start, transcript.end, i));
+            } else {
+                for &(start, end) in &transcript.exons {
+                    exons.push((start, end, i));
                 }
             }
         }
 
-        let acc_map: Vec<Vec<Arc<GenePred>>> = acc.into_iter().map(|(_, _, txs, _)| txs).collect();
-        cmap.insert(chr.to_string(), acc_map);
+        exons.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+        let mut prev_end = exons[0].1;
+        let mut prev_idx = exons[0].2;
+        for &(start, end, idx) in &exons[1..] {
+            if start < prev_end {
+                uf.union(prev_idx, idx);
+                prev_end = prev_end.max(end);
+            } else {
+                // no overlap, update prev_end and prev_idx
+                prev_end = end;
+                prev_idx = idx;
+            }
+        }
+
+        let mut groups = HashMap::new();
+        for i in 0..transcripts.len() {
+            pb.inc(1);
+            let root = uf.find(i);
+            groups
+                .entry(root)
+                .or_insert_with(Vec::new)
+                .push(id_map[&i].clone());
+        }
+
+        let comps = groups
+            .into_iter()
+            .map(|(_, group)| {
+                // separate refs from queries, use refs to build RefGenePred
+                let (refs, queries): (Vec<_>, Vec<_>) = group.into_iter().partition(|x| x.is_ref);
+
+                return (RefGenePred::from(refs), queries);
+            })
+            .collect::<Vec<_>>();
+
+        cmap.insert(chr, comps);
     });
 
     pb.finish_and_clear();
     info!("Transcripts packed!");
-    cmap.into_iter().collect()
+    cmap
 }
 
+#[allow(dead_code)]
 fn choose_color<'a>() -> &'a str {
     let mut rng = rand::thread_rng();
     let idx = rng.gen_range(0..RGB.len());
@@ -211,13 +209,13 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     refs: Vec<T>,
     queries: Vec<T>,
     overlap_cds: bool,
-    colorize: bool,
-) -> Result<HashMap<String, Vec<Vec<Arc<GenePred>>>>, anyhow::Error> {
+    overlap_exon: bool,
+) -> Result<DashMap<String, Vec<(RefGenePred, Vec<GenePred>)>>, anyhow::Error> {
     let refs = unpack(refs, overlap_cds, true).unwrap();
     let query = unpack(queries, overlap_cds, false).unwrap();
 
     let (tracks, n) = combine(refs, query);
-    let buckets = buckerize(tracks, overlap_cds, colorize, n);
+    let buckets = buckerize(tracks, overlap_cds, overlap_exon, n);
 
     Ok(buckets)
 }
