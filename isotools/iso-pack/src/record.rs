@@ -1,12 +1,12 @@
 use config::SCALE;
 use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::BTreeSet;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Bed12;
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Eq, Hash)]
 pub struct GenePred {
     pub name: String,
     pub chrom: String,
@@ -20,6 +20,15 @@ pub struct GenePred {
     pub exon_count: usize,
     pub line: String,
     pub is_ref: bool,
+}
+
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+pub struct RefGenePred {
+    pub reads: Vec<GenePred>,
+    pub starts: BTreeSet<(u64, u64)>,
+    pub middles: BTreeSet<(u64, u64)>,
+    pub introns: BTreeSet<(u64, u64)>,
+    pub bounds: (u64, u64),
 }
 
 impl GenePred {
@@ -40,13 +49,28 @@ impl GenePred {
     }
 
     #[inline(always)]
-    pub fn colorline(self: Arc<Self>, color: &str) -> Arc<Self> {
+    pub fn get_first_exon(&self) -> (u64, u64) {
+        self.exons[0].clone()
+    }
+
+    #[inline(always)]
+    pub fn get_middle_exons(&self) -> BTreeSet<(u64, u64)> {
+        self.exons[1..self.exon_count - 1].iter().cloned().collect()
+    }
+
+    #[inline(always)]
+    pub fn get_introns(&self) -> BTreeSet<(u64, u64)> {
+        self.introns.iter().cloned().collect()
+    }
+
+    #[inline(always)]
+    pub fn colorline(self: Self, color: &str) -> Self {
         let nline = self.line.clone();
         let mut fields = nline.split('\t').collect::<Vec<_>>();
         fields[8] = color;
         let new_line = fields.join("\t");
 
-        Arc::new(GenePred {
+        GenePred {
             line: new_line,
             name: self.name.clone(),
             chrom: self.chrom.clone(),
@@ -59,7 +83,7 @@ impl GenePred {
             introns: self.introns.clone(),
             exon_count: self.exon_count,
             is_ref: self.is_ref,
-        })
+        }
     }
 }
 
@@ -284,6 +308,46 @@ fn gapper(intervals: &HashSet<(u64, u64)>) -> HashSet<(u64, u64)> {
     }
 
     gaps
+}
+
+impl RefGenePred {
+    pub fn new(
+        reads: Vec<GenePred>,
+        starts: BTreeSet<(u64, u64)>,
+        middles: BTreeSet<(u64, u64)>,
+        introns: BTreeSet<(u64, u64)>,
+        bounds: (u64, u64),
+    ) -> Self {
+        Self {
+            reads,
+            starts,
+            middles,
+            introns,
+            bounds,
+        }
+    }
+
+    #[inline(always)]
+    pub fn from(reads: Vec<GenePred>) -> Self {
+        let mut starts = BTreeSet::new();
+        let mut middles = BTreeSet::new();
+        let mut introns = BTreeSet::new();
+        let mut bounds = (u64::MAX, 0);
+
+        for read in &reads {
+            starts.insert(read.get_first_exon());
+            introns.extend(read.get_introns());
+
+            if read.exon_count > 1 {
+                middles.extend(read.get_middle_exons());
+            }
+
+            bounds.0 = bounds.0.min(read.start);
+            bounds.1 = bounds.1.max(read.end);
+        }
+
+        Self::new(reads, starts, middles, introns, bounds)
+    }
 }
 
 #[cfg(test)]
