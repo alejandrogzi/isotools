@@ -1,11 +1,10 @@
 use anyhow::Result;
-use config::{get_progress_bar, write_objs, BED3, COLORIZE, HIT, OVERLAP, PASS, SCALE};
+use config::{get_progress_bar, write_objs, BED3, HIT, OVERLAP_CDS, OVERLAP_EXON, PASS, SCALE};
 use dashmap::DashSet;
 use hashbrown::HashSet;
 use log::info;
-use packbed::{packbed, GenePred};
+use packbed::{packbed, GenePred, RefGenePred};
 use rayon::prelude::*;
-use std::sync::Arc;
 
 use crate::cli::Args;
 use crate::utils::{unpack_blacklist, Bed4};
@@ -44,26 +43,30 @@ use crate::utils::{unpack_blacklist, Bed4};
 ///     XXXXX-----XXXXXXXXXXXXXXXXXXXX
 /// ```
 pub fn detect_intron_retentions(args: Args) -> Result<()> {
-    let tracks = packbed(args.refs, args.query, OVERLAP, COLORIZE)?;
+    info!("Detecting intron retentions...");
+
+    let tracks = packbed(args.refs, args.query, OVERLAP_CDS, OVERLAP_EXON)?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
-    let hit_acc: DashSet<&String> = DashSet::new();
-    let pass_acc: DashSet<&String> = DashSet::new();
+    let hit_acc: DashSet<String> = DashSet::new();
+    let pass_acc: DashSet<String> = DashSet::new();
     let misc_acc: DashSet<String> = DashSet::new();
 
-    info!("Detecting intron retentions...");
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
-    tracks.par_iter().for_each(|(chr, buckets)| {
+    tracks.par_iter().for_each(|bucket| {
+        let chr = bucket.key();
+        let components = bucket.value().to_owned();
+
         let binding = HashSet::new();
         let banned = blacklist.get(chr).unwrap_or(&binding);
 
-        buckets.par_iter().for_each(|bucket| {
-            let (hits, pass, blocks) = process_bucket(bucket, banned, args.plot);
+        components.into_par_iter().for_each(|comp| {
+            let (hits, pass, blocks) = process_component(comp, banned, args.plot);
 
-            hits.iter().for_each(|hit| {
+            hits.into_iter().for_each(|hit| {
                 hit_acc.insert(hit);
             });
-            pass.iter().for_each(|p| {
+            pass.into_iter().for_each(|p| {
                 pass_acc.insert(p);
             });
             if let Some(b) = blocks {
@@ -113,48 +116,33 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
 /// transcripts in the bucket and check if any of their exons completely
 /// overlap with any reference intron. If so, the transcript is considered
 /// to have a retained intron.
-pub fn process_bucket<'a>(
-    bucket: &'a Vec<Arc<GenePred>>,
+#[inline(always)]
+pub fn process_component(
+    comp: (RefGenePred, Vec<GenePred>),
     ban: &HashSet<(u64, u64)>,
     plot: bool,
-) -> (Vec<&'a String>, Vec<&'a String>, Option<String>) {
+) -> (Vec<String>, Vec<String>, Option<String>) {
     let mut hits = Vec::new();
     let mut pass = Vec::new();
     let mut blocks = if plot { Some(String::new()) } else { None };
 
-    let mut consensus_introns = Vec::new();
-    for reference in bucket {
-        if !reference.is_ref() {
-            continue;
-        }
+    let refs = comp.0;
+    let queries = comp.1;
 
-        for intron in &reference.introns {
-            if consensus_introns.contains(&intron) {
-                continue;
-            }
-            consensus_introns.push(intron);
-        }
-
-        consensus_introns.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    }
-
-    for query in bucket {
+    for query in queries {
         let mut hit: bool = false;
-        if query.is_ref() {
-            continue;
-        }
 
         for exon in &query.exons {
-            for intron in &consensus_introns {
+            for intron in &refs.introns {
                 if exon.1 < intron.0 {
                     break;
                 }
 
-                if ban.contains(*intron) {
+                if ban.contains(intron) {
                     continue;
                 }
 
-                if exon.0 <= intron.0 && exon.1 >= intron.1 {
+                if exon.0 < intron.0 && exon.1 > intron.1 {
                     hit = true;
                     if plot {
                         match query.strand {
@@ -183,9 +171,11 @@ pub fn process_bucket<'a>(
         }
 
         if hit {
-            hits.push(query.line());
+            let line = query.line().to_owned();
+            hits.push(line);
         } else {
-            pass.push(query.line());
+            let line = query.line().to_owned();
+            pass.push(line);
         }
     }
 
@@ -193,7 +183,6 @@ pub fn process_bucket<'a>(
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use std::io::Write;
