@@ -55,7 +55,7 @@ impl GenePred {
 
     #[inline(always)]
     pub fn get_middle_exons(&self) -> BTreeSet<(u64, u64)> {
-        self.exons[1..self.exon_count - 1].iter().cloned().collect()
+        self.exons[1..].iter().cloned().collect()
     }
 
     #[inline(always)]
@@ -335,15 +335,37 @@ impl RefGenePred {
         let mut bounds = (u64::MAX, 0);
 
         for read in &reads {
-            starts.insert(read.get_first_exon());
+            bounds.0 = bounds.0.min(read.start);
+            bounds.1 = bounds.1.max(read.end);
+
+            let read_start = read.get_first_exon();
             introns.extend(read.get_introns());
+
+            if !middles.is_empty() {
+                let overlap = middles.iter().any(|middle| {
+                    let (mid_exon_start, mid_exon_end) = middle;
+                    (read_start.0 >= *mid_exon_start && read_start.0 < *mid_exon_end)
+                        || (read_start.1 > *mid_exon_start && read_start.1 <= *mid_exon_end)
+                        || (read_start.0 < *mid_exon_start && read_start.1 > *mid_exon_end)
+                });
+
+                if !overlap {
+                    starts.insert(read_start);
+                } else {
+                    starts.clone().iter().for_each(|start| {
+                        let (five_end_start, five_end_end) = start;
+                        if read_start.0 >= *five_end_start && read_start.0 < *five_end_end {
+                            starts.insert(read_start);
+                        }
+                    });
+                }
+            } else {
+                starts.insert(read_start);
+            }
 
             if read.exon_count > 1 {
                 middles.extend(read.get_middle_exons());
             }
-
-            bounds.0 = bounds.0.min(read.start);
-            bounds.1 = bounds.1.max(read.end);
         }
 
         Self::new(reads, starts, middles, introns, bounds)
