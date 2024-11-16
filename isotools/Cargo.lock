@@ -319,7 +319,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "iso-intron"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "iso-pack"
-version = "0.0.5"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "iso-utr"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -366,6 +366,7 @@ dependencies = [
  "num_cpus",
  "rayon",
  "simple_logger",
+ "tempfile",
 ]
 
 [[package]]
