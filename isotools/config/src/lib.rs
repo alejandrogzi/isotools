@@ -7,15 +7,13 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const INTRON: &str = "intron";
-pub const FIVEND: &str = "fivend";
-pub const THREEND: &str = "threend";
 
 // numeric values
 pub const SCALE: u64 = 100000000000; // 100Gb
 pub const MIN_THREADS: usize = 1;
 pub const MIN_BED_FIELDS: usize = 12;
 pub const MIN_BED4_FIELDS: usize = 4;
+pub const TRUNCATION_THRESHOLD: f32 = 0.5;
 
 // file names
 pub const HIT: &str = "hits.bed";
@@ -25,11 +23,12 @@ pub const F5: &str = "5ends.txt";
 
 // flags
 pub const COLORIZE: bool = false;
-pub const OVERLAP: bool = false;
+pub const OVERLAP_CDS: bool = false;
+pub const OVERLAP_EXON: bool = true;
 
+// os
 #[cfg(not(windows))]
 const TICK_SETTINGS: (&str, u64) = ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", 80);
-
 #[cfg(windows)]
 const TICK_SETTINGS: (&str, u64) = (r"+-x| ", 200);
 
