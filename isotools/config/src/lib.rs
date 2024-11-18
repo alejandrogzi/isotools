@@ -14,12 +14,16 @@ pub const MIN_THREADS: usize = 1;
 pub const MIN_BED_FIELDS: usize = 12;
 pub const MIN_BED4_FIELDS: usize = 4;
 pub const TRUNCATION_THRESHOLD: f32 = 0.5;
+pub const TRUNCATION_RECOVERY_THRESHOLD: f32 = 0.5;
 
 // file names
 pub const HIT: &str = "hits.bed";
 pub const PASS: &str = "pass.bed";
 pub const BED3: &str = "ir.bed";
 pub const F5: &str = "5ends.txt";
+pub const INTERGENIC_REGIONS: &str = "intergenic.bed";
+pub const CHIMERAS: &str = "chimeras.bed";
+pub const CHIMERIC_FREE: &str = "chimeric.free.bed";
 
 // flags
 pub const COLORIZE: bool = false;
@@ -53,7 +57,7 @@ pub fn write_objs<T>(data: &DashSet<T>, fname: &str)
 where
     T: AsRef<str> + Sync + Send + Eq + std::hash::Hash,
 {
-    log::info!("Reads in {}: {:?}", fname, data.len());
+    log::info!("Reads in {}: {:?}. Writing...", fname, data.len());
     let f = match File::create(fname) {
         Ok(f) => f,
         Err(e) => panic!("Error creating file: {}", e),
@@ -75,7 +79,6 @@ pub trait ArgCheck {
 
     fn validate_args(&self) -> Result<(), CliError> {
         self.check_dbs()?;
-        self.check_query()?;
 
         if !self.get_blacklist().is_empty() {
             self.check_blacklist()?;
@@ -103,13 +106,6 @@ pub trait ArgCheck {
             validate(query)?;
         }
 
-        Ok(())
-    }
-
-    fn check_query(&self) -> Result<(), CliError> {
-        for q in self.get_query() {
-            validate(q)?;
-        }
         Ok(())
     }
 
