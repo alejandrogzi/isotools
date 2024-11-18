@@ -28,9 +28,10 @@ pub fn detect_chimeras(args: Args) -> Result<()> {
     };
 
     if args.write {
-        let mut bed = std::fs::File::create(INTERGENIC_REGIONS)?;
         let mut count = 0;
         if let Some(regions) = regions.as_ref() {
+            let mut bed = std::fs::File::create(INTERGENIC_REGIONS)?;
+
             for bucket in regions.iter() {
                 let chr = bucket.key();
                 let regions = bucket.value();
@@ -115,8 +116,6 @@ pub fn detect_chimeras(args: Args) -> Result<()> {
                 no_chimeras.insert(read.line().to_owned());
             }
         }
-
-        write_objs(&chimeras, CHIMERAS);
 
         [&chimeras, &no_chimeras]
             .par_iter()
