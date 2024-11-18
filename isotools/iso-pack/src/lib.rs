@@ -47,7 +47,7 @@ pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
     Ok(contents.concat())
 }
 
-fn unpack<P: AsRef<Path> + Debug + Sync + Send>(
+pub fn unpack<P: AsRef<Path> + Debug + Sync + Send>(
     files: Vec<P>,
     cds_overlap: bool,
     is_ref: bool,
