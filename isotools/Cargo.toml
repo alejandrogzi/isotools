@@ -1,5 +1,5 @@
 [workspace]
-members = ["config", "iso-intron", "iso-utr", "iso-pack"]
+members = ["config", "iso-intron", "iso-utr", "iso-pack", "iso-chimera"]
 resolver = "2"
 
 [workspace.package]
