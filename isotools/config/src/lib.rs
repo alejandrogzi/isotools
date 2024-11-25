@@ -1,5 +1,7 @@
 use dashmap::DashSet;
 use indicatif::{ProgressBar, ProgressStyle};
+use serde_json::Value;
+use std::any::Any;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -15,6 +17,9 @@ pub const MIN_BED_FIELDS: usize = 12;
 pub const MIN_BED4_FIELDS: usize = 4;
 pub const TRUNCATION_THRESHOLD: f32 = 0.5;
 pub const TRUNCATION_RECOVERY_THRESHOLD: f32 = 0.5;
+pub const RETENTION_RATIO_THRESHOLD: f32 = 0.5;
+pub const EXON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
+pub const INTRON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
 
 // file names
 pub const HIT: &str = "hits.bed";
@@ -36,7 +41,7 @@ const TICK_SETTINGS: (&str, u64) = ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", 80);
 #[cfg(windows)]
 const TICK_SETTINGS: (&str, u64) = (r"+-x| ", 200);
 
-/// Return a pre-configured progress bar
+/// return a pre-configured progress bar
 pub fn get_progress_bar(length: u64, msg: &str) -> ProgressBar {
     let progressbar_style = ProgressStyle::default_spinner()
         .tick_chars(TICK_SETTINGS.0)
@@ -52,7 +57,7 @@ pub fn get_progress_bar(length: u64, msg: &str) -> ProgressBar {
     progress_bar
 }
 
-/// Write a DashSet to a file
+/// write a DashSet to a file
 pub fn write_objs<T>(data: &DashSet<T>, fname: &str)
 where
     T: AsRef<str> + Sync + Send + Eq + std::hash::Hash,
@@ -71,7 +76,7 @@ where
     }
 }
 
-/// Argument checker for all subcommands
+/// argument checker for all subcommands
 pub trait ArgCheck {
     fn check(&self) -> Result<(), CliError> {
         self.validate_args()
@@ -121,6 +126,7 @@ pub trait ArgCheck {
     fn get_query(&self) -> &Vec<PathBuf>;
 }
 
+/// error handling for CLI
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("Invalid input: {0}")]
@@ -129,6 +135,7 @@ pub enum CliError {
     IoError(#[from] std::io::Error),
 }
 
+/// argument validation
 pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
     if !arg.exists() {
         return Err(CliError::InvalidInput(format!("{:?} does not exist", arg)));
@@ -154,5 +161,210 @@ pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
         }
         Ok(_) => Ok(()),
         Err(e) => Err(CliError::IoError(e)),
+    }
+}
+
+// module descriptors
+#[derive(Debug)]
+pub enum ModuleType {
+    IntronRetention,
+    StartTruncation,
+    FusionRead,
+}
+
+pub trait ModuleMap: Any {
+    fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value>;
+    fn set_value(&mut self, key: Box<dyn Any>, value: serde_json::Value) -> Result<(), String>;
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl std::fmt::Debug for dyn ModuleMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(debuggable) = self.as_any().downcast_ref::<IntronRetentionDescriptor>() {
+            write!(f, "{:?}", debuggable)
+        } else {
+            write!(f, "Unknown ModuleMap implementation")
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct ModuleDescriptor {
+    module: ModuleType,
+}
+
+impl ModuleDescriptor {
+    pub fn with_schema(module: ModuleType) -> Box<dyn ModuleMap> {
+        match module {
+            ModuleType::IntronRetention => IntronRetentionDescriptor::new(),
+            ModuleType::StartTruncation => unimplemented!(),
+            ModuleType::FusionRead => unimplemented!(),
+        }
+    }
+}
+
+pub struct IntronRetentionDescriptor {
+    pub intron_retention: Value,
+    pub is_retention_supported: Value,
+    pub is_retention_supported_map: Value,
+    pub retention_support_ratio: Value,
+    pub exon_support_ratio: Value,
+    pub number_of_retentions: Value,
+    pub number_of_recovers: Value,
+    pub number_of_unrecovers: Value,
+    pub location_of_retention: Value,
+    pub retention_in_cds: Value,
+    pub retention_in_utr: Value,
+}
+
+impl IntronRetentionDescriptor {
+    pub fn new() -> Box<Self> {
+        Box::new(Self {
+            intron_retention: Value::Bool(false),
+            is_retention_supported: Value::Bool(false),
+            is_retention_supported_map: Value::Array(vec![]),
+            retention_support_ratio: Value::Array(vec![]),
+            exon_support_ratio: Value::Array(vec![]),
+            number_of_retentions: Value::Number(0.into()),
+            number_of_recovers: Value::Number(0.into()),
+            number_of_unrecovers: Value::Number(0.into()),
+            location_of_retention: Value::Array(vec![]),
+            retention_in_cds: Value::Array(vec![]),
+            retention_in_utr: Value::Array(vec![]),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum IntronRetentionValue {
+    IsIntronRetention,
+    IsRetentionSupported,
+    IsRetentionSupportedMap,
+    RetentionSupportRatio,
+    ExonSupportRatio,
+    NumberOfRetentions,
+    NumberOfRecovers,
+    NumberOfUnrecovers,
+    RetentionLocation,
+    RetentionInCds,
+    RetentionInUtr,
+}
+
+impl ModuleMap for IntronRetentionDescriptor {
+    fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value> {
+        if let Ok(key) = key.downcast::<IntronRetentionValue>() {
+            match *key {
+                IntronRetentionValue::IsIntronRetention => Some(self.intron_retention.clone()),
+                IntronRetentionValue::IsRetentionSupported => {
+                    Some(self.is_retention_supported.clone())
+                }
+                IntronRetentionValue::IsRetentionSupportedMap => {
+                    Some(self.is_retention_supported_map.clone())
+                }
+                IntronRetentionValue::RetentionSupportRatio => {
+                    Some(self.retention_support_ratio.clone())
+                }
+                IntronRetentionValue::ExonSupportRatio => Some(self.exon_support_ratio.clone()),
+                IntronRetentionValue::NumberOfRetentions => Some(self.number_of_retentions.clone()),
+                IntronRetentionValue::NumberOfRecovers => Some(self.number_of_recovers.clone()),
+                IntronRetentionValue::NumberOfUnrecovers => Some(self.number_of_unrecovers.clone()),
+                IntronRetentionValue::RetentionLocation => Some(self.location_of_retention.clone()),
+                IntronRetentionValue::RetentionInCds => Some(self.retention_in_cds.clone()),
+                IntronRetentionValue::RetentionInUtr => Some(self.retention_in_utr.clone()),
+            }
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn set_value(&mut self, key: Box<dyn Any>, value: Value) -> Result<(), String> {
+        if let Ok(key) = key.downcast::<IntronRetentionValue>() {
+            match *key {
+                IntronRetentionValue::IsIntronRetention => {
+                    self.intron_retention = value;
+                    Ok(())
+                }
+                IntronRetentionValue::IsRetentionSupported => {
+                    self.is_retention_supported = value;
+                    Ok(())
+                }
+                IntronRetentionValue::IsRetentionSupportedMap => {
+                    self.is_retention_supported_map = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetentionSupportRatio => {
+                    self.retention_support_ratio = value;
+                    Ok(())
+                }
+                IntronRetentionValue::ExonSupportRatio => {
+                    self.exon_support_ratio = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfRetentions => {
+                    self.number_of_retentions = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfRecovers => {
+                    self.number_of_recovers = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfUnrecovers => {
+                    self.number_of_unrecovers = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetentionLocation => {
+                    self.location_of_retention = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetentionInCds => {
+                    self.retention_in_cds = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetentionInUtr => {
+                    self.retention_in_utr = value;
+                    Ok(())
+                }
+            }
+        } else {
+            Err("Invalid key".to_string())
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl std::fmt::Debug for IntronRetentionDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{
+            intron_retention: {:?},
+            is_retention_supported: {:?},
+            is_retention_supported_map: {:?},
+            retention_support_ratio: {:?},
+            exon_support_ratio: {:?},
+            number_of_retentions: {:?},
+            number_of_recovers: {:?},
+            number_of_unrecovers: {:?},
+            location_of_retention: {:?},
+            retention_in_cds: {:?},
+            retention_in_utr: {:?}
+            }}",
+            self.intron_retention,
+            self.is_retention_supported,
+            self.is_retention_supported_map,
+            self.retention_support_ratio,
+            self.exon_support_ratio,
+            self.number_of_retentions,
+            self.number_of_recovers,
+            self.number_of_unrecovers,
+            self.location_of_retention,
+            self.retention_in_cds,
+            self.retention_in_utr
+        )
     }
 }
