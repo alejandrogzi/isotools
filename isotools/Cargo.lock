@@ -157,11 +157,12 @@ dependencies = [
 
 [[package]]
 name = "config"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "dashmap",
  "indicatif",
  "log",
+ "serde_json",
  "thiserror",
 ]
 
@@ -337,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "iso-intron"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -348,6 +349,7 @@ dependencies = [
  "log",
  "num_cpus",
  "rayon",
+ "serde_json",
  "simple_logger",
  "tempfile",
  "thiserror",
@@ -372,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "iso-utr"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -426,6 +428,12 @@ name = "log"
 version = "0.4.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
+
+[[package]]
+name = "memchr"
+version = "2.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
 name = "num-conv"
@@ -589,6 +597,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ryu"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -612,6 +626,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.133"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7fceb2473b9166b2294ef05efcb65a3db80803f0b03ef86a5fc88a2b85ee377"
+dependencies = [
+ "itoa",
+ "memchr",
+ "ryu",
+ "serde",
 ]
 
 [[package]]

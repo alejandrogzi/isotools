@@ -25,6 +25,7 @@
 //!     }
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -87,15 +88,18 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
     let misc_acc: DashSet<String> = DashSet::new();
 
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
+    let dirty_count = AtomicU32::new(0);
+    let n_comps = AtomicU32::new(0);
     tracks.par_iter().for_each(|bucket| {
         let chr = bucket.key();
         let components = bucket.value().to_owned();
+        n_comps.fetch_add(components.len() as u32, Ordering::Relaxed);
 
         let binding = HashSet::new();
         let banned = blacklist.get(chr).unwrap_or(&binding);
 
         components.into_par_iter().for_each(|comp| {
-            let (hits, pass, blocks, descriptor) =
+            let (hits, pass, blocks, descriptor, is_dirty) =
                 process_component(comp, banned, args.plot, args.recover);
 
             hits.into_iter().for_each(|hit| {
@@ -107,6 +111,10 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
             if let Some(b) = blocks {
                 misc_acc.insert(b);
             }
+
+            if is_dirty {
+                dirty_count.fetch_add(1, Ordering::Relaxed);
+            }
         });
 
         pb.inc(1);
@@ -114,6 +122,15 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
 
     pb.finish_and_clear();
     info!("Reads with retained introns: {}", hit_acc.len());
+
+    if args.recover {
+        warn!(
+            "Number of dirty components in query reads: {:?} ({:.3}%)",
+            dirty_count,
+            dirty_count.load(Ordering::Relaxed) as f64 / n_comps.load(Ordering::Relaxed) as f64
+                * 100.0
+        );
+    }
 
     [hit_acc, pass_acc]
         .par_iter()
@@ -163,6 +180,7 @@ pub fn process_component(
     Vec<String>,
     Option<String>,
     HashMap<String, Box<dyn ModuleMap>>,
+    bool,
 ) {
     let mut hits = Vec::new();
     let mut pass = Vec::new();
@@ -183,6 +201,8 @@ pub fn process_component(
     for query in queries {
         let query = Arc::new(query);
         let mut hit: bool = false;
+        let five_utr = query.get_five_utr();
+        let three_utr = query.get_three_utr();
 
         descriptor.insert(
             query.name.clone(),
@@ -191,6 +211,9 @@ pub fn process_component(
 
         let mut number_of_retentions = 0_u32;
         let mut location_of_retentions = Vec::new();
+        let mut retention_in_cds = Vec::new();
+        let mut retention_in_utr = Vec::new();
+        let mut retention_in_frame = Vec::new();
 
         for exon in &query.exons {
             for intron in &refs.introns {
@@ -214,13 +237,29 @@ pub fn process_component(
 
                     number_of_retentions += 1;
 
+                    if (five_utr.0 <= intron.0 && intron.0 <= five_utr.1)
+                        || (three_utr.0 <= intron.1 && intron.1 <= three_utr.1)
+                    {
+                        retention_in_cds.push(false);
+                        retention_in_utr.push(true);
+                    } else {
+                        retention_in_cds.push(true);
+                        retention_in_utr.push(false);
+                    }
+
+                    if (intron.1 - intron.0) % 3 == 0 {
+                        retention_in_frame.push(true);
+                    } else {
+                        retention_in_frame.push(false);
+                    }
+
                     match query.strand {
                         '+' => {
                             location_of_retentions
                                 .push(format!("{}:{}-{}", query.chrom, intron.0, intron.1,));
 
                             if plot {
-                                Bed4::from(&query.chrom, intron.0, intron.1, &query.name)
+                                Bed4::from(&query.chrom, intron.0 - 1, intron.1 + 1, &query.name)
                                     .send(&mut blocks.as_mut().unwrap())
                             }
                         }
@@ -235,8 +274,8 @@ pub fn process_component(
                             if plot {
                                 Bed4::from(
                                     &query.chrom,
-                                    SCALE - intron.1,
-                                    SCALE - intron.0,
+                                    SCALE - intron.1 - 1,
+                                    SCALE - intron.0 + 1,
                                     &query.name,
                                 )
                                 .send(&mut blocks.as_mut().unwrap())
@@ -244,9 +283,6 @@ pub fn process_component(
                         }
                         _ => panic!("Invalid strand"),
                     }
-
-                    // TODO: implement the logic to change the name based on
-                    // UTR overlaping + in-frame
 
                     continue;
                 } else {
@@ -303,6 +339,24 @@ pub fn process_component(
                     Value::Bool(true),
                 )
                 .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::IsRetentionInCds),
+                    Value::Array(retention_in_cds.into_iter().map(Value::Bool).collect()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::IsRetentionInUtr),
+                    Value::Array(retention_in_utr.into_iter().map(Value::Bool).collect()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::IsIntronRetainedInFrame),
+                    Value::Array(retention_in_frame.into_iter().map(Value::Bool).collect()),
+                )
+                .ok();
         } else {
             let line = query.line().to_owned();
             pass.push(line);
@@ -314,10 +368,12 @@ pub fn process_component(
     // of the total reads in the bucket, we consider the bucket
     // to be dirty and return the reads for recovery if args.recover
     let ratio = count / totals;
+    let mut is_dirty = false;
     if recover {
         if ratio >= RETENTION_RATIO_THRESHOLD {
-            // log::warn!("Bucket {:?} is dirty -> {}", refs.reads, count / totals);
+            // log::warn!("Bucket {:?} is dirty -> {}", refs.reads, ratio);
             let dirt = tmp_dirt;
+            is_dirty = true;
 
             let new_passes = recover_from_dirt(
                 dirt,
@@ -338,7 +394,7 @@ pub fn process_component(
 
     // dbg!(&descriptor);
 
-    (hits, pass, blocks, descriptor)
+    (hits, pass, blocks, descriptor, is_dirty)
 }
 
 pub fn recover_from_dirt(
