@@ -31,7 +31,7 @@ impl<'a> Bed4<'a> {
 
         Ok(Bed4 {
             chrom,
-            coord: (start, end),
+            coord: (start, end - 1),
             id,
         })
     }
