@@ -26,5 +26,5 @@ fn main() {
     });
 
     let elapsed = start.elapsed();
-    info!("Elapsed time: {:?}", elapsed);
+    info!("Elapsed time: {:.3?}", elapsed);
 }
