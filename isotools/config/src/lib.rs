@@ -178,13 +178,30 @@ pub trait ModuleMap: Any {
     fn as_any(&self) -> &dyn Any;
 }
 
+macro_rules! downcast_dbg {
+    ($formatter:expr, $module:expr, $($type:ty),+) => {
+        {
+            let mut result: Option<std::fmt::Result> = None;
+            $(
+                if result.is_none() {
+                    if let Some(debuggable) = $module.as_any().downcast_ref::<$type>() {
+                        result = Some(write!($formatter, "{:?}", debuggable));
+                    }
+                }
+            )+
+            result.unwrap_or_else(|| write!($formatter, "Unknown ModuleMap implementation"))
+        }
+    };
+}
+
 impl std::fmt::Debug for dyn ModuleMap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(debuggable) = self.as_any().downcast_ref::<IntronRetentionDescriptor>() {
-            write!(f, "{:?}", debuggable)
-        } else {
-            write!(f, "Unknown ModuleMap implementation")
-        }
+        downcast_dbg!(
+            f,
+            self,
+            IntronRetentionDescriptor,
+            StartTruncationDescriptor
+        )
     }
 }
 
@@ -208,6 +225,11 @@ pub struct IntronRetentionDescriptor {
     pub intron_retention: Value,
     pub is_retention_supported: Value,
     pub is_retention_supported_map: Value,
+    pub component_size: Value,
+    pub ref_component_size: Value,
+    pub query_component_size: Value,
+    pub component_retention_ratio: Value,
+    pub is_dirty_component: Value,
     pub retention_support_ratio: Value,
     pub exon_support_ratio: Value,
     pub number_of_retentions: Value,
@@ -216,6 +238,7 @@ pub struct IntronRetentionDescriptor {
     pub location_of_retention: Value,
     pub retention_in_cds: Value,
     pub retention_in_utr: Value,
+    pub is_intron_retained_in_frame: Value,
 }
 
 impl IntronRetentionDescriptor {
@@ -224,6 +247,11 @@ impl IntronRetentionDescriptor {
             intron_retention: Value::Bool(false),
             is_retention_supported: Value::Bool(false),
             is_retention_supported_map: Value::Array(vec![]),
+            component_size: Value::Number(0.into()),
+            ref_component_size: Value::Number(0.into()),
+            query_component_size: Value::Number(0.into()),
+            component_retention_ratio: Value::Number(0.into()),
+            is_dirty_component: Value::Bool(false),
             retention_support_ratio: Value::Array(vec![]),
             exon_support_ratio: Value::Array(vec![]),
             number_of_retentions: Value::Number(0.into()),
@@ -232,6 +260,7 @@ impl IntronRetentionDescriptor {
             location_of_retention: Value::Array(vec![]),
             retention_in_cds: Value::Array(vec![]),
             retention_in_utr: Value::Array(vec![]),
+            is_intron_retained_in_frame: Value::Array(vec![]),
         })
     }
 }
@@ -241,14 +270,20 @@ pub enum IntronRetentionValue {
     IsIntronRetention,
     IsRetentionSupported,
     IsRetentionSupportedMap,
+    ComponentSize,
+    RefComponentSize,
+    QueryComponentSize,
+    ComponentRetentionRatio,
+    IsDirtyComponent,
     RetentionSupportRatio,
     ExonSupportRatio,
     NumberOfRetentions,
     NumberOfRecovers,
     NumberOfUnrecovers,
     RetentionLocation,
-    RetentionInCds,
-    RetentionInUtr,
+    IsRetentionInCds,
+    IsRetentionInUtr,
+    IsIntronRetainedInFrame,
 }
 
 impl ModuleMap for IntronRetentionDescriptor {
@@ -262,6 +297,13 @@ impl ModuleMap for IntronRetentionDescriptor {
                 IntronRetentionValue::IsRetentionSupportedMap => {
                     Some(self.is_retention_supported_map.clone())
                 }
+                IntronRetentionValue::ComponentSize => Some(self.component_size.clone()),
+                IntronRetentionValue::RefComponentSize => Some(self.ref_component_size.clone()),
+                IntronRetentionValue::QueryComponentSize => Some(self.query_component_size.clone()),
+                IntronRetentionValue::ComponentRetentionRatio => {
+                    Some(self.retention_support_ratio.clone())
+                }
+                IntronRetentionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
                 IntronRetentionValue::RetentionSupportRatio => {
                     Some(self.retention_support_ratio.clone())
                 }
@@ -270,8 +312,11 @@ impl ModuleMap for IntronRetentionDescriptor {
                 IntronRetentionValue::NumberOfRecovers => Some(self.number_of_recovers.clone()),
                 IntronRetentionValue::NumberOfUnrecovers => Some(self.number_of_unrecovers.clone()),
                 IntronRetentionValue::RetentionLocation => Some(self.location_of_retention.clone()),
-                IntronRetentionValue::RetentionInCds => Some(self.retention_in_cds.clone()),
-                IntronRetentionValue::RetentionInUtr => Some(self.retention_in_utr.clone()),
+                IntronRetentionValue::IsRetentionInCds => Some(self.retention_in_cds.clone()),
+                IntronRetentionValue::IsRetentionInUtr => Some(self.retention_in_utr.clone()),
+                IntronRetentionValue::IsIntronRetainedInFrame => {
+                    Some(self.retention_in_utr.clone())
+                }
             }
         } else {
             None
@@ -292,6 +337,26 @@ impl ModuleMap for IntronRetentionDescriptor {
                 }
                 IntronRetentionValue::IsRetentionSupportedMap => {
                     self.is_retention_supported_map = value;
+                    Ok(())
+                }
+                IntronRetentionValue::ComponentSize => {
+                    self.component_size = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RefComponentSize => {
+                    self.ref_component_size = value;
+                    Ok(())
+                }
+                IntronRetentionValue::QueryComponentSize => {
+                    self.query_component_size = value;
+                    Ok(())
+                }
+                IntronRetentionValue::ComponentRetentionRatio => {
+                    self.component_retention_ratio = value;
+                    Ok(())
+                }
+                IntronRetentionValue::IsDirtyComponent => {
+                    self.is_dirty_component = value;
                     Ok(())
                 }
                 IntronRetentionValue::RetentionSupportRatio => {
@@ -318,17 +383,23 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.location_of_retention = value;
                     Ok(())
                 }
-                IntronRetentionValue::RetentionInCds => {
+                IntronRetentionValue::IsRetentionInCds => {
                     self.retention_in_cds = value;
                     Ok(())
                 }
-                IntronRetentionValue::RetentionInUtr => {
+                IntronRetentionValue::IsRetentionInUtr => {
                     self.retention_in_utr = value;
+                    Ok(())
+                }
+                IntronRetentionValue::IsIntronRetainedInFrame => {
+                    self.is_intron_retained_in_frame = value;
                     Ok(())
                 }
             }
         } else {
-            Err("Invalid key".to_string())
+            let err = format!("ERROR: You have tried to set a value for an unknown key!");
+            log::error!("{}", err);
+            Err(err)
         }
     }
 
@@ -342,21 +413,32 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
         write!(
             f,
             "{{
-            intron_retention: {:?},
+            is_intron_retention: {:?},
             is_retention_supported: {:?},
             is_retention_supported_map: {:?},
+            component_size: {:?},
+            ref_component_size: {:?},
+            query_component_size: {:?},
+            component_retention_ratio: {:?},
+            is_dirty_component: {:?},
             retention_support_ratio: {:?},
             exon_support_ratio: {:?},
             number_of_retentions: {:?},
             number_of_recovers: {:?},
             number_of_unrecovers: {:?},
-            location_of_retention: {:?},
-            retention_in_cds: {:?},
-            retention_in_utr: {:?}
+            retention_location: {:?},
+            is_retention_in_cds: {:?},
+            is_retention_in_utr: {:?},
+            is_intron_retained_in_frame: {:?}
             }}",
             self.intron_retention,
             self.is_retention_supported,
             self.is_retention_supported_map,
+            self.component_size,
+            self.ref_component_size,
+            self.query_component_size,
+            self.component_retention_ratio,
+            self.is_dirty_component,
             self.retention_support_ratio,
             self.exon_support_ratio,
             self.number_of_retentions,
@@ -364,7 +446,20 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             self.number_of_unrecovers,
             self.location_of_retention,
             self.retention_in_cds,
-            self.retention_in_utr
+            self.retention_in_utr,
+            self.is_intron_retained_in_frame
+        )
+    }
+}
+
+pub struct StartTruncationDescriptor {}
+
+impl std::fmt::Debug for StartTruncationDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{
+            }}",
         )
     }
 }

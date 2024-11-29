@@ -1,6 +1,6 @@
 [package]
 name = "config"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 
 [dependencies]
@@ -8,3 +8,4 @@ indicatif = "0.17.8"
 dashmap.workspace = true
 log.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
