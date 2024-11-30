@@ -1,6 +1,6 @@
 [package]
 name = "iso-utr"
-version = "0.0.3"
+version = "0.0.4"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "detect UTR truncations on iso-seq reads"
 keywords = ["utr", "truncation", "transcript", "isoseq"]
@@ -22,3 +22,4 @@ anyhow.workspace = true
 hashbrown.workspace = true
 dashmap.workspace = true
 tempfile.workspace = true
+serde_json.workspace = true

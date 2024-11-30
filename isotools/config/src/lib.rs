@@ -215,7 +215,7 @@ impl ModuleDescriptor {
     pub fn with_schema(module: ModuleType) -> Box<dyn ModuleMap> {
         match module {
             ModuleType::IntronRetention => IntronRetentionDescriptor::new(),
-            ModuleType::StartTruncation => unimplemented!(),
+            ModuleType::StartTruncation => StartTruncationDescriptor::new(),
             ModuleType::FusionRead => unimplemented!(),
         }
     }
@@ -245,22 +245,22 @@ impl IntronRetentionDescriptor {
     pub fn new() -> Box<Self> {
         Box::new(Self {
             intron_retention: Value::Bool(false),
-            is_retention_supported: Value::Bool(false),
-            is_retention_supported_map: Value::Array(vec![]),
-            component_size: Value::Number(0.into()),
-            ref_component_size: Value::Number(0.into()),
-            query_component_size: Value::Number(0.into()),
-            component_retention_ratio: Value::Number(0.into()),
+            is_retention_supported: Value::Null,
+            is_retention_supported_map: Value::Null,
+            component_size: Value::Null,
+            ref_component_size: Value::Null,
+            query_component_size: Value::Null,
+            component_retention_ratio: Value::Null,
             is_dirty_component: Value::Bool(false),
-            retention_support_ratio: Value::Array(vec![]),
-            exon_support_ratio: Value::Array(vec![]),
+            retention_support_ratio: Value::Null,
+            exon_support_ratio: Value::Null,
             number_of_retentions: Value::Number(0.into()),
             number_of_recovers: Value::Number(0.into()),
             number_of_unrecovers: Value::Number(0.into()),
-            location_of_retention: Value::Array(vec![]),
-            retention_in_cds: Value::Array(vec![]),
-            retention_in_utr: Value::Array(vec![]),
-            is_intron_retained_in_frame: Value::Array(vec![]),
+            location_of_retention: Value::Null,
+            retention_in_cds: Value::Null,
+            retention_in_utr: Value::Null,
+            is_intron_retained_in_frame: Value::Null,
         })
     }
 }
@@ -452,14 +452,149 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
     }
 }
 
-pub struct StartTruncationDescriptor {}
+pub struct StartTruncationDescriptor {
+    pub is_read_truncated: Value,
+    pub is_novel_start: Value,
+    pub is_dirty_component: Value,
+    pub component_size: Value,
+    pub ref_component_size: Value,
+    pub query_component_size: Value,
+    pub truncation_support_ratio: Value,
+    pub is_truncation_supported: Value,
+    pub component_truncation_ratio: Value,
+}
+
+impl StartTruncationDescriptor {
+    pub fn new() -> Box<Self> {
+        Box::new(Self {
+            is_read_truncated: Value::Null,
+            is_novel_start: Value::Null,
+            is_dirty_component: Value::Null,
+            component_size: Value::Null,
+            ref_component_size: Value::Null,
+            query_component_size: Value::Null,
+            truncation_support_ratio: Value::Null,
+            is_truncation_supported: Value::Null,
+            component_truncation_ratio: Value::Null,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum StartTruncationValue {
+    IsReadTruncated,
+    IsNovelStart,
+    TruncationSupportRatio,
+    IsTruncationSupported,
+    ComponentSize,
+    RefComponentSize,
+    QueryComponentSize,
+    ComponentTruncationRatio,
+    IsDirtyComponent,
+}
+
+impl ModuleMap for StartTruncationDescriptor {
+    fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value> {
+        if let Ok(key) = key.downcast::<StartTruncationValue>() {
+            match *key {
+                StartTruncationValue::IsReadTruncated => Some(self.is_read_truncated.clone()),
+                StartTruncationValue::IsNovelStart => Some(self.is_novel_start.clone()),
+                StartTruncationValue::TruncationSupportRatio => {
+                    Some(self.truncation_support_ratio.clone())
+                }
+                StartTruncationValue::IsTruncationSupported => {
+                    Some(self.is_truncation_supported.clone())
+                }
+                StartTruncationValue::ComponentSize => Some(self.component_size.clone()),
+                StartTruncationValue::RefComponentSize => Some(self.ref_component_size.clone()),
+                StartTruncationValue::QueryComponentSize => Some(self.query_component_size.clone()),
+                StartTruncationValue::ComponentTruncationRatio => {
+                    Some(self.component_truncation_ratio.clone())
+                }
+                StartTruncationValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+            }
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn set_value(&mut self, key: Box<dyn Any>, value: Value) -> Result<(), String> {
+        if let Ok(key) = key.downcast::<StartTruncationValue>() {
+            match *key {
+                StartTruncationValue::IsReadTruncated => {
+                    self.is_read_truncated = value;
+                    Ok(())
+                }
+                StartTruncationValue::IsNovelStart => {
+                    self.is_novel_start = value;
+                    Ok(())
+                }
+                StartTruncationValue::TruncationSupportRatio => {
+                    self.truncation_support_ratio = value;
+                    Ok(())
+                }
+                StartTruncationValue::IsTruncationSupported => {
+                    self.is_truncation_supported = value;
+                    Ok(())
+                }
+                StartTruncationValue::ComponentSize => {
+                    self.component_size = value;
+                    Ok(())
+                }
+                StartTruncationValue::RefComponentSize => {
+                    self.ref_component_size = value;
+                    Ok(())
+                }
+                StartTruncationValue::QueryComponentSize => {
+                    self.query_component_size = value;
+                    Ok(())
+                }
+                StartTruncationValue::ComponentTruncationRatio => {
+                    self.component_truncation_ratio = value;
+                    Ok(())
+                }
+                StartTruncationValue::IsDirtyComponent => {
+                    self.is_dirty_component = value;
+                    Ok(())
+                }
+            }
+        } else {
+            let err = format!("ERROR: You have tried to set a value for an unknown key!");
+            log::error!("{}", err);
+            Err(err)
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 impl std::fmt::Debug for StartTruncationDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{{
+            is_read_truncated: {:?},
+            is_novel_start: {:?},
+            is_dirty_component: {:?},
+            component_size: {:?},
+            ref_component_size: {:?},
+            query_component_size: {:?},
+            truncation_support_ratio: {:?},
+            is_truncation_supported: {:?},
+            component_truncation_ratio: {:?}
             }}",
+            self.is_read_truncated,
+            self.is_novel_start,
+            self.is_dirty_component,
+            self.component_size,
+            self.ref_component_size,
+            self.query_component_size,
+            self.truncation_support_ratio,
+            self.is_truncation_supported,
+            self.component_truncation_ratio
         )
     }
 }

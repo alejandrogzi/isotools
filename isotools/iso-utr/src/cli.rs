@@ -67,7 +67,6 @@ pub struct Args {
         num_args(0..=1),
         require_equals(true),
         action = ArgAction::Set,
-        requires("hint"),
     )]
     pub recover: bool,
 }

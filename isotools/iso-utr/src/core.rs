@@ -2,14 +2,16 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use config::{
-    get_progress_bar, write_objs, HIT, OVERLAP_CDS, OVERLAP_EXON, PASS,
-    TRUNCATION_RECOVERY_THRESHOLD, TRUNCATION_THRESHOLD,
+    get_progress_bar, write_objs, ModuleDescriptor, ModuleMap, ModuleType, StartTruncationValue,
+    HIT, OVERLAP_CDS, OVERLAP_EXON, PASS, TRUNCATION_RECOVERY_THRESHOLD, TRUNCATION_THRESHOLD,
 };
 use dashmap::DashSet;
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use log::{info, warn};
 use packbed::{packbed, GenePred, RefGenePred};
 use rayon::prelude::*;
+use serde_json::Value;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::cli::Args;
 use crate::utils::unpack_blacklist;
@@ -22,14 +24,17 @@ pub fn detect_truncations(args: Args) -> Result<()> {
 
     let hit_acc: DashSet<String> = DashSet::new();
     let pass_acc: DashSet<String> = DashSet::new();
-    // let dirt_acc: DashSet<String> = DashSet::new();
 
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
+    let dirty_count = AtomicU32::new(0);
+    let n_comps = AtomicU32::new(0);
     tracks.par_iter().for_each(|bucket| {
         let components = bucket.value().to_owned();
+        n_comps.fetch_add(components.len() as u32, Ordering::Relaxed);
 
         components.into_par_iter().for_each(|comp| {
-            let (hits, pass) = process_component(comp, &blacklist, args.recover);
+            let (hits, pass, descriptor, is_dirty) =
+                process_component(comp, &blacklist, args.recover);
 
             hits.into_iter().for_each(|hit| {
                 hit_acc.insert(hit);
@@ -37,6 +42,10 @@ pub fn detect_truncations(args: Args) -> Result<()> {
             pass.into_iter().for_each(|p| {
                 pass_acc.insert(p);
             });
+
+            if is_dirty {
+                dirty_count.fetch_add(1, Ordering::Relaxed);
+            }
         });
 
         pb.inc(1);
@@ -44,6 +53,15 @@ pub fn detect_truncations(args: Args) -> Result<()> {
 
     pb.finish_and_clear();
     info!("Reads with 5'end truncations: {}", hit_acc.len());
+
+    if args.recover {
+        warn!(
+            "Number of dirty components in query reads: {:?} ({:.3}%)",
+            dirty_count,
+            dirty_count.load(Ordering::Relaxed) as f64 / n_comps.load(Ordering::Relaxed) as f64
+                * 100.0
+        );
+    }
 
     [hit_acc, pass_acc]
         .par_iter()
@@ -58,12 +76,19 @@ pub fn process_component(
     comp: (RefGenePred, Vec<GenePred>),
     ban: &HashSet<String>,
     recover: bool,
-) -> (Vec<String>, Vec<String>) {
+) -> (
+    Vec<String>,
+    Vec<String>,
+    HashMap<String, Box<dyn ModuleMap>>,
+    bool,
+) {
     let mut truncations = Vec::new();
     let mut pass = Vec::new();
 
     let mut tmp_dirt = Vec::new();
     let mut owners = BTreeSet::new();
+
+    let mut descriptor = HashMap::new();
 
     let refs = comp.0;
     let queries = comp.1;
@@ -71,12 +96,38 @@ pub fn process_component(
     let ref_starts = &refs.starts;
     let ref_middles = &refs.middles;
 
+    let comp_size = queries.len() + refs.reads.len();
     let (mut t, totals) = (0_f32, queries.len() as f32);
 
     for query in queries.iter() {
         if ban.contains(query.name()) {
             continue;
         }
+
+        descriptor.insert(
+            query.name.clone(),
+            ModuleDescriptor::with_schema(ModuleType::StartTruncation),
+        );
+        let handle = descriptor.get_mut(&query.name).unwrap();
+
+        handle
+            .set_value(
+                Box::new(StartTruncationValue::ComponentSize),
+                serde_json::json!(comp_size),
+            )
+            .ok();
+        handle
+            .set_value(
+                Box::new(StartTruncationValue::RefComponentSize),
+                serde_json::json!(refs.reads.len()),
+            )
+            .ok();
+        handle
+            .set_value(
+                Box::new(StartTruncationValue::QueryComponentSize),
+                serde_json::json!(queries.len()),
+            )
+            .ok();
 
         let (query_start, query_end) = query.get_first_exon();
 
@@ -89,6 +140,13 @@ pub fn process_component(
         });
 
         if is_complete {
+            handle
+                .set_value(
+                    Box::new(StartTruncationValue::IsNovelStart),
+                    Value::Bool(false),
+                )
+                .ok();
+
             // still checks if read start is inside any middle boundaries
             if ref_middles.iter().any(|(s, e)| {
                 if (query_start >= *s) && (query_start < *e) {
@@ -102,10 +160,24 @@ pub fn process_component(
                 let line = query.line().to_owned();
                 truncations.push(line);
 
+                handle
+                    .set_value(
+                        Box::new(StartTruncationValue::IsReadTruncated),
+                        Value::Bool(true),
+                    )
+                    .ok();
+
                 t += 1.0;
             } else {
                 let line = query.line().to_owned();
                 pass.push(line);
+
+                handle
+                    .set_value(
+                        Box::new(StartTruncationValue::IsReadTruncated),
+                        Value::Bool(false),
+                    )
+                    .ok();
             }
         } else {
             // we do not have any overlap with consensus starts.
@@ -132,10 +204,24 @@ pub fn process_component(
                 let line = query.line().to_owned();
                 truncations.push(line);
 
+                handle
+                    .set_value(
+                        Box::new(StartTruncationValue::IsReadTruncated),
+                        Value::Bool(true),
+                    )
+                    .ok();
+
                 t += 1.0;
             } else {
                 let line = query.line().to_owned();
                 pass.push(line);
+
+                handle
+                    .set_value(
+                        Box::new(StartTruncationValue::IsNovelStart),
+                        Value::Bool(true),
+                    )
+                    .ok();
             }
         }
     }
@@ -144,12 +230,15 @@ pub fn process_component(
     // if the number of truncated reads is greater than 50%
     // of the total reads in the bucket, we consider the bucket
     // to be dirty and return the reads for recovery if args.recover
+    let ratio = t / totals;
+    let mut is_dirty = false;
     if recover {
-        if (t / totals) >= TRUNCATION_THRESHOLD {
-            warn!("Bucket {:?} is dirty -> {}", refs.reads, t / totals);
+        if ratio >= TRUNCATION_THRESHOLD {
+            // warn!("Bucket {:?} is dirty -> {}", refs.reads, t / totals);
+            is_dirty = true;
             let dirt = tmp_dirt;
 
-            let new_passes = recover_from_dirt(dirt, owners, &refs);
+            let new_passes = recover_from_dirt(dirt, owners, &refs, &mut descriptor, ratio);
             new_passes.iter().for_each(|p| {
                 truncations.retain(|x| x != p);
                 pass.push(p.to_owned());
@@ -159,13 +248,17 @@ pub fn process_component(
         drop(tmp_dirt)
     }
 
-    return (truncations, pass);
+    dbg!(&descriptor);
+
+    return (truncations, pass, descriptor, is_dirty);
 }
 
 pub fn recover_from_dirt(
     mut dirt: Vec<&GenePred>,
     owners: BTreeSet<(&u64, &u64)>,
     refs: &RefGenePred,
+    descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
+    ratio: f32,
 ) -> Vec<String> {
     // 1. see how many of each owner we have in refs.reads
 
@@ -189,15 +282,24 @@ pub fn recover_from_dirt(
             // });
         }
 
-        // 2. if the owner has more than 50% support, we consider it
+        // 2. if the owner (middle exon) has more than 50% support, we consider it
         //  a valid owner and keep reads truncated by that owner as
         //  truncated reads; otherwise, we consider the owner to be
         //  a weak ownner and send all truncated reads to the pass
         //  bucket
-        let ratio = count / background;
-        if ratio < TRUNCATION_RECOVERY_THRESHOLD {
+        let owner_ratio = count / background;
+        if owner_ratio < TRUNCATION_RECOVERY_THRESHOLD {
             // send reads truncated by this owner to pass
             for read in dirt.clone().iter_mut() {
+                let handle = descriptor.get_mut(&read.name).unwrap();
+
+                handle
+                    .set_value(
+                        Box::new(StartTruncationValue::IsDirtyComponent),
+                        Value::Bool(true),
+                    )
+                    .ok();
+
                 let (owner_start, owner_end) = *owner;
                 let (query_start, query_end) = read.get_first_exon();
 
@@ -209,6 +311,63 @@ pub fn recover_from_dirt(
                     let line = read.line().to_owned();
                     local_passes.push(line);
                     dirt.retain(|x| x.name() != read.name());
+
+                    handle
+                        .set_value(
+                            Box::new(StartTruncationValue::TruncationSupportRatio),
+                            serde_json::json!(owner_ratio),
+                        )
+                        .ok();
+                    handle
+                        .set_value(
+                            Box::new(StartTruncationValue::IsTruncationSupported),
+                            serde_json::json!(false),
+                        )
+                        .ok();
+                    handle
+                        .set_value(
+                            Box::new(StartTruncationValue::ComponentTruncationRatio),
+                            serde_json::json!(ratio),
+                        )
+                        .ok();
+                }
+            }
+        } else {
+            for read in dirt.iter() {
+                let handle = descriptor.get_mut(&read.name).unwrap();
+
+                handle
+                    .set_value(
+                        Box::new(StartTruncationValue::IsDirtyComponent),
+                        Value::Bool(true),
+                    )
+                    .ok();
+
+                let (owner_start, owner_end) = *owner;
+                let (query_start, query_end) = read.get_first_exon();
+
+                if (query_start >= *owner_start && query_start < *owner_end)
+                    || (query_end > *owner_start && query_end <= *owner_end)
+                    || (query_start < *owner_start && query_end > *owner_end)
+                {
+                    handle
+                        .set_value(
+                            Box::new(StartTruncationValue::IsTruncationSupported),
+                            serde_json::json!(true),
+                        )
+                        .ok();
+                    handle
+                        .set_value(
+                            Box::new(StartTruncationValue::ComponentTruncationRatio),
+                            serde_json::json!(ratio),
+                        )
+                        .ok();
+                    handle
+                        .set_value(
+                            Box::new(StartTruncationValue::TruncationSupportRatio),
+                            serde_json::json!(owner_ratio),
+                        )
+                        .ok();
                 }
             }
         }
