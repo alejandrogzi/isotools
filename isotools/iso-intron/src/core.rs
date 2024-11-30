@@ -90,6 +90,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
     let dirty_count = AtomicU32::new(0);
     let n_comps = AtomicU32::new(0);
+
     tracks.par_iter().for_each(|bucket| {
         let chr = bucket.key();
         let components = bucket.value().to_owned();
@@ -198,7 +199,7 @@ pub fn process_component(
     let comp_size = queries.len() + refs.reads.len();
     let (mut count, totals) = (0_f32, queries.len() as f32);
 
-    for query in queries {
+    for query in queries.iter() {
         let query = Arc::new(query);
         let mut hit: bool = false;
         let five_utr = query.get_five_utr();
@@ -295,23 +296,6 @@ pub fn process_component(
 
         handle
             .set_value(
-                Box::new(IntronRetentionValue::NumberOfRetentions),
-                Value::Number(number_of_retentions.into()),
-            )
-            .ok();
-        handle
-            .set_value(
-                Box::new(IntronRetentionValue::RetentionLocation),
-                Value::Array(
-                    location_of_retentions
-                        .into_iter()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            )
-            .ok();
-        handle
-            .set_value(
                 Box::new(IntronRetentionValue::ComponentSize),
                 Value::Number(comp_size.into()),
             )
@@ -337,6 +321,23 @@ pub fn process_component(
                 .set_value(
                     Box::new(IntronRetentionValue::IsIntronRetention),
                     Value::Bool(true),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::NumberOfRetentions),
+                    Value::Number(number_of_retentions.into()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::RetentionLocation),
+                    Value::Array(
+                        location_of_retentions
+                            .into_iter()
+                            .map(Value::String)
+                            .collect(),
+                    ),
                 )
                 .ok();
             handle
@@ -387,18 +388,27 @@ pub fn process_component(
                 hits.retain(|x| x != p);
                 pass.push(p.to_owned());
             });
+        } else {
+            for query in queries.iter() {
+                let handle = descriptor.get_mut(&query.name).unwrap();
+
+                handle
+                    .set_value(
+                        Box::new(IntronRetentionValue::ComponentRetentionRatio),
+                        serde_json::json!(ratio),
+                    )
+                    .ok();
+            }
         }
-    } else {
-        drop(tmp_dirt)
     }
 
-    // dbg!(&descriptor);
+    dbg!(&descriptor);
 
     (hits, pass, blocks, descriptor, is_dirty)
 }
 
 pub fn recover_from_dirt(
-    dirt: Vec<Arc<GenePred>>,
+    dirt: Vec<Arc<&GenePred>>,
     exon_owners: BTreeSet<(u64, u64)>,
     introns_owned: BTreeSet<(u64, u64)>,
     refs: &RefGenePred,
@@ -519,6 +529,13 @@ pub fn recover_from_dirt(
             && number_of_unsupported_retentions + number_of_supported_retentions > 0
         {
             local_passes.push(read.line().to_owned());
+
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::IsRetentionSupported),
+                    serde_json::json!(false),
+                )
+                .ok();
         } else {
             handle
                 .set_value(
