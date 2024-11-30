@@ -63,6 +63,14 @@ impl GenePred {
         self.introns.iter().cloned().collect()
     }
 
+    pub fn get_five_utr(&self) -> (u64, u64) {
+        (self.start, self.cds_start)
+    }
+
+    pub fn get_three_utr(&self) -> (u64, u64) {
+        (self.cds_end, self.end)
+    }
+
     #[inline(always)]
     pub fn colorline(self: Self, color: &str) -> Self {
         let nline = self.line.clone();
