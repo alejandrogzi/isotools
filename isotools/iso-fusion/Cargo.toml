@@ -1,6 +1,6 @@
 [package]
-name = "iso-chimera"
-version = "0.0.1"
+name = "iso-fusion"
+version = "0.0.2"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -22,4 +22,5 @@ rand.workspace = true
 log.workspace = true
 config.workspace = true
 simple_logger.workspace = true
+num-traits.workspace = true
 iso-pack = { path = "../iso-pack" }

@@ -3,7 +3,7 @@ use config::ArgCheck;
 use log::{error, info, Level};
 use simple_logger::init_with_level;
 
-use iso_chimera::{cli::Args, core::detect_chimeras};
+use iso_fusion::{cli::Args, core::detect_fusions};
 
 fn main() {
     let start = std::time::Instant::now();
@@ -20,7 +20,7 @@ fn main() {
         .build()
         .unwrap();
 
-    detect_chimeras(args).unwrap_or_else(|e| {
+    detect_fusions(args).unwrap_or_else(|e| {
         error!("{}", e);
         std::process::exit(1);
     });

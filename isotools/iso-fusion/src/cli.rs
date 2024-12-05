@@ -5,6 +5,15 @@ use std::path::PathBuf;
 #[derive(Debug, Parser)]
 pub struct Args {
     #[arg(
+        short = 'r',
+        long = "ref",
+        required = true,
+        value_name = "PATH",
+        help = "Path to BED12 file with rule transcripts"
+    )]
+    pub refs: Vec<PathBuf>,
+
+    #[arg(
         short = 'q',
         long = "query",
         required = true,
@@ -25,15 +34,16 @@ pub struct Args {
     pub threads: usize,
 
     #[arg(
-        short = 'h',
-        long = "hint",
-        required = false,
-        value_name = "PATH",
-        value_delimiter = ',',
-        num_args = 1..,
-        help = "Path to BED12 file with rule transcripts"
+        long = "recover",
+        help = "Flag to recover from disputed fusions",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
     )]
-    pub hint: Vec<PathBuf>,
+    pub recover: bool,
 
     #[arg(
         short = 'b',
@@ -42,35 +52,9 @@ pub struct Args {
         value_name = "PATH",
         value_delimiter = ',',
         num_args = 1..,
-        help = "Path to BED4 file with blacklisted introns"
+        help = "Path to BED12 file with blacklisted reads"
     )]
     pub blacklist: Vec<PathBuf>,
-
-    #[arg(
-        long = "cds",
-        help = "Flag to skip UTRs in chimeric regions when --hint",
-        value_name = "FLAG",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
-        requires("hint"),
-    )]
-    pub cds: bool,
-
-    #[arg(
-        short = 'w',
-        long = "write",
-        help = "Flag to write intergenic.bed with intergenic regions",
-        value_name = "FLAG",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
-    )]
-    pub write: bool,
 }
 
 impl ArgCheck for Args {
@@ -111,7 +95,7 @@ impl ArgCheck for Args {
     }
 
     fn get_ref(&self) -> &Vec<PathBuf> {
-        &self.hint
+        &self.refs
     }
 
     fn get_query(&self) -> &Vec<PathBuf> {

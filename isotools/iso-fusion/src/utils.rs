@@ -1,139 +1,104 @@
-use anyhow::Result;
-use config::{get_progress_bar, write_objs, CHIMERAS, CHIMERIC_FREE, INTERGENIC_REGIONS};
-use dashmap::{DashMap, DashSet};
-use hashbrown::HashMap;
+use std::borrow::Borrow;
+use std::collections::BTreeSet;
+use std::fmt::Debug;
+use std::path::Path;
+
+use anyhow::{Ok, Result};
+use dashmap::DashMap;
+use hashbrown::{HashMap, HashSet};
 use log::info;
-use packbed::{unpack, GenePred};
+use num_traits::{Num, NumCast};
+use packbed::{packbed, par_reader, Bed12, GenePred};
 use rayon::prelude::*;
 
-use std::collections::BTreeSet;
-use std::io::Write;
+use config::get_progress_bar;
 
-use crate::cli::Args;
+pub fn unpack_blacklist<P: AsRef<Path> + Debug + Sync + Send>(
+    files: Vec<P>,
+    cds_overlap: bool,
+    is_ref: bool,
+) -> Result<HashMap<String, HashSet<String>>, anyhow::Error> {
+    let contents = par_reader(files)?;
+    let tracks = parse_tracks(&contents, cds_overlap, is_ref)?;
 
-const CHIMERA_CDS_OVERLAP: bool = true;
-const CHIMERA_REF: bool = false;
-
-pub fn detect_chimeras(args: Args) -> Result<()> {
-    let reads = unpack(args.query, CHIMERA_CDS_OVERLAP, CHIMERA_REF)?;
-    let regions = if !args.hint.is_empty() {
-        let mut refs = unpack(args.hint, CHIMERA_CDS_OVERLAP, CHIMERA_REF)?;
-        refs.par_iter_mut().for_each(|(_, v)| {
-            v.par_sort_unstable_by(|a, b| a.start.cmp(&b.start));
-        });
-
-        get_intergenic_regions(refs, args.cds).ok()
-    } else {
-        None
-    };
-
-    if args.write {
-        let mut count = 0;
-        if let Some(regions) = regions.as_ref() {
-            let mut bed = std::fs::File::create(INTERGENIC_REGIONS)?;
-
-            for bucket in regions.iter() {
-                let chr = bucket.key();
-                let regions = bucket.value();
-
-                for (mut start, mut end, strand) in regions.into_iter() {
-                    if *strand == '-' {
-                        let tmp = start.clone();
-                        start = config::SCALE - end;
-                        end = config::SCALE - tmp;
-                    }
-
-                    writeln!(
-                        bed,
-                        "{}\t{}\t{}\t{}\t{}\t{}",
-                        chr, start, end, count, "0", strand
-                    )?;
-                    count += 1;
-                }
-            }
-        }
-    }
-
-    if let Some(regions) = regions.as_ref() {
-        info!("Detecting chimeras...");
-        let chimeras = DashSet::new();
-        let pb = get_progress_bar(
-            reads.values().flatten().count() as u64,
-            "Detecting chimeras...",
-        );
-
-        reads.par_iter().for_each(|(chr, bucket)| {
-            for read in bucket {
-                let read_start = read.start;
-                let read_end = read.end;
-                let read_strand = read.strand;
-
-                if let Some(intergenic) = regions.get(chr) {
-                    for (region_start, region_end, region_strand) in intergenic.iter() {
-                        if read_strand != *region_strand {
-                            continue;
-                        }
-
-                        // TODO: check how make this work -> optimize
-                        // if region_start > &read_end || region_end < &read_start {
-                        //     break;
-                        // }
-
-                        if &read_start < region_start && region_end < &read_end {
-                            chimeras.insert(read.line().to_owned());
-
-                            break;
-                        }
-                    }
-                }
-            }
-
-            pb.inc(1);
-        });
-
-        pb.finish_and_clear();
-        info!("Detected {} chimeras", chimeras.len());
-
-        let clean: HashMap<_, Vec<_>> = reads
-            .into_iter()
-            .map(|(chr, bucket)| {
-                let filtered_bucket: Vec<_> = bucket
-                    .into_iter()
-                    .filter(|read| !chimeras.contains(read.line()))
-                    .collect();
-                (chr, filtered_bucket)
-            })
-            .collect();
-
-        info!(
-            "Chimeric-free dataset size: {}",
-            clean.values().flatten().count()
-        );
-
-        let no_chimeras = DashSet::new();
-        for (_, bucket) in clean.iter() {
-            for read in bucket {
-                no_chimeras.insert(read.line().to_owned());
-            }
-        }
-
-        [&chimeras, &no_chimeras]
-            .par_iter()
-            .zip([CHIMERAS, CHIMERIC_FREE].par_iter())
-            .for_each(|(rx, path)| write_objs(&rx, path));
-    } else {
-        info!("No hints provided, detecting chimeras on frequency mode...");
-        let pb = get_progress_bar(
-            reads.values().flatten().count() as u64,
-            "Detecting chimeras...",
-        );
-
-        todo!()
-    };
-
-    Ok(())
+    Ok(tracks)
 }
 
+pub fn prepare_refs<P: AsRef<Path> + Debug + Sync + Send>(
+    refs: Vec<P>,
+) -> Result<String, anyhow::Error> {
+    let tracks = packbed(refs, None, true, false)?;
+
+    let results: Vec<String> = tracks
+        .into_par_iter()
+        .map(|bucket| {
+            let components = bucket.1;
+            let mut acc = String::new();
+
+            for comp in components {
+                let refs = comp.0;
+                let loci = refs.merge_names();
+
+                refs.reads.into_iter().for_each(|mut record| {
+                    let mut line = record.line.clone();
+
+                    if loci.len() > 1 {
+                        line = record.mut_name_from_line(&loci);
+                    }
+
+                    acc += format!("{}\n", line).as_str();
+                });
+            }
+
+            acc
+        })
+        .collect();
+
+    info!("Reference transcripts fixed for fusions!");
+    Ok(results.concat())
+}
+
+fn parse_tracks<'a>(
+    contents: &'a str,
+    cds_overlap: bool,
+    is_ref: bool,
+) -> Result<HashMap<String, HashSet<String>>, anyhow::Error> {
+    let pb = get_progress_bar(
+        contents.lines().count() as u64,
+        "Parsing BED12 blacklist...",
+    );
+    let tracks = contents
+        .par_lines()
+        .filter(|x| !x.starts_with("#"))
+        .filter_map(|x| Bed12::parse(x, cds_overlap, is_ref).ok())
+        .fold(
+            || HashMap::new(),
+            |mut acc: HashMap<String, HashSet<String>>, record| {
+                acc.entry(record.chrom.clone())
+                    .or_default()
+                    .insert(record.name);
+                pb.inc(1);
+                acc
+            },
+        )
+        .reduce(
+            || HashMap::new(),
+            |mut acc, map| {
+                for (k, v) in map {
+                    let acc_v = acc.entry(k).or_insert(HashSet::new());
+                    acc_v.extend(v);
+                }
+                acc
+            },
+        );
+
+    pb.finish_and_clear();
+    info!("Records parsed: {}", tracks.values().flatten().count());
+
+    Ok(tracks)
+}
+
+#[allow(dead_code)]
 fn get_intergenic_regions(
     refs: HashMap<String, Vec<GenePred>>,
     cds: bool,
@@ -308,4 +273,41 @@ fn get_intergenic_regions(
     );
 
     Ok(regions)
+}
+
+#[inline(always)]
+pub fn exonic_overlap<N, I>(exons_a: &I, exons_b: &I) -> bool
+where
+    N: Num + NumCast + Copy + PartialOrd,
+    I: IntoIterator,
+    I::Item: Borrow<(N, N)>,
+    for<'a> &'a I: IntoIterator<Item = &'a I::Item>,
+{
+    let mut iter_a = exons_a.into_iter();
+    let mut iter_b = exons_b.into_iter();
+
+    let mut exon_a = iter_a.next();
+    let mut exon_b = iter_b.next();
+
+    loop {
+        match (exon_a, exon_b) {
+            (Some(start_end_a), Some(start_end_b)) => {
+                let (start_a, end_a) = start_end_a.borrow();
+                let (start_b, end_b) = start_end_b.borrow();
+
+                if *start_a < *end_b && *start_b < *end_a {
+                    return true;
+                }
+
+                if *end_a < *end_b {
+                    exon_a = iter_a.next();
+                } else {
+                    exon_b = iter_b.next();
+                }
+            }
+            _ => break,
+        }
+    }
+
+    false
 }
