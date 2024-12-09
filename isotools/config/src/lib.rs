@@ -20,15 +20,18 @@ pub const TRUNCATION_RECOVERY_THRESHOLD: f32 = 0.5;
 pub const RETENTION_RATIO_THRESHOLD: f32 = 0.5;
 pub const EXON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
 pub const INTRON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
+pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
 
 // file names
-pub const HIT: &str = "hits.bed";
-pub const PASS: &str = "pass.bed";
+pub const INTRON_RETENTIONS: &str = "intron.retentions.bed";
+pub const INTRON_RETENTION_FREE: &str = "intron.retentions.free.bed";
+pub const TRUNCATIONS: &str = "truncations.bed";
+pub const TRUNCATION_FREE: &str = "truncations.free.bed";
 pub const BED3: &str = "ir.bed";
-pub const F5: &str = "5ends.txt";
 pub const INTERGENIC_REGIONS: &str = "intergenic.bed";
-pub const CHIMERAS: &str = "chimeras.bed";
-pub const CHIMERIC_FREE: &str = "chimeric.free.bed";
+pub const FUSIONS: &str = "fusions.bed";
+pub const FUSION_FREE: &str = "fusions.free.bed";
+pub const FUSION_REVIEW: &str = "fusions.review.bed";
 
 // flags
 pub const COLORIZE: bool = false;
@@ -169,7 +172,7 @@ pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
 pub enum ModuleType {
     IntronRetention,
     StartTruncation,
-    FusionRead,
+    FusionDetection,
 }
 
 pub trait ModuleMap: Any {
@@ -200,7 +203,8 @@ impl std::fmt::Debug for dyn ModuleMap {
             f,
             self,
             IntronRetentionDescriptor,
-            StartTruncationDescriptor
+            StartTruncationDescriptor,
+            FusionDetectionDescriptor
         )
     }
 }
@@ -216,7 +220,7 @@ impl ModuleDescriptor {
         match module {
             ModuleType::IntronRetention => IntronRetentionDescriptor::new(),
             ModuleType::StartTruncation => StartTruncationDescriptor::new(),
-            ModuleType::FusionRead => unimplemented!(),
+            ModuleType::FusionDetection => FusionDetectionDescriptor::new(),
         }
     }
 }
@@ -595,6 +599,148 @@ impl std::fmt::Debug for StartTruncationDescriptor {
             self.truncation_support_ratio,
             self.is_truncation_supported,
             self.component_truncation_ratio
+        )
+    }
+}
+
+pub struct FusionDetectionDescriptor {
+    is_fused_read: Value,
+    is_fusion_supported: Value,
+    component_size: Value,
+    ref_component_size: Value,
+    query_component_size: Value,
+    component_fusion_ratio: Value,
+    is_dirty_component: Value,
+    location_of_fusion: Value,
+    fusion_in_frame: Value,
+}
+
+impl FusionDetectionDescriptor {
+    pub fn new() -> Box<Self> {
+        Box::new(Self {
+            is_fused_read: Value::Null,
+            is_fusion_supported: Value::Null,
+            component_size: Value::Null,
+            ref_component_size: Value::Null,
+            query_component_size: Value::Null,
+            component_fusion_ratio: Value::Null,
+            is_dirty_component: Value::Null,
+            location_of_fusion: Value::Null,
+            fusion_in_frame: Value::Null,
+        })
+    }
+}
+
+pub enum FusionDetectionValue {
+    IsFusedRead,
+    IsFusionSupported,
+    ComponentSize,
+    RefComponentSize,
+    QueryComponentSize,
+    ComponentFusionRatio,
+    IsDirtyComponent,
+    LocationOfFusion,
+    FusionInFrame,
+}
+
+impl ModuleMap for FusionDetectionDescriptor {
+    fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value> {
+        if let Ok(key) = key.downcast::<FusionDetectionValue>() {
+            match *key {
+                FusionDetectionValue::IsFusedRead => Some(self.is_fused_read.clone()),
+                FusionDetectionValue::IsFusionSupported => Some(self.is_fusion_supported.clone()),
+                FusionDetectionValue::ComponentSize => Some(self.component_size.clone()),
+                FusionDetectionValue::RefComponentSize => Some(self.ref_component_size.clone()),
+                FusionDetectionValue::QueryComponentSize => Some(self.query_component_size.clone()),
+                FusionDetectionValue::ComponentFusionRatio => {
+                    Some(self.component_fusion_ratio.clone())
+                }
+                FusionDetectionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+                FusionDetectionValue::LocationOfFusion => Some(self.location_of_fusion.clone()),
+                FusionDetectionValue::FusionInFrame => Some(self.fusion_in_frame.clone()),
+            }
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn set_value(&mut self, key: Box<dyn Any>, value: Value) -> Result<(), String> {
+        if let Ok(key) = key.downcast::<FusionDetectionValue>() {
+            match *key {
+                FusionDetectionValue::IsFusedRead => {
+                    self.is_fused_read = value;
+                    Ok(())
+                }
+                FusionDetectionValue::IsFusionSupported => {
+                    self.is_fusion_supported = value;
+                    Ok(())
+                }
+                FusionDetectionValue::ComponentSize => {
+                    self.component_size = value;
+                    Ok(())
+                }
+                FusionDetectionValue::RefComponentSize => {
+                    self.ref_component_size = value;
+                    Ok(())
+                }
+                FusionDetectionValue::QueryComponentSize => {
+                    self.query_component_size = value;
+                    Ok(())
+                }
+                FusionDetectionValue::ComponentFusionRatio => {
+                    self.component_fusion_ratio = value;
+                    Ok(())
+                }
+                FusionDetectionValue::IsDirtyComponent => {
+                    self.is_dirty_component = value;
+                    Ok(())
+                }
+                FusionDetectionValue::LocationOfFusion => {
+                    self.location_of_fusion = value;
+                    Ok(())
+                }
+                FusionDetectionValue::FusionInFrame => {
+                    self.fusion_in_frame = value;
+                    Ok(())
+                }
+            }
+        } else {
+            let err = format!("ERROR: You have tried to set a value for an unknown key!");
+            log::error!("{}", err);
+            Err(err)
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl std::fmt::Debug for FusionDetectionDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{
+            is_fused_read: {:?},
+            is_fusion_supported: {:?},
+            component_size: {:?},
+            ref_component_size: {:?},
+            query_component_size: {:?}
+            component_fusion_ratio: {:?},
+            is_dirty_component: {:?},
+            location_of_fusion: {:?},
+            fusion_in_frame: {:?}
+            }}",
+            self.is_fused_read,
+            self.is_fusion_supported,
+            self.component_size,
+            self.ref_component_size,
+            self.query_component_size,
+            self.component_fusion_ratio,
+            self.is_dirty_component,
+            self.location_of_fusion,
+            self.fusion_in_frame,
         )
     }
 }
