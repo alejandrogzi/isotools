@@ -1,6 +1,6 @@
 [package]
 name = "iso-fusion"
-version = "0.0.2"
+version = "0.0.3"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -23,4 +23,5 @@ log.workspace = true
 config.workspace = true
 simple_logger.workspace = true
 num-traits.workspace = true
+serde_json.workspace = true
 iso-pack = { path = "../iso-pack" }
