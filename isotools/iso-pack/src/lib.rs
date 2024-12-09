@@ -58,7 +58,7 @@ pub fn unpack<P: AsRef<Path> + Debug + Sync + Send>(
     Ok(tracks)
 }
 
-fn parse_tracks<'a>(
+pub fn parse_tracks<'a>(
     contents: &'a str,
     cds_overlap: bool,
     is_ref: bool,
@@ -128,7 +128,7 @@ impl UnionFind {
     }
 }
 
-fn buckerize(
+pub fn buckerize(
     tracks: GenePredMap,
     overlap_cds: bool,
     overlap_exon: bool,
@@ -207,20 +207,25 @@ fn choose_color<'a>() -> &'a str {
 
 pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     refs: Vec<T>,
-    queries: Vec<T>,
+    queries: Option<Vec<T>>,
     overlap_cds: bool,
     overlap_exon: bool,
 ) -> Result<DashMap<String, Vec<(RefGenePred, Vec<GenePred>)>>, anyhow::Error> {
-    let refs = unpack(refs, overlap_cds, true).unwrap();
-    let query = unpack(queries, overlap_cds, false).unwrap();
+    let refs = unpack(refs, overlap_cds, true).expect("Failed to unpack reference tracks");
 
-    let (tracks, n) = combine(refs, query);
+    let (tracks, n) = if let Some(query) = queries {
+        let query = unpack(query, overlap_cds, false).expect("Failed to unpack query tracks");
+        combine(refs, query)
+    } else {
+        let n = refs.values().flatten().count();
+        (refs, n)
+    };
+
     let buckets = buckerize(tracks, overlap_cds, overlap_exon, n);
-
     Ok(buckets)
 }
 
-fn combine(refs: GenePredMap, queries: GenePredMap) -> (GenePredMap, usize) {
+pub fn combine(refs: GenePredMap, queries: GenePredMap) -> (GenePredMap, usize) {
     info!("Combining reference and query tracks...");
     let pb = get_progress_bar(queries.values().len() as u64, "Combining tracks");
     let count = queries.values().flatten().count() + refs.values().flatten().count();
