@@ -93,6 +93,14 @@ impl GenePred {
             is_ref: self.is_ref,
         }
     }
+
+    pub fn mut_name_from_line(&mut self, name: &str) -> String {
+        let line = self.line.clone();
+        let mut fields = line.split('\t').collect::<Vec<_>>();
+        fields[3] = name;
+
+        fields.join("\t")
+    }
 }
 
 impl Bed12 {
@@ -333,6 +341,48 @@ impl RefGenePred {
             introns,
             bounds,
         }
+    }
+
+    pub fn get_names(&self) -> HashSet<String> {
+        let mut names = HashSet::new();
+        self.reads.iter().for_each(|read| {
+            names.insert(read.name.clone());
+        });
+
+        names
+    }
+
+    pub fn get_names_split(&self) -> HashSet<&str> {
+        let mut names = HashSet::new();
+        self.reads.iter().for_each(|read| {
+            let id: Vec<&str> = read.name.splitn(2, ".").collect();
+            names.insert(id[1]);
+        });
+
+        names
+    }
+
+    pub fn merge_names(&self) -> String {
+        let names = self.get_names_split().into_iter().collect::<Vec<&str>>();
+        names.join(".")
+    }
+
+    pub fn smash_exons_by_name(&self) -> Vec<Vec<(u64, u64)>> {
+        let names = self.get_names();
+        let mut smashed = Vec::new();
+        for name in names {
+            let exons = self
+                .reads
+                .iter()
+                .filter(|read| read.name == name)
+                .map(|read| read.exons.clone())
+                .flatten()
+                .collect::<BTreeSet<_>>();
+
+            smashed.push(exons.into_iter().collect());
+        }
+
+        smashed
     }
 
     #[inline(always)]
