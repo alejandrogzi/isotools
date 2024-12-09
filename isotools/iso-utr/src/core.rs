@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 use config::{
     get_progress_bar, write_objs, ModuleDescriptor, ModuleMap, ModuleType, StartTruncationValue,
-    HIT, OVERLAP_CDS, OVERLAP_EXON, PASS, TRUNCATION_RECOVERY_THRESHOLD, TRUNCATION_THRESHOLD,
+    OVERLAP_CDS, OVERLAP_EXON, TRUNCATIONS, TRUNCATION_FREE, TRUNCATION_RECOVERY_THRESHOLD,
+    TRUNCATION_THRESHOLD,
 };
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
@@ -19,7 +20,7 @@ use crate::utils::unpack_blacklist;
 pub fn detect_truncations(args: Args) -> Result<()> {
     info!("Detecting 5'end truncations...");
 
-    let tracks = packbed(args.refs, args.query, OVERLAP_CDS, OVERLAP_EXON)?;
+    let tracks = packbed(args.refs, Some(args.query), OVERLAP_CDS, OVERLAP_EXON)?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
     let hit_acc: DashSet<String> = DashSet::new();
@@ -65,7 +66,7 @@ pub fn detect_truncations(args: Args) -> Result<()> {
 
     [hit_acc, pass_acc]
         .par_iter()
-        .zip([HIT, PASS].par_iter())
+        .zip([TRUNCATIONS, TRUNCATION_FREE].par_iter())
         .for_each(|(rx, path)| write_objs(&rx, path));
 
     Ok(())
@@ -248,7 +249,7 @@ pub fn process_component(
         drop(tmp_dirt)
     }
 
-    dbg!(&descriptor);
+    // dbg!(&descriptor);
 
     return (truncations, pass, descriptor, is_dirty);
 }

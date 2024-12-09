@@ -31,8 +31,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use config::{
     get_progress_bar, write_objs, IntronRetentionValue, ModuleDescriptor, ModuleMap, ModuleType,
-    BED3, HIT, INTRON_RETENTION_RECOVERY_THRESHOLD, OVERLAP_CDS, OVERLAP_EXON, PASS,
-    RETENTION_RATIO_THRESHOLD, SCALE,
+    BED3, INTRON_RETENTIONS, INTRON_RETENTION_FREE, INTRON_RETENTION_RECOVERY_THRESHOLD,
+    OVERLAP_CDS, OVERLAP_EXON, RETENTION_RATIO_THRESHOLD, SCALE,
 };
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
@@ -80,7 +80,7 @@ use crate::utils::{unpack_blacklist, Bed4};
 pub fn detect_intron_retentions(args: Args) -> Result<()> {
     info!("Detecting intron retentions...");
 
-    let tracks = packbed(args.refs, args.query, OVERLAP_CDS, OVERLAP_EXON)?;
+    let tracks = packbed(args.refs, Some(args.query), OVERLAP_CDS, OVERLAP_EXON)?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
     let hit_acc: DashSet<String> = DashSet::new();
@@ -135,7 +135,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
 
     [hit_acc, pass_acc]
         .par_iter()
-        .zip([HIT, PASS].par_iter())
+        .zip([INTRON_RETENTIONS, INTRON_RETENTION_FREE].par_iter())
         .for_each(|(rx, path)| write_objs(&rx, path));
 
     if args.plot {
@@ -402,7 +402,7 @@ pub fn process_component(
         }
     }
 
-    dbg!(&descriptor);
+    // dbg!(&descriptor);
 
     (hits, pass, blocks, descriptor, is_dirty)
 }
