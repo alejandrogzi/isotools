@@ -210,11 +210,73 @@ fn process_component(
         // log::warn!("No ref genes in component, check loci: {:?}", queries);
         queries.iter().for_each(|query| {
             no_fusions.push(query.line.clone());
+
+            descriptor.insert(
+                query.name.clone(),
+                ModuleDescriptor::with_schema(ModuleType::FusionDetection),
+            );
+            let handle = descriptor.get_mut(&query.name).unwrap();
+
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::IsFusedRead),
+                    Value::Bool(false),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::ComponentSize),
+                    Value::Number(comp_size.into()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::RefComponentSize),
+                    Value::Number(genes.len().into()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::QueryComponentSize),
+                    Value::Number(query_size.into()),
+                )
+                .ok();
         });
     } else {
         // all good, no fusions here
         queries.iter().for_each(|query| {
             no_fusions.push(query.line.clone());
+
+            descriptor.insert(
+                query.name.clone(),
+                ModuleDescriptor::with_schema(ModuleType::FusionDetection),
+            );
+            let handle = descriptor.get_mut(&query.name).unwrap();
+
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::IsFusedRead),
+                    Value::Bool(false),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::ComponentSize),
+                    Value::Number(comp_size.into()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::RefComponentSize),
+                    Value::Number(genes.len().into()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::QueryComponentSize),
+                    Value::Number(query_size.into()),
+                )
+                .ok();
         });
     }
 
