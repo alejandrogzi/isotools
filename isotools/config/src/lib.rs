@@ -1,12 +1,13 @@
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::Value;
+use thiserror::Error;
+
 use std::any::Any;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Duration;
-use thiserror::Error;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -15,11 +16,16 @@ pub const SCALE: u64 = 100000000000; // 100Gb
 pub const MIN_THREADS: usize = 1;
 pub const MIN_BED_FIELDS: usize = 12;
 pub const MIN_BED4_FIELDS: usize = 4;
+
+// truncation numeric values
 pub const TRUNCATION_THRESHOLD: f32 = 0.5;
 pub const TRUNCATION_RECOVERY_THRESHOLD: f32 = 0.5;
-pub const RETENTION_RATIO_THRESHOLD: f32 = 0.5;
-pub const EXON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
+
+// intron-retention numeric values
+pub const RETENTION_RATIO_THRESHOLD: f32 = 0.05;
 pub const INTRON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
+
+// fusion numeric values
 pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
 
 // file names
@@ -33,10 +39,21 @@ pub const FUSIONS: &str = "fusions.bed";
 pub const FUSION_FREE: &str = "fusions.free.bed";
 pub const FUSION_REVIEW: &str = "fusions.review.bed";
 
+// spliceai-related names
+pub const ACCEPTOR_MINUS: &str = "spliceAiAcceptorMinus.bw";
+pub const ACCEPTOR_PLUS: &str = "spliceAiAcceptorPlus.bw";
+pub const DONOR_MINUS: &str = "spliceAiDonorMinus.bw";
+pub const DONOR_PLUS: &str = "spliceAiDonorPlus.bw";
+
 // flags
 pub const COLORIZE: bool = false;
 pub const OVERLAP_CDS: bool = false;
 pub const OVERLAP_EXON: bool = true;
+
+// types
+pub type SpliceMap = (StrandSpliceMap, StrandSpliceMap);
+pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
+pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f32>>);
 
 // os
 #[cfg(not(windows))]
@@ -240,6 +257,8 @@ pub struct IntronRetentionDescriptor {
     pub number_of_recovers: Value,
     pub number_of_unrecovers: Value,
     pub location_of_retention: Value,
+    pub retention_acceptor_score: Value,
+    pub retention_donor_score: Value,
     pub retention_in_cds: Value,
     pub retention_in_utr: Value,
     pub is_intron_retained_in_frame: Value,
@@ -262,6 +281,8 @@ impl IntronRetentionDescriptor {
             number_of_recovers: Value::Number(0.into()),
             number_of_unrecovers: Value::Number(0.into()),
             location_of_retention: Value::Null,
+            retention_acceptor_score: Value::Null,
+            retention_donor_score: Value::Null,
             retention_in_cds: Value::Null,
             retention_in_utr: Value::Null,
             is_intron_retained_in_frame: Value::Null,
@@ -285,6 +306,8 @@ pub enum IntronRetentionValue {
     NumberOfRecovers,
     NumberOfUnrecovers,
     RetentionLocation,
+    RetentionAcceptorScore,
+    RetentionDonorScore,
     IsRetentionInCds,
     IsRetentionInUtr,
     IsIntronRetainedInFrame,
@@ -316,6 +339,12 @@ impl ModuleMap for IntronRetentionDescriptor {
                 IntronRetentionValue::NumberOfRecovers => Some(self.number_of_recovers.clone()),
                 IntronRetentionValue::NumberOfUnrecovers => Some(self.number_of_unrecovers.clone()),
                 IntronRetentionValue::RetentionLocation => Some(self.location_of_retention.clone()),
+                IntronRetentionValue::RetentionAcceptorScore => {
+                    Some(self.retention_acceptor_score.clone())
+                }
+                IntronRetentionValue::RetentionDonorScore => {
+                    Some(self.retention_donor_score.clone())
+                }
                 IntronRetentionValue::IsRetentionInCds => Some(self.retention_in_cds.clone()),
                 IntronRetentionValue::IsRetentionInUtr => Some(self.retention_in_utr.clone()),
                 IntronRetentionValue::IsIntronRetainedInFrame => {
@@ -387,6 +416,14 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.location_of_retention = value;
                     Ok(())
                 }
+                IntronRetentionValue::RetentionAcceptorScore => {
+                    self.retention_acceptor_score = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetentionDonorScore => {
+                    self.retention_donor_score = value;
+                    Ok(())
+                }
                 IntronRetentionValue::IsRetentionInCds => {
                     self.retention_in_cds = value;
                     Ok(())
@@ -431,6 +468,8 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             number_of_recovers: {:?},
             number_of_unrecovers: {:?},
             retention_location: {:?},
+            retention_acceptor_score: {:?},
+            retention_donor_score: {:?},
             is_retention_in_cds: {:?},
             is_retention_in_utr: {:?},
             is_intron_retained_in_frame: {:?}
@@ -449,6 +488,8 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             self.number_of_recovers,
             self.number_of_unrecovers,
             self.location_of_retention,
+            self.retention_acceptor_score,
+            self.retention_donor_score,
             self.retention_in_cds,
             self.retention_in_utr,
             self.is_intron_retained_in_frame
