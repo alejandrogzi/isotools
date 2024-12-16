@@ -29,6 +29,7 @@ pub struct RefGenePred {
     pub middles: BTreeSet<(u64, u64)>,
     pub introns: BTreeSet<(u64, u64)>,
     pub bounds: (u64, u64),
+    pub strand: char,
 }
 
 impl GenePred {
@@ -333,6 +334,7 @@ impl RefGenePred {
         middles: BTreeSet<(u64, u64)>,
         introns: BTreeSet<(u64, u64)>,
         bounds: (u64, u64),
+        strand: char,
     ) -> Self {
         Self {
             reads,
@@ -340,6 +342,7 @@ impl RefGenePred {
             middles,
             introns,
             bounds,
+            strand,
         }
     }
 
@@ -391,6 +394,7 @@ impl RefGenePred {
         let mut middles = BTreeSet::new();
         let mut introns = BTreeSet::new();
         let mut bounds = (u64::MAX, 0);
+        let strand = reads[0].strand;
 
         for read in &reads {
             bounds.0 = bounds.0.min(read.start);
@@ -426,7 +430,7 @@ impl RefGenePred {
             }
         }
 
-        Self::new(reads, starts, middles, introns, bounds)
+        Self::new(reads, starts, middles, introns, bounds, strand)
     }
 }
 
