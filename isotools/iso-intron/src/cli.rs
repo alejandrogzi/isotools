@@ -66,6 +66,15 @@ pub struct Args {
         action = ArgAction::Set,
     )]
     pub recover: bool,
+
+    #[arg(
+        long = "spliceai",
+        required = false,
+        value_name = "PATH",
+        num_args = 1,
+        help = "Path to spliceAI directory [will asume 2 files per strand: acceptor and donor .bw]"
+    )]
+    pub splice_scores: Option<PathBuf>,
 }
 
 impl ArgCheck for Args {

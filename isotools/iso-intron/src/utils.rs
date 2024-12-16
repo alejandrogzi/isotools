@@ -115,59 +115,68 @@ pub fn parse_bed4<'a>(
 
 pub fn get_splice_scores<T: AsRef<std::path::Path> + std::fmt::Debug>(dir: T) -> SpliceMap {
     let plus = vec![
-        dir.as_ref().join(ACCEPTOR_PLUS),
         dir.as_ref().join(DONOR_PLUS),
+        dir.as_ref().join(ACCEPTOR_PLUS),
     ];
     let minus = vec![
-        dir.as_ref().join(ACCEPTOR_MINUS),
         dir.as_ref().join(DONOR_MINUS),
+        dir.as_ref().join(ACCEPTOR_MINUS),
     ];
 
+    info!("Parsing BigWigs...");
     let (plus, minus) = rayon::join(|| bigwig_to_map(plus), || bigwig_to_map(minus));
 
     (plus, minus)
 }
 
-fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug>(
+fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
     bigwigs: Vec<T>,
 ) -> DashMap<String, DashMap<usize, f32>> {
     let acc = DashMap::new();
-    let count = AtomicU32::new(0);
+    let total_count = AtomicU32::new(0);
 
-    for bigwig in bigwigs {
-        let bwread = BigWigRead::open_file(bigwig).unwrap();
-        let chroms: Vec<_> = bwread.chroms().to_vec();
-        let pb = get_progress_bar(
-            chroms.len() as u64,
-            "Parsing BigWigs from one of the strands...",
-        );
+    bigwigs
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(hint, bigwig)| {
+            let bwread = BigWigRead::open_file(&bigwig).expect("ERROR: Cannot open BigWig file");
+            let chroms: Vec<_> = bwread.chroms().to_vec();
 
-        chroms.into_par_iter().for_each(|chr| {
-            let mut bwread = BigWigRead::reopen(&bwread).unwrap();
+            chroms.into_par_iter().for_each(|chr| {
+                let mut bwread =
+                    BigWigRead::reopen(&bwread).expect("ERROR: Cannot re-open BigWig file");
 
-            let name = chr.name.clone();
-            let length = chr.length;
-            let values = bwread.values(&name, 0, length).unwrap();
+                let name = chr.name.clone();
+                let length = chr.length;
+                let values = bwread
+                    .values(&name, 0, length)
+                    .expect("ERROR: Cannot read values from BigWig!");
 
-            let mapper = DashMap::new();
+                let local_mapper = DashMap::new();
+                let local_count = AtomicU32::new(0);
 
-            values.into_iter().enumerate().for_each(|(i, v)| {
-                if v > 0.0 {
-                    mapper.entry(i).or_insert(v);
-                    count.fetch_add(1, Ordering::Relaxed);
-                }
+                values.into_iter().enumerate().for_each(|(i, v)| {
+                    if v > 0.0 {
+                        // donor [+1 to match isotools/bigtools coords]
+                        let key = if hint == 0 { i + 1 } else { i };
+                        local_mapper.entry(key).or_insert(v);
+                        local_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+
+                // merge local_mapper into the global acc
+                let global_entry = acc.entry(name).or_insert_with(DashMap::new);
+                local_mapper.into_iter().for_each(|(k, v)| {
+                    global_entry.entry(k).or_insert(v);
+                });
+
+                total_count.fetch_add(local_count.load(Ordering::Relaxed), Ordering::Relaxed);
             });
-
-            acc.insert(name, mapper);
-            pb.inc(1);
         });
 
-        pb.finish_and_clear();
-    }
-
     info!(
-        "Parsed {} splice scores from BigWig!",
-        count.load(Ordering::Relaxed)
+        "Parsed and combined {} scores from BigWigs!",
+        total_count.load(Ordering::Relaxed)
     );
 
     acc
