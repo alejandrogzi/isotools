@@ -22,8 +22,9 @@ pub const TRUNCATION_THRESHOLD: f32 = 0.5;
 pub const TRUNCATION_RECOVERY_THRESHOLD: f32 = 0.5;
 
 // intron-retention numeric values
-pub const RETENTION_RATIO_THRESHOLD: f32 = 0.05;
+pub const RETENTION_RATIO_THRESHOLD: f32 = 0.001; // allowing everthing to enter recover step
 pub const INTRON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
+pub const SPLICE_AI_SCORE_RECOVERY_THRESHOLD: f32 = 0.01; // if both splice sites are above, is a true intron
 
 // fusion numeric values
 pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
@@ -54,6 +55,7 @@ pub const OVERLAP_EXON: bool = true;
 pub type SpliceMap = (StrandSpliceMap, StrandSpliceMap);
 pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
 pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f32>>);
+pub type RetentionStats = (u32, u32, u32, u32, u32, u32);
 
 // os
 #[cfg(not(windows))]
@@ -91,6 +93,22 @@ where
 
     for line in data.iter() {
         writeln!(writer, "{}", line.as_ref()).unwrap_or_else(|e| {
+            panic!("Error writing to file: {}", e);
+        });
+    }
+}
+
+/// write any collection to a file
+pub fn write_collection(data: &Vec<String>, fname: &str) {
+    log::info!("Reads in {}: {:?}. Writing...", fname, data.len());
+    let f = match File::create(fname) {
+        Ok(f) => f,
+        Err(e) => panic!("Error creating file: {}", e),
+    };
+    let mut writer = BufWriter::new(f);
+
+    for line in data.iter() {
+        writeln!(writer, "{}", line).unwrap_or_else(|e| {
             panic!("Error writing to file: {}", e);
         });
     }
@@ -254,8 +272,14 @@ pub struct IntronRetentionDescriptor {
     pub retention_support_ratio: Value,
     pub exon_support_ratio: Value,
     pub number_of_retentions: Value,
+    pub number_of_true_retentions: Value,
+    pub number_of_partial_retentions: Value,
+    pub number_of_false_retentions: Value,
     pub number_of_recovers: Value,
     pub number_of_unrecovers: Value,
+    pub number_of_true_retentions_supported: Value,
+    pub number_of_partial_retentions_supported: Value,
+    pub number_of_false_retentions_supported: Value,
     pub location_of_retention: Value,
     pub retention_acceptor_score: Value,
     pub retention_donor_score: Value,
@@ -278,8 +302,14 @@ impl IntronRetentionDescriptor {
             retention_support_ratio: Value::Null,
             exon_support_ratio: Value::Null,
             number_of_retentions: Value::Number(0.into()),
+            number_of_true_retentions: Value::Null,
+            number_of_partial_retentions: Value::Null,
+            number_of_false_retentions: Value::Null,
             number_of_recovers: Value::Number(0.into()),
             number_of_unrecovers: Value::Number(0.into()),
+            number_of_true_retentions_supported: Value::Null,
+            number_of_partial_retentions_supported: Value::Null,
+            number_of_false_retentions_supported: Value::Null,
             location_of_retention: Value::Null,
             retention_acceptor_score: Value::Null,
             retention_donor_score: Value::Null,
@@ -303,8 +333,14 @@ pub enum IntronRetentionValue {
     RetentionSupportRatio,
     ExonSupportRatio,
     NumberOfRetentions,
+    NumberOfTrueRetentions,
+    NumberOfPartialRetentions,
+    NumberOfFalseRetentions,
     NumberOfRecovers,
     NumberOfUnrecovers,
+    NumberOfTrueRententionsSupported,
+    NumberOfPartialRententionsSupported,
+    NumberOfFalseRententionsSupported,
     RetentionLocation,
     RetentionAcceptorScore,
     RetentionDonorScore,
@@ -336,8 +372,26 @@ impl ModuleMap for IntronRetentionDescriptor {
                 }
                 IntronRetentionValue::ExonSupportRatio => Some(self.exon_support_ratio.clone()),
                 IntronRetentionValue::NumberOfRetentions => Some(self.number_of_retentions.clone()),
+                IntronRetentionValue::NumberOfTrueRetentions => {
+                    Some(self.number_of_true_retentions.clone())
+                }
+                IntronRetentionValue::NumberOfPartialRetentions => {
+                    Some(self.number_of_partial_retentions.clone())
+                }
+                IntronRetentionValue::NumberOfFalseRetentions => {
+                    Some(self.number_of_false_retentions.clone())
+                }
                 IntronRetentionValue::NumberOfRecovers => Some(self.number_of_recovers.clone()),
                 IntronRetentionValue::NumberOfUnrecovers => Some(self.number_of_unrecovers.clone()),
+                IntronRetentionValue::NumberOfTrueRententionsSupported => {
+                    Some(self.number_of_true_retentions_supported.clone())
+                }
+                IntronRetentionValue::NumberOfPartialRententionsSupported => {
+                    Some(self.number_of_partial_retentions_supported.clone())
+                }
+                IntronRetentionValue::NumberOfFalseRententionsSupported => {
+                    Some(self.number_of_false_retentions_supported.clone())
+                }
                 IntronRetentionValue::RetentionLocation => Some(self.location_of_retention.clone()),
                 IntronRetentionValue::RetentionAcceptorScore => {
                     Some(self.retention_acceptor_score.clone())
@@ -404,12 +458,36 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.number_of_retentions = value;
                     Ok(())
                 }
+                IntronRetentionValue::NumberOfTrueRetentions => {
+                    self.number_of_true_retentions = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfPartialRetentions => {
+                    self.number_of_partial_retentions = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfFalseRetentions => {
+                    self.number_of_false_retentions = value;
+                    Ok(())
+                }
                 IntronRetentionValue::NumberOfRecovers => {
                     self.number_of_recovers = value;
                     Ok(())
                 }
                 IntronRetentionValue::NumberOfUnrecovers => {
                     self.number_of_unrecovers = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfTrueRententionsSupported => {
+                    self.number_of_true_retentions_supported = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfPartialRententionsSupported => {
+                    self.number_of_partial_retentions_supported = value;
+                    Ok(())
+                }
+                IntronRetentionValue::NumberOfFalseRententionsSupported => {
+                    self.number_of_false_retentions_supported = value;
                     Ok(())
                 }
                 IntronRetentionValue::RetentionLocation => {
@@ -465,8 +543,14 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             retention_support_ratio: {:?},
             exon_support_ratio: {:?},
             number_of_retentions: {:?},
+            number_of_true_retentions: {:?},
+            number_of_partial_retentions: {:?},
+            number_of_false_retentions: {:?},
             number_of_recovers: {:?},
             number_of_unrecovers: {:?},
+            number_of_true_retentions_supported: {:?},
+            number_of_partial_retentions_supported: {:?},
+            number_of_false_retentions_supported: {:?},
             retention_location: {:?},
             retention_acceptor_score: {:?},
             retention_donor_score: {:?},
@@ -485,8 +569,14 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             self.retention_support_ratio,
             self.exon_support_ratio,
             self.number_of_retentions,
+            self.number_of_true_retentions,
+            self.number_of_partial_retentions,
+            self.number_of_false_retentions,
             self.number_of_recovers,
             self.number_of_unrecovers,
+            self.number_of_true_retentions_supported,
+            self.number_of_partial_retentions_supported,
+            self.number_of_false_retentions_supported,
             self.location_of_retention,
             self.retention_acceptor_score,
             self.retention_donor_score,
