@@ -5,11 +5,15 @@ use hashbrown::{HashMap, HashSet};
 use log::{info, warn};
 use packbed::par_reader;
 use rayon::prelude::*;
+
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use config::{get_progress_bar, SpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, DONOR_MINUS, DONOR_PLUS};
+use config::{
+    get_progress_bar, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, DONOR_MINUS, DONOR_PLUS,
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Bed4<'a> {
@@ -113,7 +117,9 @@ pub fn parse_bed4<'a>(
     }
 }
 
-pub fn get_splice_scores<T: AsRef<std::path::Path> + std::fmt::Debug>(dir: T) -> SpliceMap {
+pub fn get_splice_scores<T: AsRef<std::path::Path> + std::fmt::Debug>(
+    dir: T,
+) -> (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>) {
     let plus = vec![
         dir.as_ref().join(DONOR_PLUS),
         dir.as_ref().join(ACCEPTOR_PLUS),
@@ -129,16 +135,24 @@ pub fn get_splice_scores<T: AsRef<std::path::Path> + std::fmt::Debug>(dir: T) ->
     (plus, minus)
 }
 
+enum SpliceSite {
+    Donor,
+    Acceptor,
+}
+
 fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
     bigwigs: Vec<T>,
-) -> DashMap<String, DashMap<usize, f32>> {
-    let acc = DashMap::new();
+) -> Vec<DashMap<String, DashMap<usize, f32>>> {
     let total_count = AtomicU32::new(0);
+    let rs = Mutex::new(vec![DashMap::new(), DashMap::new()]);
 
+    // [donor, acceptor]
     bigwigs
         .into_par_iter()
-        .enumerate()
-        .for_each(|(hint, bigwig)| {
+        .zip(vec![SpliceSite::Donor, SpliceSite::Acceptor])
+        .for_each(|(bigwig, site)| {
+            let acc = DashMap::new();
+
             let bwread = BigWigRead::open_file(&bigwig).expect("ERROR: Cannot open BigWig file");
             let chroms: Vec<_> = bwread.chroms().to_vec();
 
@@ -152,32 +166,33 @@ fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
                     .values(&name, 0, length)
                     .expect("ERROR: Cannot read values from BigWig!");
 
-                let local_mapper = DashMap::new();
+                let mapper = DashMap::new();
                 let local_count = AtomicU32::new(0);
 
                 values.into_iter().enumerate().for_each(|(i, v)| {
-                    if v > 0.0 {
-                        // donor [+1 to match isotools/bigtools coords]
-                        let key = if hint == 0 { i + 1 } else { i };
-                        local_mapper.entry(key).or_insert(v);
+                    if v >= config::SPLICE_AI_SCORE_RECOVERY_THRESHOLD {
+                        let pos = i;
+                        mapper.entry(pos).or_insert(v);
                         local_count.fetch_add(1, Ordering::Relaxed);
                     }
                 });
 
-                // merge local_mapper into the global acc
-                let global_entry = acc.entry(name).or_insert_with(DashMap::new);
-                local_mapper.into_iter().for_each(|(k, v)| {
-                    global_entry.entry(k).or_insert(v);
-                });
-
+                acc.insert(name, mapper);
                 total_count.fetch_add(local_count.load(Ordering::Relaxed), Ordering::Relaxed);
             });
+
+            let mut guard = rs.lock().expect("ERROR: Cannot lock mutex");
+            match site {
+                SpliceSite::Donor => guard[0] = acc,
+                SpliceSite::Acceptor => guard[1] = acc,
+            }
         });
 
     info!(
-        "Parsed and combined {} scores from BigWigs!",
+        "Parsed and combined {} significant splicing scores from BigWigs!",
         total_count.load(Ordering::Relaxed)
     );
 
-    acc
+    rs.into_inner()
+        .expect("ERROR: Cannot unwrap collection of SpliceAI scores!")
 }
