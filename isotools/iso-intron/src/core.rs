@@ -24,17 +24,12 @@
 //!         }
 //!     }
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use config::{
-    get_progress_bar, write_objs, IntronRetentionValue, ModuleDescriptor, ModuleMap, ModuleType,
-    BED3, INTRON_RETENTIONS, INTRON_RETENTION_FREE, INTRON_RETENTION_RECOVERY_THRESHOLD,
-    OVERLAP_CDS, OVERLAP_EXON, RETENTION_RATIO_THRESHOLD, SCALE,
-};
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
 use log::{info, warn};
 use packbed::{packbed, GenePred, RefGenePred};
@@ -43,6 +38,14 @@ use serde_json::Value;
 
 use crate::cli::Args;
 use crate::utils::{unpack_blacklist, Bed4};
+use config::{
+    get_progress_bar, write_objs, IntronRetentionValue, ModuleDescriptor, ModuleMap, ModuleType,
+    SharedSpliceMap, SpliceScores, StrandSpliceMap, BED3, INTRON_RETENTIONS, INTRON_RETENTION_FREE,
+    INTRON_RETENTION_RECOVERY_THRESHOLD, OVERLAP_CDS, OVERLAP_EXON, RETENTION_RATIO_THRESHOLD,
+    SCALE, SPLICE_AI_SCORE_RECOVERY_THRESHOLD,
+};
+
+type Component = (RefGenePred, Vec<GenePred>);
 
 /// Detects intron retentions in an query set of reads
 /// based on a provided reference set.
@@ -82,100 +85,198 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
 
     let tracks = packbed(args.refs, Some(args.query), OVERLAP_CDS, OVERLAP_EXON)?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
-
-    let hit_acc: DashSet<String> = DashSet::new();
-    let pass_acc: DashSet<String> = DashSet::new();
-    let misc_acc: DashSet<String> = DashSet::new();
+    let (splice_plus, splice_minus) = get_splice_scores(args.splice_scores);
 
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
-    let dirty_count = AtomicU32::new(0);
-    let n_comps = AtomicU32::new(0);
+
+    let accumulator = ParallelAccumulator::default();
+    let counter = ParallelCounter::default();
 
     tracks.par_iter().for_each(|bucket| {
         let chr = bucket.key();
         let components = bucket.value().to_owned();
-        n_comps.fetch_add(components.len() as u32, Ordering::Relaxed);
+
+        counter.inc_components(components.len() as u32);
 
         let binding = HashSet::new();
         let banned = blacklist.get(chr).unwrap_or(&binding);
+        let splice_map = create_splice_map(chr, &splice_plus, &splice_minus);
 
-        components.into_par_iter().for_each(|comp| {
-            let (hits, pass, blocks, descriptor, is_dirty) =
-                process_component(comp, banned, args.plot, args.recover);
-
-            hits.into_iter().for_each(|hit| {
-                hit_acc.insert(hit);
-            });
-            pass.into_iter().for_each(|p| {
-                pass_acc.insert(p);
-            });
-            if let Some(b) = blocks {
-                misc_acc.insert(b);
-            }
-
-            if is_dirty {
-                dirty_count.fetch_add(1, Ordering::Relaxed);
-            }
-        });
+        process_components(
+            components,
+            banned,
+            args.plot,
+            args.recover,
+            &splice_map,
+            &accumulator,
+            &counter,
+        );
 
         pb.inc(1);
     });
 
     pb.finish_and_clear();
-    info!("Reads with retained introns: {}", hit_acc.len());
+    info!(
+        "Reads with retained introns: {}",
+        accumulator.num_retentions()
+    );
 
     if args.recover {
+        let (dirties, prop) = counter.get_stat();
         warn!(
             "Number of dirty components in query reads: {:?} ({:.3}%)",
-            dirty_count,
-            dirty_count.load(Ordering::Relaxed) as f64 / n_comps.load(Ordering::Relaxed) as f64
-                * 100.0
+            dirties, prop
         );
     }
 
-    [hit_acc, pass_acc]
-        .par_iter()
-        .zip([INTRON_RETENTIONS, INTRON_RETENTION_FREE].par_iter())
-        .for_each(|(rx, path)| write_objs(&rx, path));
-
-    if args.plot {
-        write_objs(&misc_acc, BED3);
-    }
+    write_results(&accumulator, args.plot);
 
     Ok(())
 }
 
-/// Process a bucket of overlapping transcripts
-///
-/// # Example
-/// ```rust
-/// use iso_intron::core::process_component;
-/// use packbed::{Bed12, GenePred, RefGenePred};
-/// use hashbrown::HashSet;
-/// use std::sync::Arc;
-///
-/// let line = "chr1\t100\t200\ttest\t0\t+\t100\t200\t0\t1\t1,1\t0,100";
-/// let gp = Bed12::parse(line, true, true).unwrap();
-/// let comp = (RefGenePred::from(vec![gp.clone()]), vec![gp]);
-/// let banned = HashSet::from_iter(vec![(100, 200)]);
-/// let plot = false;
-///
-/// let rs = process_component(comp, &banned, plot);
-/// ```
-///
-/// # Description
-///
-/// This function processes a bucket of overlapping transcripts to
-/// identify retained introns. In brief, loops over all consensus query
-/// transcripts in the bucket and check if any of their exons completely
-/// overlap with any reference intron. If so, the transcript is considered
-/// to have a retained intron.
+fn get_splice_scores<T: AsRef<std::path::Path> + std::fmt::Debug>(
+    splice_scores: Option<T>,
+) -> SpliceScores {
+    if let Some(splice_scores) = splice_scores {
+        crate::utils::get_splice_scores(splice_scores)
+    } else {
+        (vec![DashMap::new()], vec![DashMap::new()])
+    }
+}
+
+struct ParallelCounter {
+    dirties: AtomicU32,
+    components: AtomicU32,
+}
+
+impl ParallelCounter {
+    fn new() -> Self {
+        Self {
+            dirties: AtomicU32::new(0),
+            components: AtomicU32::new(0),
+        }
+    }
+
+    fn inc_components(&self, count: u32) {
+        self.components.fetch_add(count, Ordering::Relaxed);
+    }
+
+    fn inc_dirty(&self) {
+        self.dirties.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn get_counters(&self) -> (f64, f64) {
+        (
+            self.dirties.load(Ordering::Relaxed) as f64,
+            self.components.load(Ordering::Relaxed) as f64,
+        )
+    }
+
+    fn get_stat(&self) -> (f64, f64) {
+        let (dirties, components) = self.get_counters();
+        (dirties, (dirties / components) * 100.0)
+    }
+}
+
+impl Default for ParallelCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct ParallelAccumulator {
+    retentions: DashSet<String>,
+    non_retentions: DashSet<String>,
+    miscellaneous: DashSet<String>,
+}
+
+impl Default for ParallelAccumulator {
+    fn default() -> Self {
+        Self {
+            retentions: DashSet::new(),
+            non_retentions: DashSet::new(),
+            miscellaneous: DashSet::new(),
+        }
+    }
+}
+
+impl ParallelAccumulator {
+    fn num_retentions(&self) -> usize {
+        self.retentions.len()
+    }
+}
+
+fn create_splice_map(
+    chr: &str,
+    splice_plus: &[StrandSpliceMap],
+    splice_minus: &[StrandSpliceMap],
+) -> (SharedSpliceMap, SharedSpliceMap) {
+    let get_splice_values = |splices: &[DashMap<String, DashMap<usize, f32>>]| {
+        (
+            splices
+                .get(0)
+                .and_then(|s| s.get(chr).map(|v| v.value().clone())),
+            splices
+                .get(1)
+                .and_then(|s| s.get(chr).map(|v| v.value().clone())),
+        )
+    };
+    (
+        get_splice_values(splice_plus),
+        get_splice_values(splice_minus),
+    )
+}
+
+fn write_results(accumulator: &ParallelAccumulator, plot: bool) {
+    [&accumulator.retentions, &accumulator.non_retentions]
+        .par_iter()
+        .zip([INTRON_RETENTIONS, INTRON_RETENTION_FREE].par_iter())
+        .for_each(|(acc, path)| write_objs(acc, path));
+
+    if plot {
+        write_objs(&accumulator.miscellaneous, BED3);
+    }
+}
+
+#[inline(always)]
+fn process_components(
+    components: Vec<Component>,
+    banned: &HashSet<(u64, u64)>,
+    plot: bool,
+    recover: bool,
+    splice_map: &(SharedSpliceMap, SharedSpliceMap),
+    accumulator: &ParallelAccumulator,
+    counter: &ParallelCounter,
+) {
+    components.into_par_iter().for_each(|comp| {
+        let (retentions, non_retentions, blocks, _, is_dirty) =
+            process_component(comp, banned, plot, recover, splice_map);
+
+        retentions.into_iter().for_each(|r| {
+            accumulator.retentions.insert(r);
+        });
+
+        non_retentions.into_iter().for_each(|nr| {
+            accumulator.non_retentions.insert(nr);
+        });
+
+        if let Some(blocks) = blocks {
+            accumulator.miscellaneous.insert(blocks);
+        }
+
+        if is_dirty {
+            counter.inc_dirty();
+        }
+    });
+}
+
 #[inline(always)]
 pub fn process_component(
     comp: (RefGenePred, Vec<GenePred>),
     ban: &HashSet<(u64, u64)>,
     plot: bool,
     recover: bool,
+    splice_map: &(SharedSpliceMap, SharedSpliceMap),
 ) -> (
     Vec<String>,
     Vec<String>,
@@ -189,7 +290,13 @@ pub fn process_component(
 
     let mut tmp_dirt = Vec::new();
     let mut exon_owners = BTreeSet::new();
-    let mut introns_owned = BTreeSet::new();
+    let mut introns_owned = BTreeMap::new();
+
+    let splice_scores = match comp.0.strand {
+        '+' => Some(&splice_map.0),
+        '-' => Some(&splice_map.1),
+        _ => panic!("ERROR: Invalid strand in reference component!"),
+    };
 
     let mut descriptor = HashMap::new();
 
@@ -200,21 +307,28 @@ pub fn process_component(
     let (mut count, totals) = (0_f32, queries.len() as f32);
 
     for query in queries.iter() {
-        let query = Arc::new(query);
-        let mut hit: bool = false;
-        let five_utr = query.get_five_utr();
-        let three_utr = query.get_three_utr();
-
         descriptor.insert(
             query.name.clone(),
             ModuleDescriptor::with_schema(ModuleType::IntronRetention),
         );
 
+        let query = Arc::new(query);
+        let mut hit: bool = false;
+
+        let five_utr = query.get_five_utr();
+        let three_utr = query.get_three_utr();
+
         let mut number_of_retentions = 0_u32;
+        let mut number_of_true_retentions = 0_u32;
+        let mut number_of_partial_retentions = 0_u32;
+        let mut number_of_false_retentions = 0_u32;
+
         let mut location_of_retentions = Vec::new();
         let mut retention_in_cds = Vec::new();
         let mut retention_in_utr = Vec::new();
         let mut retention_in_frame = Vec::new();
+        let mut donor_scores = Vec::new();
+        let mut acceptor_scores = Vec::new();
 
         for exon in &query.exons {
             for intron in &refs.introns {
@@ -222,7 +336,7 @@ pub fn process_component(
                     break;
                 }
 
-                if ban.contains(intron) {
+                if ban.contains(intron) || ban.contains(&(SCALE - intron.1, SCALE - intron.0)) {
                     continue;
                 }
 
@@ -234,7 +348,9 @@ pub fn process_component(
 
                     hit = true;
                     exon_owners.insert((exon.0, exon.1));
-                    introns_owned.insert((intron.0, intron.1));
+                    introns_owned
+                        .entry((intron.0, intron.1))
+                        .or_insert((0.0, 0.0));
 
                     number_of_retentions += 1;
 
@@ -283,6 +399,45 @@ pub fn process_component(
                             }
                         }
                         _ => panic!("Invalid strand"),
+                    }
+
+                    if let Some(scores) = splice_scores {
+                        let donor_score_map = scores.0.as_ref().unwrap();
+                        let acceptor_score_map = scores.1.as_ref().unwrap();
+
+                        let (intron_donor, intron_acceptor) = match query.strand {
+                            // donor [-1 to match bigtools coords]
+                            '+' => (intron.0 as usize - 1, intron.1 as usize),
+                            // acceptor [-1 to match bigtools coords]
+                            '-' => ((SCALE - intron.0) as usize, (SCALE - intron.1) as usize - 1),
+                            _ => panic!("ERROR: Invalid strand in query component!"),
+                        };
+
+                        let (donor_score, acceptor_score) = (
+                            donor_score_map
+                                .get(&intron_donor)
+                                .map(|r| *r)
+                                .unwrap_or(0.0),
+                            acceptor_score_map
+                                .get(&intron_acceptor)
+                                .map(|r| *r)
+                                .unwrap_or(0.0),
+                        );
+
+                        donor_scores.push(donor_score);
+                        acceptor_scores.push(acceptor_score);
+
+                        if donor_score >= 0.02 && acceptor_score >= 0.02 {
+                            number_of_true_retentions += 1;
+                        } else if donor_score >= 0.01 && donor_score >= 0.01 {
+                            number_of_partial_retentions += 1;
+                        } else {
+                            number_of_false_retentions += 1;
+                        }
+
+                        introns_owned.entry((intron.0, intron.1)).and_modify(|e| {
+                            *e = (donor_score, acceptor_score);
+                        });
                     }
 
                     continue;
@@ -358,6 +513,36 @@ pub fn process_component(
                     Value::Array(retention_in_frame.into_iter().map(Value::Bool).collect()),
                 )
                 .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::RetentionDonorScore),
+                    serde_json::json!(donor_scores),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::RetentionAcceptorScore),
+                    serde_json::json!(acceptor_scores),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::NumberOfTrueRetentions),
+                    Value::Number(number_of_true_retentions.into()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::NumberOfPartialRetentions),
+                    Value::Number(number_of_partial_retentions.into()),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(IntronRetentionValue::NumberOfFalseRetentions),
+                    Value::Number(number_of_false_retentions.into()),
+                )
+                .ok();
         } else {
             let line = query.line().to_owned();
             pass.push(line);
@@ -365,7 +550,6 @@ pub fn process_component(
     }
 
     // after classying reads, we check bucket frequencies
-    // if the number of truncated reads is greater than 50%
     // of the total reads in the bucket, we consider the bucket
     // to be dirty and return the reads for recovery if args.recover
     let ratio = count / totals;
@@ -379,7 +563,7 @@ pub fn process_component(
             let new_passes = recover_from_dirt(
                 dirt,
                 exon_owners,
-                introns_owned,
+                &introns_owned,
                 &refs,
                 &mut descriptor,
                 ratio,
@@ -410,7 +594,7 @@ pub fn process_component(
 pub fn recover_from_dirt(
     dirt: Vec<Arc<&GenePred>>,
     exon_owners: BTreeSet<(u64, u64)>,
-    introns_owned: BTreeSet<(u64, u64)>,
+    introns_owned: &BTreeMap<(u64, u64), (f32, f32)>,
     refs: &RefGenePred,
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
     ratio: f32,
@@ -443,7 +627,7 @@ pub fn recover_from_dirt(
 
     // introns: 1) build ratios and 2) remove introns with low ratios
     let mut supported_introns = vec![];
-    for owned in introns_owned.iter() {
+    for (owned, score) in introns_owned.iter() {
         let mut background = 0.0;
         let mut count = 0.0;
         for read in refs.reads.iter() {
@@ -463,7 +647,16 @@ pub fn recover_from_dirt(
         let ratio = count / background;
         owned_ratios.insert(owned, ratio);
 
-        if ratio >= INTRON_RETENTION_RECOVERY_THRESHOLD {
+        let donor_score = score.0;
+        let acceptor_score = score.1;
+
+        // if the intron is supported by the majority of reads (>=50%) or
+        // the splice scores are high enough, we consider the intron to be
+        // supported and consider it a true intron
+        if (ratio >= INTRON_RETENTION_RECOVERY_THRESHOLD)
+            || (donor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
+                && acceptor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
+        {
             supported_introns.push(owned);
         }
     }
@@ -486,17 +679,21 @@ pub fn recover_from_dirt(
 
         let mut number_of_unsupported_retentions = 0;
         let mut number_of_supported_retentions = 0;
+        let mut number_of_read_false_supported_retentions = 0;
+        let mut number_of_read_partial_supported_retentions = 0;
+        let mut number_of_read_true_supported_retentions = 0;
+
         let mut retention_support_ratio = vec![];
         let mut exon_support_ratio = vec![];
         let mut is_retention_supported_map = vec![];
 
         for exon in &read.exons {
-            for intron in introns_owned.iter() {
+            for (intron, score) in introns_owned.iter() {
                 if exon.1 < intron.0 {
                     break;
                 }
 
-                if exon.0 < intron.0 && exon.1 > intron.1 {
+                if exon.0 < intron.0 && intron.1 < exon.1 {
                     retention_support_ratio.push(
                         owned_ratios
                             .get(intron)
@@ -514,9 +711,19 @@ pub fn recover_from_dirt(
                         // is_retention_supported_map
                         number_of_supported_retentions += 1;
                         is_retention_supported_map.push(true);
+
+                        let donor_score = score.0;
+                        let acceptor_score = score.1;
+
+                        if donor_score >= 0.02 && acceptor_score >= 0.02 {
+                            number_of_read_true_supported_retentions += 1;
+                        } else if donor_score >= 0.01 && donor_score >= 0.01 {
+                            number_of_read_partial_supported_retentions += 1;
+                        } else {
+                            number_of_read_false_supported_retentions += 1;
+                        }
                     } else {
                         // exon eats a 'likely' false intron, fill up the following descriptors:
-                        // recover,
                         // is_retention_supported_map
                         number_of_unsupported_retentions += 1;
                         is_retention_supported_map.push(false);
@@ -575,6 +782,24 @@ pub fn recover_from_dirt(
                 serde_json::json!(is_retention_supported_map),
             )
             .ok();
+        handle
+            .set_value(
+                Box::new(IntronRetentionValue::NumberOfFalseRententionsSupported),
+                serde_json::json!(number_of_read_false_supported_retentions),
+            )
+            .ok();
+        handle
+            .set_value(
+                Box::new(IntronRetentionValue::NumberOfTrueRententionsSupported),
+                serde_json::json!(number_of_read_true_supported_retentions),
+            )
+            .ok();
+        handle
+            .set_value(
+                Box::new(IntronRetentionValue::NumberOfPartialRententionsSupported),
+                serde_json::json!(number_of_read_partial_supported_retentions),
+            )
+            .ok();
     }
 
     local_passes
@@ -607,6 +832,7 @@ mod tests {
             blacklist: Vec::new(),
             plot: false,
             recover: false,
+            splice_scores: Some(std::path::PathBuf::new()),
         };
 
         assert!(detect_intron_retentions(args).is_ok());
