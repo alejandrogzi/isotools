@@ -1,9 +1,11 @@
 use dashmap::{DashMap, DashSet};
 use indicatif::{ProgressBar, ProgressStyle};
+use num_traits::{Num, NumCast};
 use serde_json::Value;
 use thiserror::Error;
 
 use std::any::Any;
+use std::borrow::Borrow;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -55,7 +57,7 @@ pub const OVERLAP_EXON: bool = true;
 pub type SpliceMap = (StrandSpliceMap, StrandSpliceMap);
 pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
 pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f32>>);
-pub type RetentionStats = (u32, u32, u32, u32, u32, u32);
+pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
 
 // os
 #[cfg(not(windows))]
@@ -269,7 +271,7 @@ pub struct IntronRetentionDescriptor {
     pub query_component_size: Value,
     pub component_retention_ratio: Value,
     pub is_dirty_component: Value,
-    pub retention_support_ratio: Value,
+    pub intron_support_ratio: Value,
     pub exon_support_ratio: Value,
     pub number_of_retentions: Value,
     pub number_of_true_retentions: Value,
@@ -299,7 +301,7 @@ impl IntronRetentionDescriptor {
             query_component_size: Value::Null,
             component_retention_ratio: Value::Null,
             is_dirty_component: Value::Bool(false),
-            retention_support_ratio: Value::Null,
+            intron_support_ratio: Value::Null,
             exon_support_ratio: Value::Null,
             number_of_retentions: Value::Number(0.into()),
             number_of_true_retentions: Value::Null,
@@ -330,7 +332,7 @@ pub enum IntronRetentionValue {
     QueryComponentSize,
     ComponentRetentionRatio,
     IsDirtyComponent,
-    RetentionSupportRatio,
+    IntronSupportRatio,
     ExonSupportRatio,
     NumberOfRetentions,
     NumberOfTrueRetentions,
@@ -364,12 +366,10 @@ impl ModuleMap for IntronRetentionDescriptor {
                 IntronRetentionValue::RefComponentSize => Some(self.ref_component_size.clone()),
                 IntronRetentionValue::QueryComponentSize => Some(self.query_component_size.clone()),
                 IntronRetentionValue::ComponentRetentionRatio => {
-                    Some(self.retention_support_ratio.clone())
+                    Some(self.intron_support_ratio.clone())
                 }
                 IntronRetentionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
-                IntronRetentionValue::RetentionSupportRatio => {
-                    Some(self.retention_support_ratio.clone())
-                }
+                IntronRetentionValue::IntronSupportRatio => Some(self.intron_support_ratio.clone()),
                 IntronRetentionValue::ExonSupportRatio => Some(self.exon_support_ratio.clone()),
                 IntronRetentionValue::NumberOfRetentions => Some(self.number_of_retentions.clone()),
                 IntronRetentionValue::NumberOfTrueRetentions => {
@@ -446,8 +446,8 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.is_dirty_component = value;
                     Ok(())
                 }
-                IntronRetentionValue::RetentionSupportRatio => {
-                    self.retention_support_ratio = value;
+                IntronRetentionValue::IntronSupportRatio => {
+                    self.intron_support_ratio = value;
                     Ok(())
                 }
                 IntronRetentionValue::ExonSupportRatio => {
@@ -540,7 +540,7 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             query_component_size: {:?},
             component_retention_ratio: {:?},
             is_dirty_component: {:?},
-            retention_support_ratio: {:?},
+            intron_support_ratio: {:?},
             exon_support_ratio: {:?},
             number_of_retentions: {:?},
             number_of_true_retentions: {:?},
@@ -566,7 +566,7 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             self.query_component_size,
             self.component_retention_ratio,
             self.is_dirty_component,
-            self.retention_support_ratio,
+            self.intron_support_ratio,
             self.exon_support_ratio,
             self.number_of_retentions,
             self.number_of_true_retentions,
@@ -874,4 +874,42 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             self.fusion_in_frame,
         )
     }
+}
+
+// quality of life improvement fns
+#[inline(always)]
+pub fn exonic_overlap<N, I>(exons_a: &I, exons_b: &I) -> bool
+where
+    N: Num + NumCast + Copy + PartialOrd,
+    I: IntoIterator,
+    I::Item: Borrow<(N, N)>,
+    for<'a> &'a I: IntoIterator<Item = &'a I::Item>,
+{
+    let mut iter_a = exons_a.into_iter();
+    let mut iter_b = exons_b.into_iter();
+
+    let mut exon_a = iter_a.next();
+    let mut exon_b = iter_b.next();
+
+    loop {
+        match (exon_a, exon_b) {
+            (Some(start_end_a), Some(start_end_b)) => {
+                let (start_a, end_a) = start_end_a.borrow();
+                let (start_b, end_b) = start_end_b.borrow();
+
+                if *start_a < *end_b && *start_b < *end_a {
+                    return true;
+                }
+
+                if *end_a < *end_b {
+                    exon_a = iter_a.next();
+                } else {
+                    exon_b = iter_b.next();
+                }
+            }
+            _ => break,
+        }
+    }
+
+    false
 }
