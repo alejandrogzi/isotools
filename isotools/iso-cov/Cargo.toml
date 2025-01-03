@@ -1,0 +1,27 @@
+[package]
+name = "iso-cov"
+version = "0.0.1"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+keywords = ["coverage", "overlap", "transcript", "long-read"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+dashmap.workspace = true
+clap.workspace = true
+rayon.workspace = true
+num_cpus.workspace = true
+hashbrown.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+rand.workspace = true
+log.workspace = true
+config.workspace = true
+simple_logger.workspace = true
+num-traits.workspace = true
+serde_json.workspace = true
+iso-pack = { path = "../iso-pack" }
