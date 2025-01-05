@@ -1,7 +1,8 @@
 use anyhow::Result;
 use config::{
-    get_progress_bar, write_objs, FusionDetectionValue, ModuleDescriptor, ModuleMap, ModuleType,
-    FUSIONS, FUSION_FREE, FUSION_RATIO_THRESHOLD, FUSION_REVIEW, OVERLAP_CDS, OVERLAP_EXON,
+    exonic_overlap, get_progress_bar, write_objs, FusionDetectionValue, ModuleDescriptor,
+    ModuleMap, ModuleType, FUSIONS, FUSION_FREE, FUSION_RATIO_THRESHOLD, FUSION_REVIEW,
+    OVERLAP_CDS, OVERLAP_EXON,
 };
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
@@ -13,7 +14,7 @@ use serde_json::Value;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::cli::Args;
-use crate::utils::{exonic_overlap, prepare_refs, unpack_blacklist};
+use crate::utils::{prepare_refs, unpack_blacklist};
 
 pub fn detect_fusions(args: Args) -> Result<()> {
     info!("Preparing files for fusion detection...");
