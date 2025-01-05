@@ -1,7 +1,7 @@
 use config::SCALE;
 use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Bed12;
@@ -70,6 +70,11 @@ impl GenePred {
 
     pub fn get_three_utr(&self) -> (u64, u64) {
         (self.cds_end, self.end)
+    }
+
+    pub fn get_split_name(&self) -> &str {
+        let id: Vec<&str> = self.name.splitn(3, ".").collect();
+        id[1]
     }
 
     #[inline(always)]
@@ -358,7 +363,7 @@ impl RefGenePred {
     pub fn get_names_split(&self) -> HashSet<&str> {
         let mut names = HashSet::new();
         self.reads.iter().for_each(|read| {
-            let id: Vec<&str> = read.name.splitn(2, ".").collect();
+            let id: Vec<&str> = read.name.splitn(3, ".").collect();
             names.insert(id[1]);
         });
 
@@ -388,13 +393,35 @@ impl RefGenePred {
         smashed
     }
 
+    pub fn smash_exons_by_name_split(&self) -> HashMap<&str, Vec<(u64, u64)>> {
+        let names = self.get_names_split();
+        let mut smashed = HashMap::new();
+        for name in names {
+            let exons = self
+                .reads
+                .iter()
+                .filter(|read| read.get_split_name() == name)
+                .map(|read| read.exons.clone())
+                .flatten()
+                .collect::<BTreeSet<_>>();
+
+            smashed.insert(name, exons.into_iter().collect());
+        }
+
+        smashed
+    }
+
     #[inline(always)]
     pub fn from(reads: Vec<GenePred>) -> Self {
         let mut starts = BTreeSet::new();
         let mut middles = BTreeSet::new();
         let mut introns = BTreeSet::new();
         let mut bounds = (u64::MAX, 0);
-        let strand = reads[0].strand;
+        let strand = if !reads.is_empty() {
+            reads[0].strand
+        } else {
+            '.'
+        };
 
         for read in &reads {
             bounds.0 = bounds.0.min(read.start);
