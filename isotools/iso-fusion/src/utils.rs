@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::path::Path;
@@ -7,7 +6,6 @@ use anyhow::{Ok, Result};
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
 use log::info;
-use num_traits::{Num, NumCast};
 use packbed::{packbed, par_reader, Bed12, GenePred};
 use rayon::prelude::*;
 
@@ -42,7 +40,8 @@ pub fn prepare_refs<P: AsRef<Path> + Debug + Sync + Send>(
                 refs.reads.into_iter().for_each(|mut record| {
                     let mut line = record.line.clone();
 
-                    if loci.len() > 1 {
+                    // if loci has more than 1 gene name -> fusion
+                    if loci.split('.').count() > 1 {
                         line = record.mut_name_from_line(&loci);
                     }
 
@@ -273,41 +272,4 @@ fn get_intergenic_regions(
     );
 
     Ok(regions)
-}
-
-#[inline(always)]
-pub fn exonic_overlap<N, I>(exons_a: &I, exons_b: &I) -> bool
-where
-    N: Num + NumCast + Copy + PartialOrd,
-    I: IntoIterator,
-    I::Item: Borrow<(N, N)>,
-    for<'a> &'a I: IntoIterator<Item = &'a I::Item>,
-{
-    let mut iter_a = exons_a.into_iter();
-    let mut iter_b = exons_b.into_iter();
-
-    let mut exon_a = iter_a.next();
-    let mut exon_b = iter_b.next();
-
-    loop {
-        match (exon_a, exon_b) {
-            (Some(start_end_a), Some(start_end_b)) => {
-                let (start_a, end_a) = start_end_a.borrow();
-                let (start_b, end_b) = start_end_b.borrow();
-
-                if *start_a < *end_b && *start_b < *end_a {
-                    return true;
-                }
-
-                if *end_a < *end_b {
-                    exon_a = iter_a.next();
-                } else {
-                    exon_b = iter_b.next();
-                }
-            }
-            _ => break,
-        }
-    }
-
-    false
 }
