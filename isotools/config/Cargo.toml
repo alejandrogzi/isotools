@@ -9,3 +9,4 @@ dashmap.workspace = true
 log.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
+num-traits.workspace = true

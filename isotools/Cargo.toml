@@ -1,5 +1,12 @@
 [workspace]
-members = ["config", "iso-intron", "iso-utr", "iso-pack", "iso-chimera"]
+members = [
+    "config",
+    "iso-intron",
+    "iso-utr",
+    "iso-pack",
+    "iso-fusion",
+    "iso-cov",
+]
 resolver = "2"
 
 [workspace.package]
@@ -23,6 +30,8 @@ simple_logger = "4.3.3"
 thiserror = "1.0"
 tempfile = "3.13.0"
 serde_json = "1.0.133"
+num-traits = "0.2.19"
+bigtools = "0.5.4"
 
 [profile.release]
 lto = true
