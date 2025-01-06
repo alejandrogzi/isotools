@@ -122,7 +122,7 @@ fn process_component(
     let refs = component.0;
     let queries = component.1;
 
-    let genes = refs.get_names();
+    let genes = refs.get_names_split();
 
     let comp_size = queries.len() + genes.len();
     let query_size = queries.len();
@@ -147,7 +147,8 @@ fn process_component(
 
             let mut count = 0;
 
-            // check if query read overlaps any of the genes
+            // check if query read overlaps any of the gene exon collections
+            // WARN: we are not keeping track of gene names here
             for ref_exons in refs.iter() {
                 if exonic_overlap(&query.exons, &ref_exons) {
                     count += 1;
@@ -155,6 +156,7 @@ fn process_component(
             }
 
             if count > 1 {
+                // query read overlaps more than one gene exon collection
                 fusions.push(query.line.clone());
                 fusion_count += 1.0;
 
@@ -283,6 +285,8 @@ fn process_component(
 
     let ratio = fusion_count / totals;
     if recover {
+        // if the fusion ratio in the component is above the threshold,
+        // mark all queries as dirty and submit them for revie
         if ratio >= FUSION_RATIO_THRESHOLD {
             is_dirty = true;
             let mut review = vec![];
