@@ -13,7 +13,7 @@
 //!           "retains_rt_intron": true,
 //!           "is_retention_supported": false,
 //!           "is_retention_supported_map": [false, false],
-//!           "retention_support_ratio": [0.23, 0.4],
+//!           "intron_support_ratio": [0.23, 0.4],
 //!           "exon_support_ratio": [0.65, 0.43],
 //!           "number_of_retentions": 2,
 //!           "number_of_unsupported_retentions": 2,
@@ -129,7 +129,17 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
         );
     }
 
+    let (true_retentions, false_retentions, partial_retentions) = counter.load_retentions();
+    warn!("Number of true retentions: {}", true_retentions);
+    warn!("Number of false retentions: {}", false_retentions);
+    warn!("Number of partial retentions: {}", partial_retentions);
+
     write_results(&accumulator, args.plot);
+
+    // write_objs(
+    //     &counter.component_distribution,
+    //     "component_distribution.tsv",
+    // );
 
     Ok(())
 }
@@ -140,13 +150,18 @@ fn get_splice_scores<T: AsRef<std::path::Path> + std::fmt::Debug>(
     if let Some(splice_scores) = splice_scores {
         crate::utils::get_splice_scores(splice_scores)
     } else {
+        log::warn!("No splice scores provided, skipping splice score processing...");
         (vec![DashMap::new()], vec![DashMap::new()])
     }
 }
 
-struct ParallelCounter {
+pub struct ParallelCounter {
     dirties: AtomicU32,
     components: AtomicU32,
+    true_retentions: AtomicU32,
+    false_retentions: AtomicU32,
+    partial_retentions: AtomicU32,
+    // component_distribution: DashSet<String>,
 }
 
 impl ParallelCounter {
@@ -154,6 +169,10 @@ impl ParallelCounter {
         Self {
             dirties: AtomicU32::new(0),
             components: AtomicU32::new(0),
+            true_retentions: AtomicU32::new(0),
+            false_retentions: AtomicU32::new(0),
+            partial_retentions: AtomicU32::new(0),
+            // component_distribution: DashSet::new(),
         }
     }
 
@@ -176,6 +195,30 @@ impl ParallelCounter {
         let (dirties, components) = self.get_counters();
         (dirties, (dirties / components) * 100.0)
     }
+
+    fn inc_true_retentions(&self) {
+        self.true_retentions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_false_retentions(&self) {
+        self.false_retentions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_partial_retentions(&self) {
+        self.partial_retentions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn load_retentions(&self) -> (u32, u32, u32) {
+        (
+            self.true_retentions.load(Ordering::Relaxed),
+            self.false_retentions.load(Ordering::Relaxed),
+            self.partial_retentions.load(Ordering::Relaxed),
+        )
+    }
+
+    // fn inc_component_distribution(&self, count: String) {
+    //     self.component_distribution.insert(count);
+    // }
 }
 
 impl Default for ParallelCounter {
@@ -250,7 +293,7 @@ fn process_components(
 ) {
     components.into_par_iter().for_each(|comp| {
         let (retentions, non_retentions, blocks, _, is_dirty) =
-            process_component(comp, banned, plot, recover, splice_map);
+            process_component(comp, banned, plot, recover, splice_map, counter);
 
         retentions.into_iter().for_each(|r| {
             accumulator.retentions.insert(r);
@@ -277,6 +320,7 @@ pub fn process_component(
     plot: bool,
     recover: bool,
     splice_map: &(SharedSpliceMap, SharedSpliceMap),
+    counter: &ParallelCounter,
 ) -> (
     Vec<String>,
     Vec<String>,
@@ -303,8 +347,29 @@ pub fn process_component(
     let refs = comp.0;
     let queries = comp.1;
 
-    let comp_size = queries.len() + refs.reads.len();
+    let ref_size = refs.reads.len();
+    let query_size = queries.len();
+    let comp_size = ref_size + query_size;
     let (mut count, totals) = (0_f32, queries.len() as f32);
+
+    // match refs.strand {
+    //     '+' => {
+    //         counter.inc_component_distribution(format!(
+    //             "{}\t{}\t{}\t{}",
+    //             query_size, queries[0].chrom, refs.bounds.0, refs.bounds.1
+    //         ));
+    //     }
+    //     '-' => {
+    //         counter.inc_component_distribution(format!(
+    //             "{}\t{}\t{}\t{}",
+    //             query_size,
+    //             queries[0].chrom,
+    //             SCALE - refs.bounds.1,
+    //             SCALE - refs.bounds.0
+    //         ));
+    //     }
+    //     _ => panic!("ERROR: Invalid strand in reference component!"),
+    // }
 
     for query in queries.iter() {
         descriptor.insert(
@@ -402,42 +467,45 @@ pub fn process_component(
                     }
 
                     if let Some(scores) = splice_scores {
-                        let donor_score_map = scores.0.as_ref().unwrap();
-                        let acceptor_score_map = scores.1.as_ref().unwrap();
+                        if let Some(donor_score_map) = scores.0.as_ref() {
+                            let acceptor_score_map = scores.1.as_ref().unwrap();
 
-                        let (intron_donor, intron_acceptor) = match query.strand {
-                            // donor [-1 to match bigtools coords]
-                            '+' => (intron.0 as usize - 1, intron.1 as usize),
-                            // acceptor [-1 to match bigtools coords]
-                            '-' => ((SCALE - intron.0) as usize, (SCALE - intron.1) as usize - 1),
-                            _ => panic!("ERROR: Invalid strand in query component!"),
-                        };
+                            let (intron_donor, intron_acceptor) = match query.strand {
+                                // donor [-1 to match bigtools coords]
+                                '+' => (intron.0 as usize - 1, intron.1 as usize),
+                                // acceptor [-1 to match bigtools coords]
+                                '-' => {
+                                    ((SCALE - intron.0) as usize, (SCALE - intron.1) as usize - 1)
+                                }
+                                _ => panic!("ERROR: Invalid strand in query component!"),
+                            };
 
-                        let (donor_score, acceptor_score) = (
-                            donor_score_map
-                                .get(&intron_donor)
-                                .map(|r| *r)
-                                .unwrap_or(0.0),
-                            acceptor_score_map
-                                .get(&intron_acceptor)
-                                .map(|r| *r)
-                                .unwrap_or(0.0),
-                        );
+                            let (donor_score, acceptor_score) = (
+                                donor_score_map
+                                    .get(&intron_donor)
+                                    .map(|r| *r)
+                                    .unwrap_or(0.0),
+                                acceptor_score_map
+                                    .get(&intron_acceptor)
+                                    .map(|r| *r)
+                                    .unwrap_or(0.0),
+                            );
 
-                        donor_scores.push(donor_score);
-                        acceptor_scores.push(acceptor_score);
+                            donor_scores.push(donor_score);
+                            acceptor_scores.push(acceptor_score);
 
-                        if donor_score >= 0.02 && acceptor_score >= 0.02 {
-                            number_of_true_retentions += 1;
-                        } else if donor_score >= 0.01 && donor_score >= 0.01 {
-                            number_of_partial_retentions += 1;
-                        } else {
-                            number_of_false_retentions += 1;
+                            if donor_score >= 0.02 && acceptor_score >= 0.02 {
+                                number_of_true_retentions += 1;
+                            } else if donor_score >= 0.01 && donor_score >= 0.01 {
+                                number_of_partial_retentions += 1;
+                            } else {
+                                number_of_false_retentions += 1;
+                            }
+
+                            introns_owned.entry((intron.0, intron.1)).and_modify(|e| {
+                                *e = (donor_score, acceptor_score);
+                            });
                         }
-
-                        introns_owned.entry((intron.0, intron.1)).and_modify(|e| {
-                            *e = (donor_score, acceptor_score);
-                        });
                     }
 
                     continue;
@@ -458,13 +526,13 @@ pub fn process_component(
         handle
             .set_value(
                 Box::new(IntronRetentionValue::RefComponentSize),
-                Value::Number(comp_size.into()),
+                Value::Number(ref_size.into()),
             )
             .ok();
         handle
             .set_value(
                 Box::new(IntronRetentionValue::QueryComponentSize),
-                Value::Number(comp_size.into()),
+                Value::Number(query_size.into()),
             )
             .ok();
 
@@ -567,6 +635,7 @@ pub fn process_component(
                 &refs,
                 &mut descriptor,
                 ratio,
+                counter,
             );
             new_passes.iter().for_each(|p| {
                 hits.retain(|x| x != p);
@@ -598,6 +667,7 @@ pub fn recover_from_dirt(
     refs: &RefGenePred,
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
     ratio: f32,
+    counter: &ParallelCounter,
 ) -> Vec<String> {
     let mut local_passes = vec![];
     let mut owner_ratios = HashMap::new();
@@ -657,6 +727,33 @@ pub fn recover_from_dirt(
             || (donor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
                 && acceptor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
         {
+            if donor_score >= 0.02 && acceptor_score >= 0.02 {
+                counter.inc_true_retentions();
+            } else if donor_score >= 0.01 && donor_score >= 0.01 {
+                counter.inc_partial_retentions();
+            } else {
+                // if refs.strand == '+' {
+                //     dbg!(
+                //         &dirt[0].chrom,
+                //         owned.0,
+                //         owned.1,
+                //         donor_score,
+                //         acceptor_score,
+                //         ratio
+                //     )
+                // } else {
+                //     dbg!(
+                //         &dirt[0].chrom,
+                //         SCALE - owned.1,
+                //         SCALE - owned.0,
+                //         donor_score,
+                //         acceptor_score,
+                //         ratio
+                //     )
+                // };
+                counter.inc_false_retentions();
+            }
+
             supported_introns.push(owned);
         }
     }
@@ -683,7 +780,7 @@ pub fn recover_from_dirt(
         let mut number_of_read_partial_supported_retentions = 0;
         let mut number_of_read_true_supported_retentions = 0;
 
-        let mut retention_support_ratio = vec![];
+        let mut intron_support_ratio = vec![];
         let mut exon_support_ratio = vec![];
         let mut is_retention_supported_map = vec![];
 
@@ -694,7 +791,7 @@ pub fn recover_from_dirt(
                 }
 
                 if exon.0 < intron.0 && intron.1 < exon.1 {
-                    retention_support_ratio.push(
+                    intron_support_ratio.push(
                         owned_ratios
                             .get(intron)
                             .expect("ERROR: Intron not found in intron_owned_ratios"),
@@ -766,8 +863,8 @@ pub fn recover_from_dirt(
             .ok();
         handle
             .set_value(
-                Box::new(IntronRetentionValue::RetentionSupportRatio),
-                serde_json::json!(retention_support_ratio),
+                Box::new(IntronRetentionValue::IntronSupportRatio),
+                serde_json::json!(intron_support_ratio),
             )
             .ok();
         handle
