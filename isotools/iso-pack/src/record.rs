@@ -376,13 +376,13 @@ impl RefGenePred {
     }
 
     pub fn smash_exons_by_name(&self) -> Vec<Vec<(u64, u64)>> {
-        let names = self.get_names();
+        let names = self.get_names_split();
         let mut smashed = Vec::new();
         for name in names {
             let exons = self
                 .reads
                 .iter()
-                .filter(|read| read.name == name)
+                .filter(|read| read.get_split_name() == name)
                 .map(|read| read.exons.clone())
                 .flatten()
                 .collect::<BTreeSet<_>>();
