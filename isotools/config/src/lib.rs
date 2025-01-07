@@ -59,6 +59,30 @@ pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
 pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f32>>);
 pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
 
+// public enums
+pub enum SpliceSite {
+    Donor,
+    Acceptor,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Strand {
+    Forward,
+    Reverse,
+}
+
+impl std::str::FromStr for Strand {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "+" => Ok(Strand::Forward),
+            "-" => Ok(Strand::Reverse),
+            _ => Err("ERROR: Cannot parse strand!".into()),
+        }
+    }
+}
+
 // os
 #[cfg(not(windows))]
 const TICK_SETTINGS: (&str, u64) = ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", 80);
