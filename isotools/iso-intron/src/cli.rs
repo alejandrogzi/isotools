@@ -75,6 +75,15 @@ pub struct Args {
         help = "Path to spliceAI directory [will asume 2 files per strand: acceptor and donor .bw]"
     )]
     pub splice_scores: Option<PathBuf>,
+
+    #[arg(
+        long = "toga",
+        required = false,
+        value_name = "PATH",
+        num_args = 1..,
+        help = "Path to BED12 TOGA annotation file"
+    )]
+    pub toga: Option<PathBuf>,
 }
 
 impl ArgCheck for Args {

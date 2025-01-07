@@ -7,45 +7,54 @@ use packbed::par_reader;
 use rayon::prelude::*;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use config::{
-    get_progress_bar, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, DONOR_MINUS, DONOR_PLUS,
+    get_progress_bar, SpliceSite, Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS,
+    DONOR_MINUS, DONOR_PLUS, SCALE,
 };
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct Bed4<'a> {
-    pub chrom: &'a str,
-    pub coord: (u64, u64),
-    pub id: &'a str,
+pub trait BedRecord: Send + Sync {
+    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>>
+    where
+        Self: Sized;
+    fn chrom(&self) -> &str;
+    fn coord(&self) -> (u64, u64);
 }
 
-impl<'a> Bed4<'a> {
-    pub fn new(line: &str) -> Result<Bed4, &'static str> {
+#[derive(Debug, PartialEq, Clone)]
+pub struct Bed4 {
+    pub chrom: String,
+    pub coord: (u64, u64),
+    pub id: String,
+}
+
+impl Bed4 {
+    pub fn new(line: String) -> Result<Bed4, Box<dyn std::error::Error>> {
         if line.is_empty() {
-            return Err("Empty line");
+            return Err("Empty line".into());
         }
 
         let mut fields = line.split('\t');
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
 
         let (chrom, start, end, id) = (
-            fields.next().ok_or("Cannot parse chrom")?,
+            fields.next().ok_or("Cannot parse chrom")?.to_string(),
             get(fields.next().ok_or("Cannot parse start")?)?,
             get(fields.next().ok_or("Cannot parse end")?)?,
-            fields.next().ok_or("Cannot parse id")?,
+            fields.next().ok_or("Cannot parse id")?.to_string(),
         );
 
         Ok(Bed4 {
             chrom,
-            coord: (start + 1, end - 1),
+            coord: (start + 1, end - 1), // 0-based to 1-based
             id,
         })
     }
 
-    pub fn from(chrom: &'a str, start: u64, end: u64, id: &'a str) -> Bed4<'a> {
+    pub fn from(chrom: String, start: u64, end: u64, id: String) -> Bed4 {
         Bed4 {
             chrom,
             coord: (start, end),
@@ -61,31 +70,125 @@ impl<'a> Bed4<'a> {
     }
 }
 
-pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
-    if paths.is_empty() {
-        return None;
+impl BedRecord for Bed4 {
+    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>> {
+        Bed4::new(line)
     }
 
-    let contents = par_reader(paths).unwrap();
-    let tracks = parse_bed4(&contents).unwrap();
+    fn chrom(&self) -> &str {
+        &self.chrom
+    }
 
-    Some(tracks)
+    fn coord(&self) -> (u64, u64) {
+        self.coord
+    }
 }
 
-pub fn parse_bed4<'a>(
-    contents: &'a str,
-) -> Result<HashMap<String, HashSet<(u64, u64)>>, anyhow::Error> {
-    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED4 files...");
+// WARN: will cover any high-order bed file [6,8,12]
+#[derive(Debug, PartialEq, Clone)]
+pub struct Bed6 {
+    pub chrom: String,
+    pub coord: (u64, u64),
+    pub id: String,
+    pub strand: Strand,
+}
+
+impl Bed6 {
+    pub fn new(line: String) -> Result<Bed6, Box<dyn std::error::Error>> {
+        if line.is_empty() {
+            return Err("ERROR: Empty line in .bed!".into());
+        }
+
+        let mut fields = line.split('\t');
+        let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
+
+        let (chrom, start, end, id, _, strand) = (
+            fields.next().ok_or("Cannot parse chrom")?.to_string(),
+            get(fields.next().ok_or("Cannot parse start")?)?,
+            get(fields.next().ok_or("Cannot parse end")?)?,
+            fields.next().ok_or("Cannot parse id")?.to_string(),
+            fields.next().ok_or("Cannot parse score")?,
+            fields
+                .next()
+                .ok_or("ERROR: Cannot parse strand!")?
+                .parse::<Strand>()?,
+        );
+
+        let (start, end) = match strand {
+            Strand::Forward => {
+                if start > end {
+                    return Err("ERROR: Start is greater than end!".into());
+                }
+                (start, end)
+            }
+            Strand::Reverse => {
+                if start < end {
+                    return Err("ERROR: Start is less than end!".into());
+                }
+                (SCALE - end, SCALE - start)
+            }
+        };
+
+        Ok(Bed6 {
+            chrom,
+            coord: (start, end),
+            id,
+            strand,
+        })
+    }
+
+    pub fn from(chrom: String, start: u64, end: u64, id: String, strand: Strand) -> Bed6 {
+        Bed6 {
+            chrom,
+            coord: (start, end),
+            id,
+            strand,
+        }
+    }
+
+    pub fn send(&self, acc: &mut String) {
+        acc.push_str(&format!(
+            "{}\t{}\t{}\n",
+            self.chrom, self.coord.0, self.coord.1
+        ));
+    }
+}
+
+impl BedRecord for Bed6 {
+    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>> {
+        Bed6::new(line)
+    }
+
+    fn chrom(&self) -> &str {
+        &self.chrom
+    }
+
+    fn coord(&self) -> (u64, u64) {
+        self.coord
+    }
+}
+
+pub fn bed_to_map<T>(
+    contents: Arc<String>,
+) -> Result<HashMap<String, HashSet<(u64, u64)>>, anyhow::Error>
+where
+    T: BedRecord,
+{
+    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
     let tracks = contents
         .par_lines()
-        .filter(|x| !x.starts_with("#"))
-        .filter_map(|x| Bed4::new(x).map_err(|e| warn!("{} from: {}. ", x, e)).ok())
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            T::parse(line.to_string())
+                .map_err(|e| warn!("Error parsing {}: {}", line, e))
+                .ok()
+        })
         .fold(
             || HashMap::new(),
             |mut acc: HashMap<String, HashSet<(u64, u64)>>, record| {
-                acc.entry(record.chrom.to_string())
+                acc.entry(record.chrom().to_owned())
                     .or_default()
-                    .insert(record.coord);
+                    .insert(record.coord());
                 pb.inc(1);
                 acc
             },
@@ -94,26 +197,43 @@ pub fn parse_bed4<'a>(
             || HashMap::new(),
             |mut acc, map| {
                 for (k, v) in map {
-                    let acc_v = acc.entry(k).or_insert(HashSet::new());
-                    acc_v.extend(v);
+                    acc.entry(k).or_default().extend(v);
                 }
                 acc
             },
         );
 
     pb.finish_and_clear();
-    match tracks.is_empty() {
-        true => {
-            anyhow::bail!("Blacklist file provided but no tracks found!")
-        }
-        false => {
-            info!(
-                "Parsed {} blacklisted introns!",
-                tracks.values().flatten().count()
-            );
+    if tracks.is_empty() {
+        anyhow::bail!("No tracks found in the provided file!");
+    }
+    info!(
+        "Parsed {} blacklisted intervals.",
+        tracks.values().flatten().count()
+    );
+    Ok(tracks)
+}
 
-            Ok(tracks)
-        }
+pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
+    if paths.is_empty() {
+        return None;
+    }
+
+    let contents = Arc::new(par_reader(paths).unwrap());
+    let tracks = bed_to_map::<Bed4>(contents).unwrap();
+
+    Some(tracks)
+}
+
+pub fn get_toga_coords(toga: Option<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
+    if let Some(toga) = toga {
+        let contents =
+            Arc::new(par_reader(vec![toga]).expect("ERROR: Cannot read TOGA annotation file!"));
+        let tracks = bed_to_map::<Bed6>(contents).expect("ERROR: Cannot parse TOGA annotation!");
+
+        Some(tracks)
+    } else {
+        return None;
     }
 }
 
@@ -133,11 +253,6 @@ pub fn get_splice_scores<T: AsRef<std::path::Path> + std::fmt::Debug>(
     let (plus, minus) = rayon::join(|| bigwig_to_map(plus), || bigwig_to_map(minus));
 
     (plus, minus)
-}
-
-enum SpliceSite {
-    Donor,
-    Acceptor,
 }
 
 fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
