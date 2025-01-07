@@ -37,7 +37,7 @@ use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::cli::Args;
-use crate::utils::{unpack_blacklist, Bed4};
+use crate::utils::{get_toga_coords, unpack_blacklist, Bed4};
 use config::{
     get_progress_bar, write_objs, IntronRetentionValue, ModuleDescriptor, ModuleMap, ModuleType,
     SharedSpliceMap, SpliceScores, StrandSpliceMap, BED3, INTRON_RETENTIONS, INTRON_RETENTION_FREE,
@@ -86,6 +86,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
     let tracks = packbed(args.refs, Some(args.query), OVERLAP_CDS, OVERLAP_EXON)?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
     let (splice_plus, splice_minus) = get_splice_scores(args.splice_scores);
+    let toga_coords = get_toga_coords(args.toga);
 
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
 
@@ -101,6 +102,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
         let binding = HashSet::new();
         let banned = blacklist.get(chr).unwrap_or(&binding);
         let splice_map = create_splice_map(chr, &splice_plus, &splice_minus);
+        let toga_introns = toga_coords.as_ref().and_then(|t| t.get(chr));
 
         process_components(
             components,
@@ -108,6 +110,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
             args.plot,
             args.recover,
             &splice_map,
+            &toga_introns,
             &accumulator,
             &counter,
         );
@@ -136,11 +139,6 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
 
     write_results(&accumulator, args.plot);
 
-    // write_objs(
-    //     &counter.component_distribution,
-    //     "component_distribution.tsv",
-    // );
-
     Ok(())
 }
 
@@ -161,7 +159,6 @@ pub struct ParallelCounter {
     true_retentions: AtomicU32,
     false_retentions: AtomicU32,
     partial_retentions: AtomicU32,
-    // component_distribution: DashSet<String>,
 }
 
 impl ParallelCounter {
@@ -172,7 +169,6 @@ impl ParallelCounter {
             true_retentions: AtomicU32::new(0),
             false_retentions: AtomicU32::new(0),
             partial_retentions: AtomicU32::new(0),
-            // component_distribution: DashSet::new(),
         }
     }
 
@@ -288,12 +284,20 @@ fn process_components(
     plot: bool,
     recover: bool,
     splice_map: &(SharedSpliceMap, SharedSpliceMap),
+    toga_introns: &Option<&HashSet<(u64, u64)>>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
 ) {
     components.into_par_iter().for_each(|comp| {
-        let (retentions, non_retentions, blocks, _, is_dirty) =
-            process_component(comp, banned, plot, recover, splice_map, counter);
+        let (retentions, non_retentions, blocks, _, is_dirty) = process_component(
+            comp,
+            banned,
+            plot,
+            recover,
+            splice_map,
+            toga_introns,
+            counter,
+        );
 
         retentions.into_iter().for_each(|r| {
             accumulator.retentions.insert(r);
@@ -320,6 +324,7 @@ pub fn process_component(
     plot: bool,
     recover: bool,
     splice_map: &(SharedSpliceMap, SharedSpliceMap),
+    toga_introns: &Option<&HashSet<(u64, u64)>>,
     counter: &ParallelCounter,
 ) -> (
     Vec<String>,
@@ -351,25 +356,6 @@ pub fn process_component(
     let query_size = queries.len();
     let comp_size = ref_size + query_size;
     let (mut count, totals) = (0_f32, queries.len() as f32);
-
-    // match refs.strand {
-    //     '+' => {
-    //         counter.inc_component_distribution(format!(
-    //             "{}\t{}\t{}\t{}",
-    //             query_size, queries[0].chrom, refs.bounds.0, refs.bounds.1
-    //         ));
-    //     }
-    //     '-' => {
-    //         counter.inc_component_distribution(format!(
-    //             "{}\t{}\t{}\t{}",
-    //             query_size,
-    //             queries[0].chrom,
-    //             SCALE - refs.bounds.1,
-    //             SCALE - refs.bounds.0
-    //         ));
-    //     }
-    //     _ => panic!("ERROR: Invalid strand in reference component!"),
-    // }
 
     for query in queries.iter() {
         descriptor.insert(
@@ -441,8 +427,13 @@ pub fn process_component(
                                 .push(format!("{}:{}-{}", query.chrom, intron.0, intron.1,));
 
                             if plot {
-                                Bed4::from(&query.chrom, intron.0 - 1, intron.1 + 1, &query.name)
-                                    .send(&mut blocks.as_mut().unwrap())
+                                Bed4::from(
+                                    query.chrom.clone(),
+                                    intron.0 - 1,
+                                    intron.1 + 1,
+                                    query.name.clone(),
+                                )
+                                .send(&mut blocks.as_mut().unwrap())
                             }
                         }
                         '-' => {
@@ -455,10 +446,10 @@ pub fn process_component(
 
                             if plot {
                                 Bed4::from(
-                                    &query.chrom,
+                                    query.chrom.clone(),
                                     SCALE - intron.1 - 1,
                                     SCALE - intron.0 + 1,
-                                    &query.name,
+                                    query.name.clone(),
                                 )
                                 .send(&mut blocks.as_mut().unwrap())
                             }
@@ -635,6 +626,7 @@ pub fn process_component(
                 &refs,
                 &mut descriptor,
                 ratio,
+                toga_introns,
                 counter,
             );
             new_passes.iter().for_each(|p| {
@@ -667,11 +659,14 @@ pub fn recover_from_dirt(
     refs: &RefGenePred,
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
     ratio: f32,
+    toga_introns: &Option<&HashSet<(u64, u64)>>,
     counter: &ParallelCounter,
 ) -> Vec<String> {
     let mut local_passes = vec![];
     let mut owner_ratios = HashMap::new();
     let mut owned_ratios = HashMap::new();
+
+    let mut is_toga_contained = false;
 
     // exons: 1) build ratios
     for owner in exon_owners.iter() {
@@ -720,12 +715,15 @@ pub fn recover_from_dirt(
         let donor_score = score.0;
         let acceptor_score = score.1;
 
+        is_toga_contained = toga_introns.map(|t| t.contains(owned)).unwrap_or(false);
+
         // if the intron is supported by the majority of reads (>=50%) or
         // the splice scores are high enough, we consider the intron to be
         // supported and consider it a true intron
         if (ratio >= INTRON_RETENTION_RECOVERY_THRESHOLD)
             || (donor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
                 && acceptor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
+            || is_toga_contained
         {
             if donor_score >= 0.02 && acceptor_score >= 0.02 {
                 counter.inc_true_retentions();
@@ -897,6 +895,12 @@ pub fn recover_from_dirt(
                 serde_json::json!(number_of_read_partial_supported_retentions),
             )
             .ok();
+        handle
+            .set_value(
+                Box::new(IntronRetentionValue::IsTogaIntron),
+                serde_json::json!(is_toga_contained),
+            )
+            .ok();
     }
 
     local_passes
@@ -930,6 +934,7 @@ mod tests {
             plot: false,
             recover: false,
             splice_scores: Some(std::path::PathBuf::new()),
+            toga: None,
         };
 
         assert!(detect_intron_retentions(args).is_ok());

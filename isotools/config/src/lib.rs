@@ -312,6 +312,7 @@ pub struct IntronRetentionDescriptor {
     pub retention_in_cds: Value,
     pub retention_in_utr: Value,
     pub is_intron_retained_in_frame: Value,
+    pub is_toga_intron: Value,
 }
 
 impl IntronRetentionDescriptor {
@@ -342,6 +343,7 @@ impl IntronRetentionDescriptor {
             retention_in_cds: Value::Null,
             retention_in_utr: Value::Null,
             is_intron_retained_in_frame: Value::Null,
+            is_toga_intron: Value::Null,
         })
     }
 }
@@ -373,6 +375,7 @@ pub enum IntronRetentionValue {
     IsRetentionInCds,
     IsRetentionInUtr,
     IsIntronRetainedInFrame,
+    IsTogaIntron,
 }
 
 impl ModuleMap for IntronRetentionDescriptor {
@@ -428,6 +431,7 @@ impl ModuleMap for IntronRetentionDescriptor {
                 IntronRetentionValue::IsIntronRetainedInFrame => {
                     Some(self.retention_in_utr.clone())
                 }
+                IntronRetentionValue::IsTogaIntron => Some(self.is_toga_intron.clone()),
             }
         } else {
             None
@@ -538,6 +542,10 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.is_intron_retained_in_frame = value;
                     Ok(())
                 }
+                IntronRetentionValue::IsTogaIntron => {
+                    self.is_toga_intron = value;
+                    Ok(())
+                }
             }
         } else {
             let err = format!("ERROR: You have tried to set a value for an unknown key!");
@@ -580,7 +588,8 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             retention_donor_score: {:?},
             is_retention_in_cds: {:?},
             is_retention_in_utr: {:?},
-            is_intron_retained_in_frame: {:?}
+            is_intron_retained_in_frame: {:?},
+            is_toga_intron: {:?}
             }}",
             self.intron_retention,
             self.is_retention_supported,
@@ -606,7 +615,8 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             self.retention_donor_score,
             self.retention_in_cds,
             self.retention_in_utr,
-            self.is_intron_retained_in_frame
+            self.is_intron_retained_in_frame,
+            self.is_toga_intron
         )
     }
 }
