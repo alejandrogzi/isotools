@@ -12,7 +12,7 @@ use rand::Rng;
 use rayon::prelude::*;
 
 pub mod record;
-pub use record::{Bed12, GenePred, RefGenePred};
+pub use record::{Bed12, GenePred, IntronPred, RefGenePred};
 
 pub type GenePredMap = HashMap<String, Vec<GenePred>>;
 
@@ -28,6 +28,18 @@ pub const RGB: [&str; 10] = [
     "118,115,15", // dark-yellow
     "172,126,0",  // brown
 ];
+
+pub type DefaultBucket = Vec<(RefGenePred, Vec<GenePred>)>;
+impl BedPackage for DefaultBucket {}
+
+#[derive(Debug, Clone)]
+pub enum PackMode {
+    Default,
+    Intron,
+    Exon,
+}
+
+pub trait BedPackage {}
 
 fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
     let mut file = File::open(file)?;
@@ -128,12 +140,15 @@ impl UnionFind {
     }
 }
 
+// Vec<(RefGenePred, Vec<GenePred>)>
+
 pub fn buckerize(
     tracks: GenePredMap,
     overlap_cds: bool,
     overlap_exon: bool,
     amount: usize,
-) -> DashMap<String, Vec<(RefGenePred, Vec<GenePred>)>> {
+    mode: PackMode,
+) -> DashMap<String, Box<dyn BedPackage>> {
     let cmap = DashMap::new();
     let pb = get_progress_bar(amount as u64, "Buckerizing transcripts");
 
@@ -186,7 +201,21 @@ pub fn buckerize(
                 // separate refs from queries, use refs to build RefGenePred
                 let (refs, queries): (Vec<_>, Vec<_>) = group.into_iter().partition(|x| x.is_ref);
 
-                return (RefGenePred::from(refs), queries);
+                match mode {
+                    PackMode::Default => {
+                        let refs = RefGenePred::from(refs);
+                        return (refs, queries);
+                    }
+                    PackMode::Intron => {
+                        let refs = IntronPred::from(refs);
+                        return refs;
+                    }
+                    PackMode::Exon => {
+                        // let refs = ExonPred::from(refs);
+                        // return refs;
+                        todo!()
+                    }
+                }
             })
             .collect::<Vec<_>>();
 
@@ -210,7 +239,8 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     queries: Option<Vec<T>>,
     overlap_cds: bool,
     overlap_exon: bool,
-) -> Result<DashMap<String, Vec<(RefGenePred, Vec<GenePred>)>>, anyhow::Error> {
+    mode: PackMode,
+) -> Result<DashMap<String, Box<dyn BedPackage>>, anyhow::Error> {
     let refs = unpack(refs, overlap_cds, true).expect("Failed to unpack reference tracks");
 
     let (tracks, n) = if let Some(query) = queries {
@@ -221,7 +251,7 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
         (refs, n)
     };
 
-    let buckets = buckerize(tracks, overlap_cds, overlap_exon, n);
+    let buckets = buckerize(tracks, overlap_cds, overlap_exon, n, mode);
     Ok(buckets)
 }
 

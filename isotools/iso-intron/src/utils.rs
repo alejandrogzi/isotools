@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use config::{
-    get_progress_bar, SpliceSite, Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS,
-    DONOR_MINUS, DONOR_PLUS, SCALE,
+    get_progress_bar, CoordType, SpliceSite, Strand, StrandSpliceMap, ACCEPTOR_MINUS,
+    ACCEPTOR_PLUS, DONOR_MINUS, DONOR_PLUS, SCALE,
 };
 
 pub trait BedRecord: Send + Sync {
@@ -22,6 +22,8 @@ pub trait BedRecord: Send + Sync {
         Self: Sized;
     fn chrom(&self) -> &str;
     fn coord(&self) -> (u64, u64);
+    fn intronic_coords(&self) -> HashSet<(u64, u64)>;
+    fn exonic_coords(&self) -> HashSet<(u64, u64)>;
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -170,6 +172,7 @@ impl BedRecord for Bed6 {
 
 pub fn bed_to_map<T>(
     contents: Arc<String>,
+    hint: CoordType,
 ) -> Result<HashMap<String, HashSet<(u64, u64)>>, anyhow::Error>
 where
     T: BedRecord,
@@ -188,7 +191,11 @@ where
             |mut acc: HashMap<String, HashSet<(u64, u64)>>, record| {
                 acc.entry(record.chrom().to_owned())
                     .or_default()
-                    .insert(record.coord());
+                    .insert(match hint {
+                        CoordType::Bounds => record.coord(),
+                        CoordType::Intronic => record.intronic_coords(),
+                        CoordType::Exonic => record.exonic_coords(),
+                    });
                 pb.inc(1);
                 acc
             },

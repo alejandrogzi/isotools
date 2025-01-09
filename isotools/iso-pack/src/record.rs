@@ -1,7 +1,7 @@
 use config::SCALE;
 use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Bed12;
@@ -30,6 +30,34 @@ pub struct RefGenePred {
     pub introns: BTreeSet<(u64, u64)>,
     pub bounds: (u64, u64),
     pub strand: char,
+}
+
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+pub struct IntronPred {
+    pub chrom: String,
+    pub strand: char,
+    pub introns: BTreeMap<(u64, u64), IntronPredStats>,
+}
+
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+pub struct IntronPredStats {
+    pub freq: u64,
+    pub splice_ai_donor: usize,
+    pub splice_ai_acceptor: usize,
+    pub max_ent_donor: usize,
+    pub max_ent_acceptor: usize,
+    pub donor_sequence: String,
+    pub acceptor_sequence: String,
+    pub donor_context: String,
+    pub acceptor_context: String,
+    pub intron_position: IntronPosition,
+}
+
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+pub enum IntronPosition {
+    UTR,
+    CDS,
+    Mixed,
 }
 
 impl GenePred {
@@ -458,6 +486,13 @@ impl RefGenePred {
         }
 
         Self::new(reads, starts, middles, introns, bounds, strand)
+    }
+}
+
+impl IntronPred {
+    #[inline(always)]
+    pub fn from(reads: Vec<GenePred>) -> Self {
+        let mut introns = BTreeMap::new();
     }
 }
 

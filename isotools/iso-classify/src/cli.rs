@@ -1,4 +1,4 @@
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use config::ArgCheck;
 use std::path::PathBuf;
 
@@ -37,26 +37,15 @@ pub enum SubArgs {
 #[derive(Debug, Parser)]
 pub struct IntronArgs {
     #[arg(
-        short = 'r',
-        long = "ref",
+        short = 'i',
+        long = "iso",
         required = true,
         value_name = "PATHS",
         value_delimiter = ',',
         num_args = 1..,
-        help = "Paths to BED12 files delimited by comma"
+        help = "Paths to IsoSeq's BED12 file(s) delimited by comma"
     )]
-    pub refs: Vec<PathBuf>,
-
-    #[arg(
-        short = 'q',
-        long = "query",
-        required = true,
-        value_name = "PATHS",
-        value_delimiter = ',',
-        num_args = 1..,
-        help = "Path to BED12 file to classify"
-    )]
-    pub query: Vec<PathBuf>,
+    pub iso: Vec<PathBuf>,
 
     #[arg(
         short = 'b',
@@ -70,41 +59,31 @@ pub struct IntronArgs {
     pub blacklist: Vec<PathBuf>,
 
     #[arg(
-        short = 'p',
-        long = "plot",
-        help = "Flag to output retentions in a BED4 file",
-        value_name = "FLAG",
-        default_value = "false"
-    )]
-    pub plot: bool,
-
-    #[arg(
-        long = "recover",
-        help = "Flag to recover from disputed truncations",
-        value_name = "FLAG",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
-    )]
-    pub recover: bool,
-
-    #[arg(
-        long = "spliceai",
+        short = 'w',
+        long = "bigwig",
         required = false,
         value_name = "PATH",
         num_args = 1,
         help = "Path to spliceAI directory [will asume 2 files per strand: acceptor and donor .bw]"
     )]
-    pub splice_scores: Option<PathBuf>,
+    pub spliceai: Option<PathBuf>,
 
     #[arg(
+        long = "twobit",
+        required = false,
+        value_name = "PATH",
+        num_args = 1..,
+        help = "Path to genome 2bit file"
+    )]
+    pub twobit: Option<PathBuf>,
+
+    #[arg(
+        short = 't',
         long = "toga",
         required = false,
         value_name = "PATH",
         num_args = 1..,
-        help = "Path to BED12 TOGA annotation file"
+        help = "Path to TOGA annotation .bed file"
     )]
     pub toga: Option<PathBuf>,
 }
@@ -115,11 +94,11 @@ impl ArgCheck for IntronArgs {
     }
 
     fn get_ref(&self) -> &Vec<PathBuf> {
-        &self.refs
+        &self.iso
     }
 
     fn get_query(&self) -> &Vec<PathBuf> {
-        &self.query
+        todo!()
     }
 }
 
