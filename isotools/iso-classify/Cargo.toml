@@ -1,0 +1,27 @@
+[package]
+name = "iso-classify"
+version = "0.0.1"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "gene-structure classifier source-based"
+keywords = ["intron", "exon", "classify", "isoseq"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+iso-pack = { path = "../iso-pack" }
+config.workspace = true
+dashmap.workspace = true
+rayon.workspace = true
+log.workspace = true
+clap.workspace = true
+num_cpus.workspace = true
+hashbrown.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+simple_logger.workspace = true
+serde_json.workspace = true
+bigtools.workspace = true
