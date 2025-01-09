@@ -66,6 +66,13 @@ pub enum SpliceSite {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub enum CoordType {
+    Bounds,
+    Intronic,
+    Exonic,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Strand {
     Forward,
     Reverse,
