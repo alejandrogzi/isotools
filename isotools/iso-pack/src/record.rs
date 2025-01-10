@@ -1,4 +1,4 @@
-use config::SCALE;
+use config::{Strand, SCALE};
 use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -10,7 +10,7 @@ pub struct Bed12;
 pub struct GenePred {
     pub name: String,
     pub chrom: String,
-    pub strand: char,
+    pub strand: Strand,
     pub start: u64,
     pub end: u64,
     pub cds_start: u64,
@@ -29,13 +29,13 @@ pub struct RefGenePred {
     pub middles: BTreeSet<(u64, u64)>,
     pub introns: BTreeSet<(u64, u64)>,
     pub bounds: (u64, u64),
-    pub strand: char,
+    pub strand: Strand,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct IntronPred {
     pub chrom: String,
-    pub strand: char,
+    pub strand: Strand,
     pub introns: BTreeMap<(u64, u64), IntronPredStats>,
 }
 
@@ -178,10 +178,6 @@ impl Bed12 {
             fields.next().ok_or("Cannot parse exon_starts")?,
         );
 
-        if strand != '+' && strand != '-' {
-            return Err("Strand is not + or -");
-        }
-
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
         let (tx_start, tx_end, cds_start, cds_end) =
             abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get)?;
@@ -204,6 +200,12 @@ impl Bed12 {
         introns.sort_unstable();
 
         let exon_count = exons.len();
+
+        let strand = match strand {
+            '+' => Strand::Forward,
+            '-' => Strand::Reverse,
+            _ => return Err("ERROR: Strand is not + or -"),
+        };
 
         Ok(GenePred {
             name: name.into(),
@@ -367,7 +369,7 @@ impl RefGenePred {
         middles: BTreeSet<(u64, u64)>,
         introns: BTreeSet<(u64, u64)>,
         bounds: (u64, u64),
-        strand: char,
+        strand: Strand,
     ) -> Self {
         Self {
             reads,
@@ -445,11 +447,7 @@ impl RefGenePred {
         let mut middles = BTreeSet::new();
         let mut introns = BTreeSet::new();
         let mut bounds = (u64::MAX, 0);
-        let strand = if !reads.is_empty() {
-            reads[0].strand
-        } else {
-            '.'
-        };
+        let strand = reads[0].strand.clone();
 
         for read in &reads {
             bounds.0 = bounds.0.min(read.start);
@@ -491,8 +489,17 @@ impl RefGenePred {
 
 impl IntronPred {
     #[inline(always)]
+    // Vec<GenePred> -> IntronPred
     pub fn from(reads: Vec<GenePred>) -> Self {
         let mut introns = BTreeMap::new();
+
+        for read in &reads {}
+
+        Self {
+            chrom: reads[0].chrom.clone(),
+            strand: reads[0].strand.clone(),
+            introns,
+        }
     }
 }
 

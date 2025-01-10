@@ -1,6 +1,7 @@
 use dashmap::{DashMap, DashSet};
 use indicatif::{ProgressBar, ProgressStyle};
 use num_traits::{Num, NumCast};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -72,7 +73,7 @@ pub enum CoordType {
     Exonic,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Hash, Eq, Serialize, Deserialize)]
 pub enum Strand {
     Forward,
     Reverse,

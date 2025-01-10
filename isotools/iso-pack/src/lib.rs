@@ -29,8 +29,11 @@ pub const RGB: [&str; 10] = [
     "172,126,0",  // brown
 ];
 
-pub type DefaultBucket = Vec<(RefGenePred, Vec<GenePred>)>;
+pub trait BedPackage: Send + Sync + Debug {}
+
+pub type DefaultBucket = (RefGenePred, Vec<GenePred>);
 impl BedPackage for DefaultBucket {}
+impl BedPackage for IntronPred {}
 
 #[derive(Debug, Clone)]
 pub enum PackMode {
@@ -38,8 +41,6 @@ pub enum PackMode {
     Intron,
     Exon,
 }
-
-pub trait BedPackage {}
 
 fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
     let mut file = File::open(file)?;
@@ -148,7 +149,7 @@ pub fn buckerize(
     overlap_exon: bool,
     amount: usize,
     mode: PackMode,
-) -> DashMap<String, Box<dyn BedPackage>> {
+) -> DashMap<String, Vec<Box<dyn BedPackage>>> {
     let cmap = DashMap::new();
     let pb = get_progress_bar(amount as u64, "Buckerizing transcripts");
 
@@ -204,11 +205,11 @@ pub fn buckerize(
                 match mode {
                     PackMode::Default => {
                         let refs = RefGenePred::from(refs);
-                        return (refs, queries);
+                        return Box::new((refs, queries)) as Box<dyn BedPackage>;
                     }
                     PackMode::Intron => {
                         let refs = IntronPred::from(refs);
-                        return refs;
+                        return Box::new(refs) as Box<dyn BedPackage>;
                     }
                     PackMode::Exon => {
                         // let refs = ExonPred::from(refs);
@@ -240,7 +241,7 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     overlap_cds: bool,
     overlap_exon: bool,
     mode: PackMode,
-) -> Result<DashMap<String, Box<dyn BedPackage>>, anyhow::Error> {
+) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error> {
     let refs = unpack(refs, overlap_cds, true).expect("Failed to unpack reference tracks");
 
     let (tracks, n) = if let Some(query) = queries {
