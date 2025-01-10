@@ -91,6 +91,15 @@ impl std::str::FromStr for Strand {
     }
 }
 
+impl std::fmt::Display for Strand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Strand::Forward => write!(f, "+"),
+            Strand::Reverse => write!(f, "-"),
+        }
+    }
+}
+
 // os
 #[cfg(not(windows))]
 const TICK_SETTINGS: (&str, u64) = ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", 80);
@@ -210,27 +219,34 @@ pub enum CliError {
 /// argument validation
 pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
     if !arg.exists() {
-        return Err(CliError::InvalidInput(format!("{:?} does not exist", arg)));
+        return Err(CliError::InvalidInput(format!(
+            "ERROR: {:?} does not exist",
+            arg
+        )));
     }
 
     if !arg.is_file() {
-        return Err(CliError::InvalidInput(format!("{:?} is not a file", arg)));
+        return Err(CliError::InvalidInput(format!(
+            "ERROR: {:?} is not a file",
+            arg
+        )));
     }
 
     match arg.extension() {
         Some(ext) if ext == "bed" => (),
         _ => {
             return Err(CliError::InvalidInput(format!(
-                "file {:?} is not a BED file",
+                "ERROR: file {:?} is not a BED file",
                 arg
             )))
         }
     }
 
     match std::fs::metadata(arg) {
-        Ok(metadata) if metadata.len() == 0 => {
-            Err(CliError::InvalidInput(format!("file {:?} is empty", arg)))
-        }
+        Ok(metadata) if metadata.len() == 0 => Err(CliError::InvalidInput(format!(
+            "ERROR: file {:?} is empty",
+            arg
+        ))),
         Ok(_) => Ok(()),
         Err(e) => Err(CliError::IoError(e)),
     }
