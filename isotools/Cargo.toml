@@ -6,6 +6,7 @@ members = [
     "iso-pack",
     "iso-fusion",
     "iso-cov",
+    "iso-classify"
 ]
 resolver = "2"
 
