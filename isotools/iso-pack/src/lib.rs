@@ -54,7 +54,7 @@ pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
 ) -> Result<String, anyhow::Error> {
     let contents: Vec<String> = files
         .par_iter()
-        .map(|path| reader(path).unwrap_or_else(|e| panic!("Error reading file: {:?}", e)))
+        .map(|path| reader(path).unwrap_or_else(|e| panic!("ERROR: Could not read file: {:?}", e)))
         .collect();
 
     Ok(contents.concat())
@@ -208,7 +208,8 @@ pub fn buckerize(
                         return Box::new((refs, queries)) as Box<dyn BedPackage>;
                     }
                     PackMode::Intron => {
-                        let refs = IntronPred::from(refs);
+                        // queries are TOGA introns
+                        let refs = IntronPred::from(refs, queries);
                         return Box::new(refs) as Box<dyn BedPackage>;
                     }
                     PackMode::Exon => {
@@ -242,10 +243,11 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     overlap_exon: bool,
     mode: PackMode,
 ) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error> {
-    let refs = unpack(refs, overlap_cds, true).expect("Failed to unpack reference tracks");
+    let refs = unpack(refs, overlap_cds, true).expect("ERROR: Failed to unpack reference tracks");
 
     let (tracks, n) = if let Some(query) = queries {
-        let query = unpack(query, overlap_cds, false).expect("Failed to unpack query tracks");
+        let query =
+            unpack(query, overlap_cds, false).expect("ERROR: Failed to unpack query tracks");
         combine(refs, query)
     } else {
         let n = refs.values().flatten().count();
@@ -263,7 +265,7 @@ pub fn combine(refs: GenePredMap, queries: GenePredMap) -> (GenePredMap, usize) 
     let tracks = Arc::new(Mutex::new(refs));
 
     queries.into_par_iter().for_each(|(chr, records)| {
-        let mut tracks = tracks.lock().expect("Mutex lock failed");
+        let mut tracks = tracks.lock().expect("ERROR: Mutex lock failed");
         let acc = tracks.entry(chr).or_default();
         pb.inc(1);
 
@@ -271,7 +273,7 @@ pub fn combine(refs: GenePredMap, queries: GenePredMap) -> (GenePredMap, usize) 
     });
 
     let tracks = Arc::try_unwrap(tracks)
-        .expect("Arc has more than one reference")
+        .expect("ERROR: Arc has more than one reference")
         .into_inner()
         .unwrap();
 

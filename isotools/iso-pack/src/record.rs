@@ -1,7 +1,8 @@
 use config::{Strand, SCALE};
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use std::collections::BTreeSet;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Bed12;
@@ -32,25 +33,28 @@ pub struct RefGenePred {
     pub strand: Strand,
 }
 
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub struct IntronPred {
     pub chrom: String,
     pub strand: Strand,
-    pub introns: BTreeMap<(u64, u64), IntronPredStats>,
+    pub introns: HashMap<(u64, u64), IntronPredStats>,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct IntronPredStats {
-    pub freq: u64,
-    pub splice_ai_donor: usize,
-    pub splice_ai_acceptor: usize,
-    pub max_ent_donor: usize,
-    pub max_ent_acceptor: usize,
-    pub donor_sequence: String,
-    pub acceptor_sequence: String,
-    pub donor_context: String,
-    pub acceptor_context: String,
-    pub intron_position: IntronPosition,
+    pub seen: usize,                     // Frequency
+    pub spanned: usize,                  // Frequency
+    pub splice_ai_donor: usize,          // SpliceAi
+    pub splice_ai_acceptor: usize,       // SpliceAi
+    pub max_ent_donor: usize,            // MaxEntScan
+    pub max_ent_acceptor: usize,         // MaxEntScan
+    pub donor_sequence: String,          // MaxEntScan/TOGA-nag
+    pub acceptor_sequence: String,       // MaxEntScan/TOGA-nag
+    pub donor_context: String,           // MaxEntScan
+    pub acceptor_context: String,        // MaxEntScan
+    pub intron_position: IntronPosition, // TOGA-dependent
+    pub is_toga_supported: bool,         // TOGA-dependent
+    pub is_in_frame: bool,               // Miscellaneous
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -58,6 +62,7 @@ pub enum IntronPosition {
     UTR,
     CDS,
     Mixed,
+    Unknown,
 }
 
 impl GenePred {
@@ -488,12 +493,74 @@ impl RefGenePred {
 }
 
 impl IntronPred {
-    #[inline(always)]
     // Vec<GenePred> -> IntronPred
-    pub fn from(reads: Vec<GenePred>) -> Self {
-        let mut introns = BTreeMap::new();
+    #[inline(always)]
+    pub fn from(reads: Vec<GenePred>, toga: Vec<GenePred>) -> Self {
+        let mut introns = HashMap::new();
+        let mut toga_introns = HashMap::new();
 
-        for read in &reads {}
+        if !toga.is_empty() {
+            for projection in toga {
+                let introns = projection.introns;
+                for intron in introns {
+                    // fmt: intron coord -> (CDS start, CDS end)
+                    toga_introns.insert(intron, (projection.start, projection.end));
+                }
+            }
+        }
+
+        for read in &reads {
+            for ref_intron in &read.introns {
+                if introns.contains_key(ref_intron) {
+                    let stats: &mut IntronPredStats = introns
+                        .get_mut(ref_intron)
+                        .expect("ERROR: Cannot get intron handle. This is a bug!");
+                    stats.seen += 1;
+                } else {
+                    let (cds_start, cds_end) = toga_introns.get(ref_intron).unwrap_or(&(0, 0));
+                    let mut is_toga_supported = false;
+
+                    let position = if *cds_start < ref_intron.0 && ref_intron.1 < *cds_end {
+                        is_toga_supported = true;
+                        IntronPosition::CDS
+                    } else if *cds_start == 0 && *cds_end == 0 {
+                        IntronPosition::Unknown
+                    } else if ref_intron.0 > *cds_end || ref_intron.1 < *cds_start {
+                        IntronPosition::UTR
+                    } else {
+                        // a bit tricky to say if its TOGA supported!
+                        is_toga_supported = true;
+                        IntronPosition::Mixed
+                    };
+
+                    let in_frame = (ref_intron.0 - ref_intron.0) % 3 == 0;
+
+                    let stats = IntronPredStats {
+                        seen: 1,
+                        spanned: 1,
+                        splice_ai_donor: 0,
+                        splice_ai_acceptor: 0,
+                        max_ent_donor: 0,
+                        max_ent_acceptor: 0,
+                        donor_sequence: String::new(),
+                        acceptor_sequence: String::new(),
+                        donor_context: String::new(),
+                        acceptor_context: String::new(),
+                        intron_position: position,
+                        is_toga_supported,
+                        is_in_frame: in_frame,
+                    };
+
+                    introns.insert(ref_intron.clone(), stats);
+                }
+            }
+
+            for (intron, stats) in introns.iter_mut() {
+                if read.start <= intron.0 && read.end >= intron.1 {
+                    stats.spanned += 1;
+                }
+            }
+        }
 
         Self {
             chrom: reads[0].chrom.clone(),
