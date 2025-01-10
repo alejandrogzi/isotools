@@ -72,7 +72,7 @@ pub struct IntronArgs {
         long = "twobit",
         required = false,
         value_name = "PATH",
-        num_args = 1..,
+        num_args = 1,
         help = "Path to genome 2bit file"
     )]
     pub twobit: Option<PathBuf>,
@@ -82,10 +82,11 @@ pub struct IntronArgs {
         long = "toga",
         required = false,
         value_name = "PATH",
+        value_delimiter = ',',
         num_args = 1..,
         help = "Path to TOGA annotation .bed file"
     )]
-    pub toga: Option<PathBuf>,
+    pub toga: Option<Vec<PathBuf>>,
 }
 
 impl ArgCheck for IntronArgs {
@@ -97,8 +98,9 @@ impl ArgCheck for IntronArgs {
         &self.iso
     }
 
+    // filled without validation
     fn get_query(&self) -> &Vec<PathBuf> {
-        todo!()
+        &self.iso
     }
 }
 
