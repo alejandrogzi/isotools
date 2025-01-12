@@ -1,11 +1,13 @@
-use config::{Strand, SCALE};
+use config::{BedRecord, Strand, OVERLAP_CDS, SCALE};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeSet;
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Bed12;
+pub struct Bed12 {
+    data: GenePred,
+}
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Eq, Hash)]
 pub struct GenePred {
@@ -226,6 +228,30 @@ impl Bed12 {
             line: line.to_string(),
             is_ref,
         })
+    }
+}
+
+impl BedRecord for Bed12 {
+    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>> {
+        let data =
+            Bed12::parse(line.as_str(), OVERLAP_CDS, false).expect("ERROR: Cannot parse line");
+        Ok(Bed12 { data })
+    }
+
+    fn chrom(&self) -> &str {
+        &self.data.chrom.as_str()
+    }
+
+    fn coord(&self) -> (u64, u64) {
+        (self.data.start, self.data.end)
+    }
+
+    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
+        self.data.introns.iter().cloned().collect()
+    }
+
+    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
+        self.data.exons.iter().cloned().collect()
     }
 }
 
