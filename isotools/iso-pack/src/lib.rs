@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::Read;
@@ -29,11 +30,32 @@ pub const RGB: [&str; 10] = [
     "172,126,0",  // brown
 ];
 
-pub trait BedPackage: Send + Sync + Debug {}
+pub trait BedPackage: Send + Sync + Debug + Any {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
 
 pub type DefaultBucket = (RefGenePred, Vec<GenePred>);
-impl BedPackage for DefaultBucket {}
-impl BedPackage for IntronPred {}
+
+impl BedPackage for DefaultBucket {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+impl BedPackage for IntronPred {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum PackMode {
@@ -42,7 +64,7 @@ pub enum PackMode {
     Exon,
 }
 
-fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
+pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
     let mut file = File::open(file)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
@@ -140,8 +162,6 @@ impl UnionFind {
         }
     }
 }
-
-// Vec<(RefGenePred, Vec<GenePred>)>
 
 pub fn buckerize(
     tracks: GenePredMap,
