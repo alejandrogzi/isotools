@@ -46,10 +46,10 @@ pub struct IntronPred {
 pub struct IntronPredStats {
     pub seen: usize,                     // Frequency
     pub spanned: usize,                  // Frequency
-    pub splice_ai_donor: usize,          // SpliceAi
-    pub splice_ai_acceptor: usize,       // SpliceAi
-    pub max_ent_donor: usize,            // MaxEntScan
-    pub max_ent_acceptor: usize,         // MaxEntScan
+    pub splice_ai_donor: f64,            // SpliceAi
+    pub splice_ai_acceptor: f64,         // SpliceAi
+    pub max_ent_donor: f64,              // MaxEntScan
+    pub max_ent_acceptor: f64,           // MaxEntScan
     pub donor_sequence: String,          // MaxEntScan/TOGA-nag
     pub acceptor_sequence: String,       // MaxEntScan/TOGA-nag
     pub donor_context: Sequence,         // MaxEntScan 9-mer
@@ -555,11 +555,18 @@ impl RefGenePred {
 impl IntronPred {
     // Vec<GenePred> -> IntronPred
     #[inline(always)]
+    #[allow(unused_assignments)]
     pub fn from(reads: Vec<GenePred>, toga: Vec<GenePred>) -> Self {
         let mut introns = HashMap::new();
         let mut toga_introns = HashMap::new();
 
+        let mut chr = String::new();
+        let mut strand = Strand::Forward;
+
         if !toga.is_empty() {
+            chr = toga[0].chrom.clone();
+            strand = toga[0].strand.clone();
+
             for projection in toga {
                 let introns = projection.introns;
                 for intron in introns {
@@ -567,6 +574,9 @@ impl IntronPred {
                     toga_introns.insert(intron, (projection.start, projection.end));
                 }
             }
+        } else {
+            chr = reads[0].chrom.clone();
+            strand = reads[0].strand.clone();
         }
 
         for read in &reads {
@@ -597,11 +607,11 @@ impl IntronPred {
 
                     let stats = IntronPredStats {
                         seen: 1,
-                        spanned: 1,
-                        splice_ai_donor: 0,
-                        splice_ai_acceptor: 0,
-                        max_ent_donor: 0,
-                        max_ent_acceptor: 0,
+                        spanned: 0,
+                        splice_ai_donor: 0.0,
+                        splice_ai_acceptor: 0.0,
+                        max_ent_donor: 0.0,
+                        max_ent_acceptor: 0.0,
                         donor_sequence: String::new(),
                         acceptor_sequence: String::new(),
                         donor_context: Sequence::new(&[]),
@@ -623,8 +633,8 @@ impl IntronPred {
         }
 
         Self {
-            chrom: reads[0].chrom.clone(),
-            strand: reads[0].strand.clone(),
+            chrom: chr,
+            strand,
             introns,
         }
     }
