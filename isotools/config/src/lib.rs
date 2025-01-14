@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use std::any::{self, Any};
+use std::any::Any;
 use std::borrow::Borrow;
 use std::env;
 use std::fs::File;
@@ -76,6 +76,33 @@ pub const COMPLEMENT: [u8; 128] = {
     nt
 };
 
+pub const BGD: [f64; 128] = {
+    let mut bgd = [0.0; 128];
+    bgd[b'A' as usize] = 0.27;
+    bgd[b'T' as usize] = 0.27;
+    bgd[b'C' as usize] = 0.23;
+    bgd[b'G' as usize] = 0.23;
+    bgd
+};
+
+pub const CONS1: [f64; 128] = {
+    let mut bgd = [0.0; 128];
+    bgd[b'A' as usize] = 0.9903;
+    bgd[b'C' as usize] = 0.0032;
+    bgd[b'G' as usize] = 0.0034;
+    bgd[b'T' as usize] = 0.0030;
+    bgd
+};
+
+pub const CONS2: [f64; 128] = {
+    let mut bgd = [0.0; 128];
+    bgd[b'A' as usize] = 0.0027;
+    bgd[b'C' as usize] = 0.0037;
+    bgd[b'G' as usize] = 0.9905;
+    bgd[b'T' as usize] = 0.0030;
+    bgd
+};
+
 // dirnames
 pub const CLASSIFY_ASSETS: &str = "assets";
 
@@ -143,9 +170,9 @@ pub struct Sequence {
 }
 
 impl Sequence {
-    pub fn new(seq: [u8]) -> Self {
+    pub fn new(seq: &[u8]) -> Self {
         Self {
-            seq: unsafe { from_utf8_unchecked(&seq).to_string() },
+            seq: unsafe { from_utf8_unchecked(seq).to_string() },
         }
     }
 
@@ -190,6 +217,45 @@ impl Sequence {
 
     pub fn slice(&self, start: usize, end: usize) -> String {
         self.seq[start..end].to_string()
+    }
+
+    pub fn slice_as_seq(&self, start: usize, end: usize) -> Self {
+        Self {
+            seq: self.seq[start..end].to_string(),
+        }
+    }
+
+    pub fn slice_as_bytes(&self, start: usize, end: usize) -> &[u8] {
+        self.seq[start..end].as_bytes()
+    }
+
+    pub fn at_as_bytes(&self, idx: usize) -> usize {
+        self.seq.as_bytes()[idx] as usize
+    }
+
+    pub fn fill(&self, kmer: usize) -> String {
+        let mut seq = "A".repeat(kmer);
+        seq.push_str(self.seq.as_str());
+
+        seq
+    }
+
+    pub fn skip(&self, from: usize, to: usize) -> Sequence {
+        Sequence {
+            seq: self.seq[..from].to_string() + &self.seq[to..],
+        }
+    }
+}
+
+impl std::fmt::Display for Sequence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.seq)
+    }
+}
+
+impl Borrow<String> for Sequence {
+    fn borrow(&self) -> &String {
+        &self.seq
     }
 }
 
