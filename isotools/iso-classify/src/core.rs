@@ -234,9 +234,9 @@ fn process_component(
         }
 
         // get spliceAi scores
-        if let Some(scores) = splice_scores {
-            if let Some(donor_score_map) = scores.0.as_ref() {
-                let acceptor_score_map = scores
+        if let Some(splice_scores) = splice_scores {
+            if let Some(donor_score_map) = splice_scores.0.as_ref() {
+                let acceptor_score_map = splice_scores
                     .1
                     .as_ref()
                     .expect("ERROR: Acceptor score map is None, this is a bug!");
