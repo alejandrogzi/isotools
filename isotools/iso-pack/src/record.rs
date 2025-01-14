@@ -59,12 +59,46 @@ pub struct IntronPredStats {
     pub is_in_frame: bool,               // Miscellaneous
 }
 
+impl IntronPredStats {
+    pub fn fmt(&self, start: u64, end: u64) -> String {
+        format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            start,
+            end,
+            self.seen,
+            self.spanned,
+            self.splice_ai_donor,
+            self.splice_ai_acceptor,
+            self.max_ent_donor,
+            self.max_ent_acceptor,
+            self.donor_sequence,
+            self.acceptor_sequence,
+            self.donor_context,
+            self.acceptor_context,
+            self.intron_position,
+            self.is_toga_supported,
+            self.is_in_frame
+        )
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum IntronPosition {
     UTR,
     CDS,
     Mixed,
     Unknown,
+}
+
+impl std::fmt::Display for IntronPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            IntronPosition::UTR => write!(f, "UTR"),
+            IntronPosition::CDS => write!(f, "CDS"),
+            IntronPosition::Mixed => write!(f, "Mixed"),
+            IntronPosition::Unknown => write!(f, "Unknown"),
+        }
+    }
 }
 
 impl GenePred {
