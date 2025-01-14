@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use config::ArgCheck;
 use std::path::PathBuf;
 
@@ -87,6 +87,35 @@ pub struct IntronArgs {
         help = "Path to TOGA annotation .bed file"
     )]
     pub toga: Option<Vec<PathBuf>>,
+
+    #[arg(
+        long = "scan",
+        required = false,
+        value_name = "FLAG",
+        help = "Use MaxEntScan for splice site prediction",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+        requires("twobit")
+    )]
+    pub scan: bool,
+
+    #[arg(
+        long = "nag",
+        required = false,
+        value_name = "FLAG",
+        help = "Use TOGA-nag for splice site prediction",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+        requires("twobit"),
+        requires("toga")
+    )]
+    pub nag: bool,
 }
 
 impl ArgCheck for IntronArgs {
