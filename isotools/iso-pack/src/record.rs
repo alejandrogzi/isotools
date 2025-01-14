@@ -1,4 +1,4 @@
-use config::{BedRecord, Strand, OVERLAP_CDS, SCALE};
+use config::{BedRecord, Sequence, Strand, OVERLAP_CDS, SCALE};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
@@ -52,8 +52,8 @@ pub struct IntronPredStats {
     pub max_ent_acceptor: usize,         // MaxEntScan
     pub donor_sequence: String,          // MaxEntScan/TOGA-nag
     pub acceptor_sequence: String,       // MaxEntScan/TOGA-nag
-    pub donor_context: String,           // MaxEntScan
-    pub acceptor_context: String,        // MaxEntScan
+    pub donor_context: Sequence,         // MaxEntScan 9-mer
+    pub acceptor_context: Sequence,      // MaxEntScan 23-mer
     pub intron_position: IntronPosition, // TOGA-dependent
     pub is_toga_supported: bool,         // TOGA-dependent
     pub is_in_frame: bool,               // Miscellaneous
@@ -570,8 +570,8 @@ impl IntronPred {
                         max_ent_acceptor: 0,
                         donor_sequence: String::new(),
                         acceptor_sequence: String::new(),
-                        donor_context: String::new(),
-                        acceptor_context: String::new(),
+                        donor_context: Sequence::new(&[]),
+                        acceptor_context: Sequence::new(&[]),
                         intron_position: position,
                         is_toga_supported,
                         is_in_frame: in_frame,

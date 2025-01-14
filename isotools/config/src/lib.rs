@@ -1,15 +1,18 @@
 use dashmap::{DashMap, DashSet};
+use hashbrown::HashSet;
 use indicatif::{ProgressBar, ProgressStyle};
 use num_traits::{Num, NumCast};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use std::any::Any;
+use std::any::{self, Any};
 use std::borrow::Borrow;
+use std::env;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::str::from_utf8_unchecked;
 use std::time::Duration;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,9 +28,9 @@ pub const TRUNCATION_THRESHOLD: f32 = 0.5;
 pub const TRUNCATION_RECOVERY_THRESHOLD: f32 = 0.5;
 
 // intron-retention numeric values
-pub const RETENTION_RATIO_THRESHOLD: f32 = 0.001; // allowing everthing to enter recover step
+pub const RETENTION_RATIO_THRESHOLD: f32 = 0.001; // WARN: allowing everthing to enter recover step
 pub const INTRON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
-pub const SPLICE_AI_SCORE_RECOVERY_THRESHOLD: f32 = 0.01; // if both splice sites are above, is a true intron
+pub const SPLICE_AI_SCORE_RECOVERY_THRESHOLD: f32 = 0.01; // INFO: if both splice sites are above, is a true intron
 
 // fusion numeric values
 pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
@@ -42,6 +45,9 @@ pub const INTERGENIC_REGIONS: &str = "intergenic.bed";
 pub const FUSIONS: &str = "fusions.bed";
 pub const FUSION_FREE: &str = "fusions.free.bed";
 pub const FUSION_REVIEW: &str = "fusions.review.bed";
+pub const INTRON_CLASSIFICATION: &str = "reference_introns.bed";
+pub const MAXENTSCAN_ACCEPTOR_DB: &str = "db.tsv";
+pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
 
 // spliceai-related names
 pub const ACCEPTOR_MINUS: &str = "spliceAiAcceptorMinus.bw";
@@ -54,11 +60,41 @@ pub const COLORIZE: bool = false;
 pub const OVERLAP_CDS: bool = false;
 pub const OVERLAP_EXON: bool = true;
 
+// collections
+pub const COMPLEMENT: [u8; 128] = {
+    let mut nt = [0; 128];
+    nt[b'A' as usize] = b'T';
+    nt[b'T' as usize] = b'A';
+    nt[b'C' as usize] = b'G';
+    nt[b'G' as usize] = b'C';
+    nt[b'a' as usize] = b't';
+    nt[b't' as usize] = b'a';
+    nt[b'c' as usize] = b'g';
+    nt[b'g' as usize] = b'c';
+    nt[b'N' as usize] = b'N';
+    nt[b'n' as usize] = b'n';
+    nt
+};
+
+// dirnames
+pub const CLASSIFY_ASSETS: &str = "assets";
+
 // types
 pub type SpliceMap = (StrandSpliceMap, StrandSpliceMap);
 pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
 pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f32>>);
 pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
+
+// traits
+pub trait BedRecord: Send + Sync {
+    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>>
+    where
+        Self: Sized;
+    fn chrom(&self) -> &str;
+    fn coord(&self) -> (u64, u64);
+    fn intronic_coords(&self) -> HashSet<(u64, u64)>; // WARN: will not work for Bed[4,6,8]
+    fn exonic_coords(&self) -> HashSet<(u64, u64)>; // WARN: will not work for Bed[4,6,8]
+}
 
 // public enums
 pub enum SpliceSite {
@@ -97,6 +133,63 @@ impl std::fmt::Display for Strand {
             Strand::Forward => write!(f, "+"),
             Strand::Reverse => write!(f, "-"),
         }
+    }
+}
+
+// public structs
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+pub struct Sequence {
+    pub seq: String,
+}
+
+impl Sequence {
+    pub fn new(seq: [u8]) -> Self {
+        Self {
+            seq: unsafe { from_utf8_unchecked(&seq).to_string() },
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.seq.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.seq.is_empty()
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.seq.as_bytes()
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.seq.as_str()
+    }
+
+    pub fn to_string(&self) -> String {
+        self.seq.clone()
+    }
+
+    pub fn to_uppercase(&self) -> String {
+        self.seq.to_uppercase()
+    }
+
+    pub fn to_lowercase(&self) -> String {
+        self.seq.to_lowercase()
+    }
+
+    pub fn reverse_complement(&self) -> Self {
+        let mut rev = self.seq.chars().rev().collect::<String>();
+        rev.make_ascii_uppercase();
+        rev = rev
+            .chars()
+            .map(|c| COMPLEMENT[c as usize] as char)
+            .collect::<String>();
+
+        Self { seq: rev }
+    }
+
+    pub fn slice(&self, start: usize, end: usize) -> String {
+        self.seq[start..end].to_string()
     }
 }
 
