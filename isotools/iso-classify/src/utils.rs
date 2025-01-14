@@ -14,9 +14,11 @@ use std::sync::Mutex;
 
 use config::{
     get_progress_bar, BedRecord, CoordType, Sequence, SharedSpliceMap, SpliceScores, SpliceSite,
-    Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, CLASSIFY_ASSETS, DONOR_MINUS,
-    DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB, SCALE,
+    Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS, CONS1, CONS2,
+    DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB, SCALE,
 };
+
+pub const MINIMUM_ACCEPTOR_LENGTH: usize = 23;
 
 pub type SpliceScoreMap = HashMap<Sequence, Vec<f64>>;
 
@@ -479,14 +481,18 @@ where
 }
 
 pub fn load_scan_scores() -> Option<(SpliceScoreMap, SpliceScoreMap)> {
-    let assets = std::env::current_exe()
+    let assets = std::env::current_dir()
         .expect("Failed to get executable path")
-        .parent()
-        .expect("ERROR: Failed to get parent directory")
         .join(CLASSIFY_ASSETS);
 
     let acceptor_scores = parse_tsv::<AcceptorScores>(
-        reader(assets.join(MAXENTSCAN_ACCEPTOR_DB)).expect("ERROR: Cannot read acceptor scores!"),
+        reader(assets.join(MAXENTSCAN_ACCEPTOR_DB)).expect(
+            format!(
+                "ERROR: Cannot read acceptor scores from {:?}!",
+                assets.join(MAXENTSCAN_ACCEPTOR_DB)
+            )
+            .as_str(),
+        ),
     )
     .expect("ERROR: Could not parse acceptor scores!");
 
@@ -514,6 +520,123 @@ pub fn get_sequences(twobit: PathBuf) -> Option<DashMap<String, Vec<u8>>> {
     Some(sequences)
 }
 
-pub fn calculate_acceptor_score(seq: &Sequence, tables: &Vec<f64>) -> f64 {
-    todo!()
+pub fn calculate_acceptor_score(seq: &Sequence, tables: &SpliceScoreMap) -> f64 {
+    if seq.len() < MINIMUM_ACCEPTOR_LENGTH {
+        panic!("ERROR: Sequence is too short for acceptor score calculation!");
+    }
+
+    let me_score = score_max_ent(seq, tables);
+    let c_score = score_consensus_seq(seq);
+
+    (c_score * me_score).log2()
+}
+
+pub fn score_max_ent(seq: &Sequence, tables: &SpliceScoreMap) -> f64 {
+    let seq = seq.skip(18, 20);
+
+    let scores = vec![
+        tables
+            .get(&seq.slice(0, 7))
+            .expect("ERROR: Could not get acceptor scores!")[0],
+        tables
+            .get(&seq.slice(7, 14))
+            .expect("ERROR: Could not get acceptor scores!")[1],
+        tables
+            .get(&seq.slice(14, 21))
+            .expect("ERROR: Could not get acceptor scores!")[2],
+        tables
+            .get(&seq.slice(4, 11))
+            .expect("ERROR: Could not get acceptor scores!")[3],
+        tables
+            .get(&seq.slice(11, 18))
+            .expect("ERROR: Could not get acceptor scores!")[4],
+        tables
+            .get(&seq.slice_as_seq(4, 7).fill(4))
+            .expect("ERROR: Could not get acceptor scores!")[5],
+        tables
+            .get(&seq.slice_as_seq(7, 11).fill(3))
+            .expect("ERROR: Could not get acceptor scores!")[6],
+        tables
+            .get(&seq.slice_as_seq(11, 14).fill(4))
+            .expect("ERROR: Could not get acceptor scores!")[7],
+        tables
+            .get(&seq.slice_as_seq(14, 18).fill(3))
+            .expect("ERROR: Could not get acceptor scores!")[8],
+    ];
+
+    let num: f64 = scores[0..5].iter().product();
+    let den: f64 = scores[5..].iter().product();
+
+    let me_score = num / den;
+
+    me_score
+}
+
+pub fn score_consensus_seq(seq: &Sequence) -> f64 {
+    let nt1 = seq.at_as_bytes(18);
+    let nt2 = seq.at_as_bytes(19);
+
+    CONS1[nt1] * CONS2[nt2] / (BGD[nt1] * BGD[nt2])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_consensus_score() {
+        let seq = Sequence::new(b"AAAAAAAAAAAAAAAAAAGTAAA");
+        let c_score = score_consensus_seq(&seq);
+
+        assert_eq!(c_score, 0.00016425120772946855);
+
+        let seq = Sequence::new(b"TTTAAAAAAAAAAAAAAAGTAAT");
+        let c_score = score_consensus_seq(&seq);
+
+        assert_eq!(c_score, 0.00016425120772946854);
+    }
+
+    #[test]
+    fn test_calculate_max_ent_score() {
+        let seq = Sequence::new(b"AAAAAAAAAAAAAAAAAAGTAAA");
+        let tables = load_scan_scores().expect("ERROR: Could not load scan scores!");
+        let me_score = score_max_ent(&seq, &tables.1);
+
+        assert_eq!(me_score, 0.0003461868180847604);
+
+        let seq = Sequence::new(b"TTTAAAAAAAAAAAAAAAGTAAT");
+        let tables = load_scan_scores().expect("ERROR: Could not load scan scores!");
+        let me_score = score_max_ent(&seq, &tables.1);
+
+        assert_eq!(me_score, 0.001167787963137549);
+    }
+
+    #[test]
+    fn test_calculate_acceptor_score() {
+        let seq = Sequence::new(b"AAAAAAAAAAAAAAAAAAGTAAA");
+        let tables = load_scan_scores().expect("ERROR: Could not load scan scores!");
+        let score = calculate_acceptor_score(&seq, &tables.1);
+
+        assert_eq!(score, -24.067969988875006);
+
+        let seq = Sequence::new(b"TTTAAAAAAAAAAAAAAAGTAAT");
+        let score = calculate_acceptor_score(&seq, &tables.1);
+
+        assert_eq!(score, -22.313814339694286);
+    }
+
+    #[test]
+    fn test_calculate_donor_score() {
+        let seq = Sequence::new(b"AAGGAAAAA");
+        let tables = load_scan_scores().expect("ERROR: Could not load scan scores!");
+
+        let score = tables
+            .0
+            .get(&seq)
+            .expect("ERROR: Could not get donor scores!")
+            .get(0)
+            .expect("ERROR: Could not get donor scores!");
+
+        assert_eq!(score, &0.192);
+    }
 }

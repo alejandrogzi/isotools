@@ -25,3 +25,4 @@ anyhow.workspace = true
 simple_logger.workspace = true
 serde_json.workspace = true
 bigtools.workspace = true
+twobit.workspace = true

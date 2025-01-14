@@ -71,7 +71,7 @@ pub fn classify_introns(args: Args) -> Result<()> {
         pb.inc(1);
     });
 
-    // write_objs(&accumulator.introns, INTRON_CLASSIFICATION);
+    write_objs(&accumulator.introns, INTRON_CLASSIFICATION);
 
     // dbg!(isoseqs);
 
@@ -120,13 +120,16 @@ fn distribute(
     nag: bool,
 ) {
     components.into_par_iter().for_each(|mut comp| {
-        let mut comp = comp
+        let comp = comp
             .as_any_mut()
             .downcast_mut::<IntronPred>()
             .expect("ERROR: Could not downcast to IntronPred!");
 
-        let something =
-            process_component(comp, banned, splice_map, scan_scores, genome, counter, nag);
+        let info = process_component(comp, banned, splice_map, scan_scores, genome, counter, nag);
+
+        info.into_iter().for_each(|intron| {
+            accumulator.introns.insert(intron);
+        });
     });
 }
 
@@ -141,14 +144,16 @@ fn process_component(
     genome: &Option<Genome>,
     counter: &ParallelCounter,
     nag: bool,
-) -> Result<()> {
+) -> Vec<String> {
+    let mut acc = Vec::with_capacity(component.introns.len());
+
     // get SpliceAi scores
     let splice_scores = match component.strand {
         Strand::Forward => Some(&splice_map.0),
         Strand::Reverse => Some(&splice_map.1),
-        _ => panic!("ERROR: Invalid strand in reference component!"),
     };
 
+    // QUESTION: should we parallelize this?
     for (intron, descriptor) in component.introns.iter_mut() {
         let intron_start = intron.0 as u64;
         let intron_end = intron.1 as u64;
@@ -174,7 +179,7 @@ fn process_component(
                             [intron_start as usize - 21..intron_start as usize + 3]
                             .as_ref(),
                     );
-                    let acceptor_seq = acceptor_context.slice(20, 22);
+                    let acceptor_seq = acceptor_context.slice(18, 20);
 
                     descriptor.donor_sequence = donor_seq;
                     descriptor.acceptor_sequence = acceptor_seq;
@@ -202,7 +207,7 @@ fn process_component(
                             .as_ref(),
                     )
                     .reverse_complement();
-                    let acceptor_seq = acceptor_context.slice(20, 22);
+                    let acceptor_seq = acceptor_context.slice(18, 20);
 
                     descriptor.donor_sequence = donor_seq;
                     descriptor.acceptor_sequence = acceptor_seq;
@@ -213,7 +218,8 @@ fn process_component(
 
             // get MaxEnt scores
             if let Some(scan_scores) = scan_scores {
-                let (donor_score_map, acceptor_score_map) = scan_scores;
+                let (donor_score_map, acceptor_score_map): &(SpliceScoreMap, SpliceScoreMap) =
+                    scan_scores;
 
                 let donor_score = donor_score_map
                     .get(&descriptor.donor_context)
@@ -223,11 +229,8 @@ fn process_component(
 
                 descriptor.max_ent_donor = *donor_score as usize;
 
-                let acceptor_entropies = acceptor_score_map
-                    .get(&descriptor.acceptor_context)
-                    .expect("ERROR: Acceptor score is None, this is a bug!");
                 let acceptor_score =
-                    calculate_acceptor_score(&descriptor.acceptor_context, acceptor_entropies);
+                    calculate_acceptor_score(&descriptor.acceptor_context, acceptor_score_map);
 
                 descriptor.max_ent_acceptor = acceptor_score as usize;
             }
@@ -249,7 +252,6 @@ fn process_component(
                         (SCALE - intron_start) as usize,
                         (SCALE - intron_end) as usize - 1,
                     ),
-                    _ => panic!("ERROR: Invalid strand in query component!"),
                 };
 
                 let (donor_score, acceptor_score) = (
@@ -267,7 +269,9 @@ fn process_component(
                 descriptor.splice_ai_acceptor = acceptor_score as usize;
             }
         }
+
+        acc.push(descriptor.fmt(intron_start, intron_end));
     }
 
-    Ok(())
+    acc
 }
