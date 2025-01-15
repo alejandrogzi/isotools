@@ -526,12 +526,21 @@ pub fn get_sequences(twobit: PathBuf) -> Option<DashMap<String, Vec<u8>>> {
 }
 
 pub fn calculate_acceptor_score(seq: &Sequence, tables: &SpliceScoreMap) -> f64 {
-    if seq.len() < MINIMUM_ACCEPTOR_LENGTH {
-        panic!("ERROR: Sequence is too short for acceptor score calculation!");
+    if seq.len() != MINIMUM_ACCEPTOR_LENGTH {
+        let msg = format!(
+            "ERROR: Sequence must be a 23-mer for acceptor score calculation, yours is {}!",
+            seq.len()
+        );
+        log::error!("{}", msg);
+        std::process::exit(1);
     }
 
     let me_score = score_max_ent(seq, tables);
     let c_score = score_consensus_seq(seq);
+
+    if me_score == 0.0 {
+        return 0.0;
+    }
 
     (c_score * me_score).log2()
 }
@@ -540,33 +549,23 @@ pub fn score_max_ent(seq: &Sequence, tables: &SpliceScoreMap) -> f64 {
     let seq = seq.skip(18, 20);
 
     let scores = vec![
-        tables
-            .get(&seq.slice(0, 7))
-            .expect("ERROR: Could not get acceptor scores!")[0],
-        tables
-            .get(&seq.slice(7, 14))
-            .expect("ERROR: Could not get acceptor scores!")[1],
-        tables
-            .get(&seq.slice(14, 21))
-            .expect("ERROR: Could not get acceptor scores!")[2],
-        tables
-            .get(&seq.slice(4, 11))
-            .expect("ERROR: Could not get acceptor scores!")[3],
-        tables
-            .get(&seq.slice(11, 18))
-            .expect("ERROR: Could not get acceptor scores!")[4],
+        tables.get(&seq.slice(0, 7)).unwrap_or(&vec![0.0])[0],
+        tables.get(&seq.slice(7, 14)).unwrap_or(&vec![0.0])[1],
+        tables.get(&seq.slice(14, 21)).unwrap_or(&vec![0.0])[2],
+        tables.get(&seq.slice(4, 11)).unwrap_or(&vec![0.0])[3],
+        tables.get(&seq.slice(11, 18)).unwrap_or(&vec![0.0])[4],
         tables
             .get(&seq.slice_as_seq(4, 7).fill(4))
-            .expect("ERROR: Could not get acceptor scores!")[5],
+            .unwrap_or(&vec![0.0])[5],
         tables
             .get(&seq.slice_as_seq(7, 11).fill(3))
-            .expect("ERROR: Could not get acceptor scores!")[6],
+            .unwrap_or(&vec![0.0])[6],
         tables
             .get(&seq.slice_as_seq(11, 14).fill(4))
-            .expect("ERROR: Could not get acceptor scores!")[7],
+            .unwrap_or(&vec![0.0])[7],
         tables
             .get(&seq.slice_as_seq(14, 18).fill(3))
-            .expect("ERROR: Could not get acceptor scores!")[8],
+            .unwrap_or(&vec![0.0])[8],
     ];
 
     let num: f64 = scores[0..5].iter().product();
