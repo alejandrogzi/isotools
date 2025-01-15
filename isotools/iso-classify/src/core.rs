@@ -5,8 +5,6 @@ use hashbrown::HashSet;
 use packbed::{packbed, BedPackage, IntronPred, PackMode};
 use rayon::prelude::*;
 
-use std::sync::atomic::AtomicU32;
-
 use config::{
     get_progress_bar, write_objs, Sequence, SharedSpliceMap, Strand, INTRON_CLASSIFICATION,
     OVERLAP_CDS, OVERLAP_EXON, SCALE,
@@ -44,14 +42,11 @@ pub fn classify_introns(args: Args) -> Result<()> {
 
     let pb = get_progress_bar(isoseqs.len() as u64, "Processing...");
 
-    let counter = ParallelCounter::default();
     let accumulator = ParallelAccumulator::default();
 
     isoseqs.into_par_iter().for_each(|bucket| {
         let chr = bucket.0;
         let components = bucket.1;
-
-        // counter.inc_components(components.len() as u32);
 
         let binding = HashSet::new();
         let banned = blacklist.get(&chr).unwrap_or(&binding);
@@ -64,36 +59,16 @@ pub fn classify_introns(args: Args) -> Result<()> {
             &scan_scores,
             &genome,
             &accumulator,
-            &counter,
             args.nag,
         );
 
         pb.inc(1);
     });
 
+    pb.finish_and_clear();
     write_objs(&accumulator.introns, INTRON_CLASSIFICATION);
 
-    // dbg!(isoseqs);
-
     Ok(())
-}
-
-pub struct ParallelCounter {
-    components: AtomicU32,
-}
-
-impl ParallelCounter {
-    fn new() -> Self {
-        Self {
-            components: AtomicU32::new(0),
-        }
-    }
-}
-
-impl Default for ParallelCounter {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 struct ParallelAccumulator {
@@ -116,7 +91,6 @@ fn distribute(
     scan_scores: &ScanScores,
     genome: &Option<Genome>,
     accumulator: &ParallelAccumulator,
-    counter: &ParallelCounter,
     nag: bool,
 ) {
     components.into_par_iter().for_each(|mut comp| {
@@ -125,7 +99,7 @@ fn distribute(
             .downcast_mut::<IntronPred>()
             .expect("ERROR: Could not downcast to IntronPred!");
 
-        let info = process_component(comp, banned, splice_map, scan_scores, genome, counter, nag);
+        let info = process_component(comp, banned, splice_map, scan_scores, genome, nag);
 
         info.into_iter().for_each(|intron| {
             accumulator.introns.insert(intron);
@@ -142,7 +116,6 @@ fn process_component(
     splice_map: &(SharedSpliceMap, SharedSpliceMap),
     scan_scores: &ScanScores,
     genome: &Option<Genome>,
-    counter: &ParallelCounter,
     nag: bool,
 ) -> Vec<String> {
     let mut acc = Vec::with_capacity(component.introns.len());
@@ -157,6 +130,10 @@ fn process_component(
     for (intron, descriptor) in component.introns.iter_mut() {
         let intron_start = intron.0 as u64;
         let intron_end = intron.1 as u64;
+
+        if banned.contains(&(intron_start, intron_end)) {
+            continue;
+        }
 
         // get sequences
         if let Some(genome) = genome {
@@ -175,8 +152,8 @@ fn process_component(
                     let acceptor_context = Sequence::new(
                         genome
                             .get(component.chrom.as_str())
-                            .expect("ERROR: Could not read donor context!")
-                            [intron_start as usize - 21..intron_start as usize + 3]
+                            .expect("ERROR: Could not read acceptor context!")
+                            [intron_end as usize - 19..intron_end as usize + 4]
                             .as_ref(),
                     );
                     let acceptor_seq = acceptor_context.slice(18, 20);
@@ -201,9 +178,8 @@ fn process_component(
                     let acceptor_context = Sequence::new(
                         genome
                             .get(component.chrom.as_str())
-                            .expect("ERROR: Could not read donor context!")
-                            [(SCALE - intron_start) as usize - 3
-                                ..(SCALE - intron_start) as usize + 21]
+                            .expect("ERROR: Could not read acceptor context!")
+                            [(SCALE - intron_end) as usize - 2..(SCALE - intron_end) as usize + 21]
                             .as_ref(),
                     )
                     .reverse_complement();
@@ -223,16 +199,15 @@ fn process_component(
 
                 let donor_score = donor_score_map
                     .get(&descriptor.donor_context)
-                    .expect("ERROR: Donor score is None, this is a bug!")
-                    .get(0)
-                    .expect("ERROR: Donor score is None, this is a bug!");
+                    .and_then(|r| r.get(0))
+                    .unwrap_or(&0.0);
 
-                descriptor.max_ent_donor = *donor_score as usize;
+                descriptor.max_ent_donor = *donor_score as f32;
 
                 let acceptor_score =
                     calculate_acceptor_score(&descriptor.acceptor_context, acceptor_score_map);
 
-                descriptor.max_ent_acceptor = acceptor_score as usize;
+                descriptor.max_ent_acceptor = acceptor_score as f32;
             }
         }
 
@@ -265,12 +240,22 @@ fn process_component(
                         .unwrap_or(0.0),
                 );
 
-                descriptor.splice_ai_donor = donor_score as usize;
-                descriptor.splice_ai_acceptor = acceptor_score as usize;
+                descriptor.splice_ai_donor = donor_score;
+                descriptor.splice_ai_acceptor = acceptor_score;
             }
         }
 
-        acc.push(descriptor.fmt(intron_start, intron_end));
+        let (intron_start, intron_end) = match component.strand {
+            Strand::Forward => (intron_start, intron_end),
+            Strand::Reverse => ((SCALE - intron_end), (SCALE - intron_start)),
+        };
+
+        acc.push(descriptor.fmt(
+            component.chrom.clone(),
+            component.strand.clone(),
+            intron_start,
+            intron_end,
+        ));
     }
 
     acc
