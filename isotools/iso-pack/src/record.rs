@@ -1,4 +1,4 @@
-use config::{BedRecord, Sequence, Strand, OVERLAP_CDS, SCALE};
+use config::{BedParser, Sequence, Strand, SCALE};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,7 @@ pub struct Bed12 {
     data: GenePred,
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct GenePred {
     pub name: String,
     pub chrom: String,
@@ -25,7 +25,7 @@ pub struct GenePred {
     pub is_ref: bool,
 }
 
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct RefGenePred {
     pub reads: Vec<GenePred>,
     pub starts: BTreeSet<(u64, u64)>,
@@ -35,21 +35,30 @@ pub struct RefGenePred {
     pub strand: Strand,
 }
 
-#[derive(Debug, PartialEq, Clone, Eq)]
-pub struct IntronPred {
+#[derive(Debug, PartialEq, Clone)]
+pub struct IntronBucket {
     pub chrom: String,
     pub strand: Strand,
     pub introns: HashMap<(u64, u64), IntronPredStats>,
 }
 
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, PartialEq, Clone)]
+pub struct IntronPred {
+    pub chrom: String,
+    pub strand: Strand,
+    pub start: u64,
+    pub end: u64,
+    pub stats: IntronPredStats,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct IntronPredStats {
     pub seen: usize,                     // Frequency
     pub spanned: usize,                  // Frequency
-    pub splice_ai_donor: f64,            // SpliceAi
-    pub splice_ai_acceptor: f64,         // SpliceAi
-    pub max_ent_donor: f64,              // MaxEntScan
-    pub max_ent_acceptor: f64,           // MaxEntScan
+    pub splice_ai_donor: f32,            // SpliceAi
+    pub splice_ai_acceptor: f32,         // SpliceAi
+    pub max_ent_donor: f32,              // MaxEntScan
+    pub max_ent_acceptor: f32,           // MaxEntScan
     pub donor_sequence: String,          // MaxEntScan/TOGA-nag
     pub acceptor_sequence: String,       // MaxEntScan/TOGA-nag
     pub donor_context: Sequence,         // MaxEntScan 9-mer
@@ -59,12 +68,214 @@ pub struct IntronPredStats {
     pub is_in_frame: bool,               // Miscellaneous
 }
 
-impl IntronPredStats {
-    pub fn fmt(&self, start: u64, end: u64) -> String {
-        format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+impl BedParser for IntronPred {
+    fn parse(
+        line: &str,
+        _cds_overlap: bool,
+        _is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let data = IntronPred::read(line).expect("ERROR: Cannot parse line!");
+        Ok(data)
+    }
+
+    fn chrom(&self) -> &str {
+        &self.chrom.as_str()
+    }
+
+    fn coord(&self) -> (u64, u64) {
+        (self.start, self.end)
+    }
+
+    // WARN: placeholder producing dummy data
+    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
+        vec![(self.start, self.end)].iter().cloned().collect()
+    }
+
+    // WARN: placeholder producing dummy data
+    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
+        vec![(self.start, self.end)].iter().cloned().collect()
+    }
+}
+
+impl IntronPred {
+    pub fn read(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut data = line.split('\t');
+
+        let (
+            chrom,
             start,
             end,
+            strand,
+            seen,
+            spanned,
+            splice_ai_donor,
+            splice_ai_acceptor,
+            max_ent_donor,
+            max_ent_acceptor,
+            donor_sequence,
+            acceptor_sequence,
+            donor_context,
+            acceptor_context,
+            intron_position,
+            is_toga_supported,
+            is_in_frame,
+        ) = (
+            data.next().expect("ERROR: Cannot parse chrom"),
+            data.next().expect("ERROR: Cannot parse start"),
+            data.next().expect("ERROR: Cannot parse end"),
+            data.next().expect("ERROR: Cannot parse strand"),
+            data.next().expect("ERROR: Cannot parse seen"),
+            data.next().expect("ERROR: Cannot parse spanned"),
+            data.next().expect("ERROR: Cannot parse splice_ai_donor"),
+            data.next().expect("ERROR: Cannot parse splice_ai_acceptor"),
+            data.next().expect("ERROR: Cannot parse max_ent_donor"),
+            data.next().expect("ERROR: Cannot parse max_ent_acceptor"),
+            data.next().expect("ERROR: Cannot parse donor_sequence"),
+            data.next().expect("ERROR: Cannot parse acceptor_sequence"),
+            data.next().expect("ERROR: Cannot parse donor_context"),
+            data.next().expect("ERROR: Cannot parse acceptor_context"),
+            data.next().expect("ERROR: Cannot parse intron_position"),
+            data.next().expect("ERROR: Cannot parse is_toga_supported"),
+            data.next().expect("ERROR: Cannot parse is_in_frame"),
+        );
+
+        let strand = match strand {
+            "+" => Strand::Forward,
+            "-" => Strand::Reverse,
+            _ => panic!("ERROR: Strand is not + or -"),
+        };
+
+        let (start, end) = match strand {
+            Strand::Forward => {
+                let start = start.parse::<u64>().expect("ERROR: Cannot parse start");
+                let end = end.parse::<u64>().expect("ERROR: Cannot parse end");
+
+                (start, end)
+            }
+            Strand::Reverse => {
+                let start = start.parse::<u64>().expect("ERROR: Cannot parse start");
+                let end = end.parse::<u64>().expect("ERROR: Cannot parse end");
+
+                (SCALE - end, SCALE - start)
+            }
+        };
+
+        let stats = IntronPredStats::from(vec![
+            seen,
+            spanned,
+            splice_ai_donor,
+            splice_ai_acceptor,
+            max_ent_donor,
+            max_ent_acceptor,
+            donor_sequence,
+            acceptor_sequence,
+            donor_context,
+            acceptor_context,
+            intron_position,
+            is_toga_supported,
+            is_in_frame,
+        ]);
+
+        Ok(Self {
+            chrom: chrom.into(),
+            strand,
+            start,
+            end,
+            stats,
+        })
+    }
+}
+
+impl From<GenePred> for IntronPred {
+    fn from(read: GenePred) -> Self {
+        let stats = read.line.split('\t').collect::<Vec<_>>()[4..].to_vec();
+
+        IntronPred {
+            chrom: read.chrom.clone(),
+            strand: read.strand.clone(),
+            start: read.start,
+            end: read.end,
+            stats: IntronPredStats::from(stats),
+        }
+    }
+}
+
+impl IntronPredStats {
+    pub fn from(data: Vec<&str>) -> Self {
+        let (
+            seen,
+            spanned,
+            splice_ai_donor,
+            splice_ai_acceptor,
+            max_ent_donor,
+            max_ent_acceptor,
+            donor_sequence,
+            acceptor_sequence,
+            donor_context,
+            acceptor_context,
+            intron_position,
+            is_toga_supported,
+            is_in_frame,
+        ) = (
+            data[0].parse::<usize>().expect("ERROR: Cannot parse seen"),
+            data[1]
+                .parse::<usize>()
+                .expect("ERROR: Cannot parse spanned"),
+            data[2]
+                .parse::<f32>()
+                .expect("ERROR: Cannot parse splice_ai_donor"),
+            data[3]
+                .parse::<f32>()
+                .expect("ERROR: Cannot parse splice_ai_acceptor"),
+            data[4]
+                .parse::<f32>()
+                .expect("ERROR: Cannot parse max_ent_donor"),
+            data[5]
+                .parse::<f32>()
+                .expect("ERROR: Cannot parse max_ent_acceptor"),
+            data[6].into(),
+            data[7].into(),
+            Sequence::new(data[8].as_bytes()),
+            Sequence::new(data[9].as_bytes()),
+            match data[10] {
+                "UTR" => IntronPosition::UTR,
+                "CDS" => IntronPosition::CDS,
+                "Mixed" => IntronPosition::Mixed,
+                "Unknown" => IntronPosition::Unknown,
+                _ => panic!("ERROR: Cannot parse intron_position"),
+            },
+            data[11]
+                .parse::<bool>()
+                .expect("ERROR: Cannot parse is_toga_supported"),
+            data[12]
+                .parse::<bool>()
+                .expect("ERROR: Cannot parse is_in_frame"),
+        );
+
+        Self {
+            seen,
+            spanned,
+            splice_ai_donor,
+            splice_ai_acceptor,
+            max_ent_donor,
+            max_ent_acceptor,
+            donor_sequence,
+            acceptor_sequence,
+            donor_context,
+            acceptor_context,
+            intron_position,
+            is_toga_supported,
+            is_in_frame,
+        }
+    }
+
+    pub fn fmt(&self, chr: String, strand: Strand, start: u64, end: u64) -> String {
+        format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            chr,
+            start,
+            end,
+            strand,
             self.seen,
             self.spanned,
             self.splice_ai_donor,
@@ -178,9 +389,57 @@ impl GenePred {
     }
 }
 
+impl BedParser for GenePred {
+    fn parse(
+        line: &str,
+        cds_overlap: bool,
+        is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let data = Bed12::read(line, cds_overlap, is_ref).expect("ERROR: Cannot parse line");
+        Ok(data)
+    }
+
+    fn chrom(&self) -> &str {
+        &self.chrom.as_str()
+    }
+
+    fn coord(&self) -> (u64, u64) {
+        (self.start, self.end)
+    }
+
+    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
+        self.introns.iter().cloned().collect()
+    }
+
+    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
+        self.exons.iter().cloned().collect()
+    }
+}
+
+impl From<IntronPred> for GenePred {
+    fn from(intron: IntronPred) -> Self {
+        GenePred {
+            name: "".to_string(),
+            chrom: intron.chrom.clone(),
+            strand: intron.strand.clone(),
+            start: intron.start,
+            end: intron.end,
+            cds_start: 0,
+            cds_end: 0,
+            exons: vec![(intron.start - 2, intron.end + 2)], // WARN: 2 +/- offset to mimic exon bounds
+            introns: vec![],
+            exon_count: 0,
+            line: intron
+                .stats
+                .fmt(intron.chrom, intron.strand, intron.start, intron.end), // INFO: holds IntronPredStats
+            is_ref: true, // INFO: always true since it is a reference file being read
+        }
+    }
+}
+
 impl Bed12 {
     #[inline(always)]
-    pub fn parse(line: &str, cds_overlap: bool, is_ref: bool) -> Result<GenePred, &'static str> {
+    pub fn read(line: &str, cds_overlap: bool, is_ref: bool) -> Result<GenePred, &'static str> {
         if line.is_empty() {
             return Err("Empty line");
         }
@@ -265,10 +524,13 @@ impl Bed12 {
     }
 }
 
-impl BedRecord for Bed12 {
-    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>> {
-        let data =
-            Bed12::parse(line.as_str(), OVERLAP_CDS, false).expect("ERROR: Cannot parse line");
+impl BedParser for Bed12 {
+    fn parse(
+        line: &str,
+        cds_overlap: bool,
+        is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let data = Bed12::read(line, cds_overlap, is_ref).expect("ERROR: Cannot parse line");
         Ok(Bed12 { data })
     }
 
@@ -552,16 +814,19 @@ impl RefGenePred {
     }
 }
 
-impl IntronPred {
-    // Vec<GenePred> -> IntronPred
+impl IntronBucket {
+    // Vec<GenePred> -> IntronBucket
     #[inline(always)]
     #[allow(unused_assignments)]
     pub fn from(reads: Vec<GenePred>, toga: Vec<GenePred>) -> Self {
         let mut introns = HashMap::new();
-        let mut toga_introns = HashMap::new();
+        let mut toga_introns = HashSet::new();
 
         let mut chr = String::new();
         let mut strand = Strand::Forward;
+
+        let mut cds_start = 0;
+        let mut cds_end = 0;
 
         if !toga.is_empty() {
             chr = toga[0].chrom.clone();
@@ -569,9 +834,13 @@ impl IntronPred {
 
             for projection in toga {
                 let introns = projection.introns;
+
+                cds_start = cds_start.min(projection.cds_start);
+                cds_end = cds_end.max(projection.cds_end);
+
                 for intron in introns {
-                    // fmt: intron coord -> (CDS start, CDS end)
-                    toga_introns.insert(intron, (projection.start, projection.end));
+                    // INFO: fmt -> intron coord -> (CDS start, CDS end)
+                    toga_introns.insert(intron);
                 }
             }
         } else {
@@ -587,20 +856,18 @@ impl IntronPred {
                         .expect("ERROR: Cannot get intron handle. This is a bug!");
                     stats.seen += 1;
                 } else {
-                    let (cds_start, cds_end) = toga_introns.get(ref_intron).unwrap_or(&(0, 0));
-                    let mut is_toga_supported = false;
+                    let is_toga_supported = toga_introns.contains(ref_intron);
 
-                    let position = if *cds_start < ref_intron.0 && ref_intron.1 < *cds_end {
-                        is_toga_supported = true;
+                    let position = if is_toga_supported {
                         IntronPosition::CDS
-                    } else if *cds_start == 0 && *cds_end == 0 {
-                        IntronPosition::Unknown
-                    } else if ref_intron.0 > *cds_end || ref_intron.1 < *cds_start {
+                    } else if ref_intron.0 > cds_end || ref_intron.1 < cds_start {
                         IntronPosition::UTR
-                    } else {
-                        // a bit tricky to say if its TOGA supported!
-                        is_toga_supported = true;
+                    } else if (ref_intron.0 < cds_start && ref_intron.1 < cds_end)
+                        || (ref_intron.0 < cds_end && ref_intron.1 > cds_end)
+                    {
                         IntronPosition::Mixed
+                    } else {
+                        IntronPosition::Unknown
                     };
 
                     let in_frame = (ref_intron.0 - ref_intron.0) % 3 == 0;
