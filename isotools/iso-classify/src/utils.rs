@@ -13,9 +13,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use config::{
-    get_progress_bar, BedRecord, CoordType, Sequence, SharedSpliceMap, SpliceScores, SpliceSite,
+    get_progress_bar, BedParser, CoordType, Sequence, SharedSpliceMap, SpliceScores, SpliceSite,
     Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS, CONS1, CONS2,
-    DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB, SCALE,
+    DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB, OVERLAP_CDS, SCALE,
 };
 
 pub const MINIMUM_ACCEPTOR_LENGTH: usize = 23;
@@ -175,9 +175,13 @@ impl Bed4 {
     }
 }
 
-impl BedRecord for Bed4 {
-    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>> {
-        Bed4::new(line)
+impl BedParser for Bed4 {
+    fn parse(
+        line: &str,
+        _cds_overlap: bool,
+        _is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Bed4::new(line.to_string())
     }
 
     fn chrom(&self) -> &str {
@@ -273,9 +277,13 @@ impl Bed6 {
     }
 }
 
-impl BedRecord for Bed6 {
-    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>> {
-        Bed6::new(line)
+impl BedParser for Bed6 {
+    fn parse(
+        line: &str,
+        _cds_overlap: bool,
+        _is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Bed6::new(line.to_string())
     }
 
     fn chrom(&self) -> &str {
@@ -306,14 +314,14 @@ pub fn bed_to_map<T>(
     hint: CoordType,
 ) -> Result<HashMap<String, HashSet<(u64, u64)>>, anyhow::Error>
 where
-    T: BedRecord,
+    T: BedParser,
 {
     let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
     let tracks = contents
         .par_lines()
         .filter(|line| !line.starts_with('#'))
         .filter_map(|line| {
-            T::parse(line.to_string())
+            T::parse(line, OVERLAP_CDS, false) // INFO: placeholders
                 .map_err(|e| warn!("Error parsing {}: {}", line, e))
                 .ok()
         })
