@@ -745,7 +745,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "iso-classify"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -813,6 +813,7 @@ dependencies = [
  "config",
  "dashmap",
  "hashbrown 0.15.2",
+ "iso-classify",
  "iso-pack",
  "log",
  "num_cpus",
@@ -825,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "iso-pack"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "clap",
