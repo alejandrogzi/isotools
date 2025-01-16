@@ -286,11 +286,13 @@ pub fn buckerize(
                     }
                     PackMode::Query => {
                         // INFO: introns are refs, reads are queries [both Vec<GenePred>]
-                        // INFO: Vec<GenePred> -> Vec<IntronPred>
+                        // WARN: avoid empty queries or refs -> should be at least one of each
+                        // because we are using one to build the other!
                         if queries.is_empty() | refs.is_empty() {
                             return None;
                         }
 
+                        // INFO: Vec<GenePred> -> Vec<IntronPred>
                         let introns = refs
                             .into_iter()
                             .map(|read| IntronPred::from(read))
