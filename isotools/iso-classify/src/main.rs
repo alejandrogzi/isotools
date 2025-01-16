@@ -5,6 +5,7 @@ use simple_logger::init_with_level;
 
 use iso_classify::cli::{Args, SubArgs};
 
+#[allow(unused_variables)]
 fn main() {
     let start = std::time::Instant::now();
     init_with_level(Level::Info).unwrap();
