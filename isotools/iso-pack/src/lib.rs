@@ -225,7 +225,6 @@ pub fn buckerize(
         let mut id_map = HashMap::new();
         let mut uf = UnionFind::new(transcripts.len());
 
-        // if base mode, tx boundaries will behave as exons ranges
         for (i, transcript) in transcripts.iter().enumerate() {
             id_map.insert(i, transcript);
 

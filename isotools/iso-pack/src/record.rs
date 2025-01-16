@@ -860,7 +860,7 @@ impl IntronBucket {
 
                     let position = if is_toga_supported {
                         IntronPosition::CDS
-                    } else if ref_intron.0 > cds_end || ref_intron.1 < cds_start {
+                    } else if (ref_intron.0 > cds_end || ref_intron.1 < cds_start) && cds_end > 0 {
                         IntronPosition::UTR
                     } else if (ref_intron.0 < cds_start && ref_intron.1 < cds_end)
                         || (ref_intron.0 < cds_end && ref_intron.1 > cds_end)
@@ -870,7 +870,7 @@ impl IntronBucket {
                         IntronPosition::Unknown
                     };
 
-                    let in_frame = (ref_intron.0 - ref_intron.0) % 3 == 0;
+                    let in_frame = (ref_intron.1 - ref_intron.0) % 3 == 0;
 
                     let stats = IntronPredStats {
                         seen: 1,
