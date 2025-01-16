@@ -113,8 +113,12 @@ pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f
 pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
 
 // traits
-pub trait BedRecord: Send + Sync {
-    fn parse(line: String) -> Result<Self, Box<dyn std::error::Error>>
+pub trait BedParser: Send + Sync + Sized {
+    fn parse(
+        line: &str,
+        cds_overlap: bool,
+        is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>>
     where
         Self: Sized;
     fn chrom(&self) -> &str;
