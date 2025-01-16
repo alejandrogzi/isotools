@@ -2,7 +2,8 @@ use anyhow::Result;
 use dashmap::DashMap;
 use dashmap::DashSet;
 use hashbrown::HashSet;
-use packbed::{packbed, BedPackage, IntronPred, PackMode};
+use packbed::IntronBucket;
+use packbed::{packbed, BedPackage, PackMode};
 use rayon::prelude::*;
 
 use config::{
@@ -96,7 +97,7 @@ fn distribute(
     components.into_par_iter().for_each(|mut comp| {
         let comp = comp
             .as_any_mut()
-            .downcast_mut::<IntronPred>()
+            .downcast_mut::<IntronBucket>()
             .expect("ERROR: Could not downcast to IntronPred!");
 
         let info = process_component(comp, banned, splice_map, scan_scores, genome, nag);
@@ -111,7 +112,7 @@ fn distribute(
 // WARN: This fn should be granularized!
 #[inline(always)]
 fn process_component(
-    component: &mut IntronPred,
+    component: &mut IntronBucket,
     banned: &HashSet<(u64, u64)>,
     splice_map: &(SharedSpliceMap, SharedSpliceMap),
     scan_scores: &ScanScores,
