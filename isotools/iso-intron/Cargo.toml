@@ -12,6 +12,7 @@ edition.workspace = true
 
 [dependencies]
 iso-pack = { path = "../iso-pack" }
+iso-classify = { path = "../iso-classify" }
 config.workspace = true
 dashmap.workspace = true
 rayon.workspace = true
