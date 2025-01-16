@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use config::get_progress_bar;
+use config::{get_progress_bar, BedParser};
 use dashmap::DashMap;
 use hashbrown::HashMap;
 use log::info;
@@ -13,9 +13,9 @@ use rand::Rng;
 use rayon::prelude::*;
 
 pub mod record;
-pub use record::{Bed12, GenePred, IntronPred, RefGenePred};
+pub use record::{Bed12, GenePred, IntronBucket, IntronPred, RefGenePred};
 
-pub type GenePredMap = HashMap<String, Vec<GenePred>>;
+pub type GenePredMap = HashMap<String, Box<dyn BedPackage>>;
 
 pub const RGB: [&str; 10] = [
     "255,0,0",    // red
@@ -47,7 +47,37 @@ impl BedPackage for DefaultBucket {
     }
 }
 
-impl BedPackage for IntronPred {
+impl BedPackage for IntronBucket {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+impl BedPackage for Vec<GenePred> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+impl BedPackage for Vec<IntronPred> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+impl BedPackage for (Vec<IntronPred>, Vec<GenePred>) {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -59,9 +89,10 @@ impl BedPackage for IntronPred {
 
 #[derive(Debug, Clone)]
 pub enum PackMode {
-    Default,
-    Intron,
-    Exon,
+    Default, // RefGenePred + Vec<GenePred>
+    Intron,  // IntronPred
+    Exon,    // ExonPred
+    Query,   // Vec<GenePred>
 }
 
 pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
@@ -82,31 +113,41 @@ pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
     Ok(contents.concat())
 }
 
-pub fn unpack<P: AsRef<Path> + Debug + Sync + Send>(
+pub fn unpack<K, P>(
     files: Vec<P>,
     cds_overlap: bool,
     is_ref: bool,
-) -> Result<GenePredMap, anyhow::Error> {
+) -> Result<HashMap<String, Vec<K>>, anyhow::Error>
+where
+    K: BedParser + Debug + Send + Sync,
+    P: AsRef<Path> + Debug + Sync + Send,
+{
     let contents = par_reader(files)?;
-    let tracks = parse_tracks(&contents, cds_overlap, is_ref)?;
+    let tracks = parse_tracks::<K>(&contents, cds_overlap, is_ref)?;
 
     Ok(tracks)
 }
 
-pub fn parse_tracks<'a>(
+pub fn parse_tracks<'a, K>(
     contents: &'a str,
     cds_overlap: bool,
     is_ref: bool,
-) -> Result<GenePredMap, anyhow::Error> {
+) -> Result<HashMap<String, Vec<K>>, anyhow::Error>
+where
+    K: BedParser + Debug + Send + Sync,
+{
     let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED12 files");
     let mut tracks = contents
         .par_lines()
-        .filter(|x| !x.starts_with("#"))
-        .filter_map(|x| Bed12::parse(x, cds_overlap, is_ref).ok())
+        .filter(|row| !row.starts_with("#"))
+        .filter_map(|row| K::parse(row, cds_overlap, is_ref).ok())
         .fold(
             || HashMap::new(),
-            |mut acc: GenePredMap, record| {
-                acc.entry(record.chrom.clone()).or_default().push(record);
+            |mut acc: HashMap<String, Vec<K>>, record| {
+                acc.entry(record.chrom().to_string())
+                    .or_insert_with(Vec::new)
+                    .push(record);
+
                 pb.inc(1);
                 acc
             },
@@ -122,9 +163,15 @@ pub fn parse_tracks<'a>(
             },
         );
 
-    // sort by start/end in descending order
+    // INFO: sort by start/end in descending order
     tracks.par_iter_mut().for_each(|(_, v)| {
-        v.par_sort_unstable_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+        // v.par_sort_unstable_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+        v.par_sort_unstable_by(|a, b| {
+            let (a_start, a_end) = a.coord();
+            let (b_start, b_end) = b.coord();
+
+            a_start.cmp(&b_start).then(b_end.cmp(&a_end))
+        });
     });
 
     pb.finish_and_clear();
@@ -164,7 +211,7 @@ impl UnionFind {
 }
 
 pub fn buckerize(
-    tracks: GenePredMap,
+    tracks: HashMap<String, Vec<GenePred>>,
     overlap_cds: bool,
     overlap_exon: bool,
     amount: usize,
@@ -183,6 +230,7 @@ pub fn buckerize(
             id_map.insert(i, transcript);
 
             if !overlap_exon && !overlap_cds {
+                // INFO: if no overlap choice, use tx boundaries as exons
                 exons.push((transcript.start, transcript.end, i));
             } else {
                 for &(start, end) in &transcript.exons {
@@ -218,19 +266,37 @@ pub fn buckerize(
 
         let comps = groups
             .into_iter()
-            .map(|(_, group)| {
-                // separate refs from queries, use refs to build RefGenePred
+            .filter_map(|(_, group)| {
+                // INFO: separate refs from queries, use refs to build RefGenePred
                 let (refs, queries): (Vec<_>, Vec<_>) = group.into_iter().partition(|x| x.is_ref);
 
                 match mode {
                     PackMode::Default => {
                         let refs = RefGenePred::from(refs);
-                        return Box::new((refs, queries)) as Box<dyn BedPackage>;
+                        return Some(Box::new((refs, queries)) as Box<dyn BedPackage>);
                     }
                     PackMode::Intron => {
-                        // queries are TOGA introns
-                        let refs = IntronPred::from(refs, queries);
-                        return Box::new(refs) as Box<dyn BedPackage>;
+                        // WARN: queries are TOGA introns -> avoid empty refs!
+                        if refs.is_empty() {
+                            return None;
+                        }
+
+                        let refs = IntronBucket::from(refs, queries);
+                        return Some(Box::new(refs) as Box<dyn BedPackage>);
+                    }
+                    PackMode::Query => {
+                        // INFO: introns are refs, reads are queries [both Vec<GenePred>]
+                        // INFO: Vec<GenePred> -> Vec<IntronPred>
+                        if queries.is_empty() | refs.is_empty() {
+                            return None;
+                        }
+
+                        let introns = refs
+                            .into_iter()
+                            .map(|read| IntronPred::from(read))
+                            .collect::<Vec<_>>();
+
+                        return Some(Box::new((introns, queries)) as Box<dyn BedPackage>);
                     }
                     PackMode::Exon => {
                         // let refs = ExonPred::from(refs);
@@ -246,6 +312,7 @@ pub fn buckerize(
 
     pb.finish_and_clear();
     info!("Transcripts packed!");
+
     cmap
 }
 
@@ -263,33 +330,64 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     overlap_exon: bool,
     mode: PackMode,
 ) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error> {
-    let refs = unpack(refs, overlap_cds, true).expect("ERROR: Failed to unpack reference tracks");
+    let (tracks, n) = match mode {
+        PackMode::Default | PackMode::Intron | PackMode::Exon => {
+            let refs = unpack::<GenePred, _>(refs, overlap_cds, true)
+                .expect("ERROR: Failed to unpack reference tracks");
 
-    let (tracks, n) = if let Some(query) = queries {
-        let query =
-            unpack(query, overlap_cds, false).expect("ERROR: Failed to unpack query tracks");
-        combine(refs, query)
-    } else {
-        let n = refs.values().flatten().count();
-        (refs, n)
+            if let Some(query) = queries {
+                let query = unpack(query, overlap_cds, false)
+                    .expect("ERROR: Failed to unpack query tracks");
+                combine::<GenePred, GenePred>(refs, query)
+            } else {
+                let n = refs.values().flatten().count();
+                (refs, n)
+            }
+        }
+        PackMode::Query => {
+            let refs = unpack::<IntronPred, _>(refs, overlap_cds, true)
+                .expect("ERROR: Failed to unpack reference tracks");
+            let query = unpack::<GenePred, _>(
+                queries.expect("ERROR: queries were not provided!"),
+                overlap_cds,
+                false,
+            )
+            .expect("ERROR: Failed to unpack query tracks");
+
+            combine::<IntronPred, GenePred>(refs, query)
+        }
     };
 
     let buckets = buckerize(tracks, overlap_cds, overlap_exon, n, mode);
     Ok(buckets)
 }
 
-pub fn combine(refs: GenePredMap, queries: GenePredMap) -> (GenePredMap, usize) {
+pub fn combine<P, K>(
+    refs: HashMap<String, Vec<P>>,
+    queries: HashMap<String, Vec<K>>,
+) -> (HashMap<String, Vec<K>>, usize)
+where
+    K: BedParser + Debug + Send + Sync + 'static,
+    P: BedParser + Debug + Send + Sync + Into<K> + 'static,
+{
     info!("Combining reference and query tracks...");
     let pb = get_progress_bar(queries.values().len() as u64, "Combining tracks");
     let count = queries.values().flatten().count() + refs.values().flatten().count();
-    let tracks = Arc::new(Mutex::new(refs));
+    let tracks = Arc::new(Mutex::new(queries));
 
-    queries.into_par_iter().for_each(|(chr, records)| {
+    refs.into_par_iter().for_each(|(chr, records)| {
         let mut tracks = tracks.lock().expect("ERROR: Mutex lock failed");
         let acc = tracks.entry(chr).or_default();
         pb.inc(1);
 
-        acc.extend(records);
+        // INFO: checking if K and P are the same type
+        if std::any::TypeId::of::<K>() == std::any::TypeId::of::<P>() {
+            // INFO: K and P are the same type, so this is safe
+            let records: Vec<K> = unsafe { std::mem::transmute(records) };
+            acc.extend(records);
+        } else {
+            acc.extend(records.into_iter().map(|p| p.into()));
+        }
     });
 
     let tracks = Arc::try_unwrap(tracks)
