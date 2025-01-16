@@ -180,7 +180,7 @@ fn process_component(
                         genome
                             .get(component.chrom.as_str())
                             .expect("ERROR: Could not read acceptor context!")
-                            [(SCALE - intron_end) as usize - 2..(SCALE - intron_end) as usize + 21]
+                            [(SCALE - intron_end) as usize - 4..(SCALE - intron_end) as usize + 19]
                             .as_ref(),
                     )
                     .reverse_complement();
