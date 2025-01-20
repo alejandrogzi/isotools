@@ -66,6 +66,10 @@ pub struct IntronPredStats {
     pub intron_position: IntronPosition, // TOGA-dependent
     pub is_toga_supported: bool,         // TOGA-dependent
     pub is_in_frame: bool,               // Miscellaneous
+    pub donor_rt_context: String,        // RT-switch
+    pub acceptor_rt_context: String,     // RT-switch
+    pub is_rt_intron: bool,              // RT-switch
+    pub is_nag_intron: bool,             // TOGA-nag
 }
 
 impl BedParser for IntronPred {
@@ -119,6 +123,10 @@ impl IntronPred {
             intron_position,
             is_toga_supported,
             is_in_frame,
+            donor_rt_context,
+            acceptor_rt_context,
+            is_rt_intron,
+            is_nag_intron,
         ) = (
             data.next().expect("ERROR: Cannot parse chrom"),
             data.next().expect("ERROR: Cannot parse start"),
@@ -137,6 +145,11 @@ impl IntronPred {
             data.next().expect("ERROR: Cannot parse intron_position"),
             data.next().expect("ERROR: Cannot parse is_toga_supported"),
             data.next().expect("ERROR: Cannot parse is_in_frame"),
+            data.next().expect("ERROR: Cannot parse donor_rt_context"),
+            data.next()
+                .expect("ERROR: Cannot parse acceptor_rt_context"),
+            data.next().expect("ERROR: Cannot parse is_rt_intron"),
+            data.next().expect("ERROR: Cannot parse is_nag_intron"),
         );
 
         let strand = match strand {
@@ -174,6 +187,10 @@ impl IntronPred {
             intron_position,
             is_toga_supported,
             is_in_frame,
+            donor_rt_context,
+            acceptor_rt_context,
+            is_rt_intron,
+            is_nag_intron,
         ]);
 
         Ok(Self {
@@ -201,6 +218,28 @@ impl From<GenePred> for IntronPred {
 }
 
 impl IntronPredStats {
+    pub fn new() -> Self {
+        Self {
+            seen: 0,
+            spanned: 0,
+            splice_ai_donor: 0.0,
+            splice_ai_acceptor: 0.0,
+            max_ent_donor: 0.0,
+            max_ent_acceptor: 0.0,
+            donor_sequence: String::new(),
+            acceptor_sequence: String::new(),
+            donor_context: Sequence::new(&[]),
+            acceptor_context: Sequence::new(&[]),
+            intron_position: IntronPosition::Unknown,
+            is_toga_supported: false,
+            is_in_frame: false,
+            donor_rt_context: String::new(),
+            acceptor_rt_context: String::new(),
+            is_rt_intron: false,
+            is_nag_intron: false,
+        }
+    }
+
     pub fn from(data: Vec<&str>) -> Self {
         let (
             seen,
@@ -216,6 +255,10 @@ impl IntronPredStats {
             intron_position,
             is_toga_supported,
             is_in_frame,
+            donor_rt_context,
+            acceptor_rt_context,
+            is_rt_intron,
+            is_nag_intron,
         ) = (
             data[0].parse::<usize>().expect("ERROR: Cannot parse seen"),
             data[1]
@@ -250,6 +293,14 @@ impl IntronPredStats {
             data[12]
                 .parse::<bool>()
                 .expect("ERROR: Cannot parse is_in_frame"),
+            data[13].into(),
+            data[14].into(),
+            data[15]
+                .parse::<bool>()
+                .expect("ERROR: Cannot parse is_rt_intron"),
+            data[16]
+                .parse::<bool>()
+                .expect("ERROR: Cannot parse is_nag_intron"),
         );
 
         Self {
@@ -266,12 +317,16 @@ impl IntronPredStats {
             intron_position,
             is_toga_supported,
             is_in_frame,
+            donor_rt_context,
+            acceptor_rt_context,
+            is_rt_intron,
+            is_nag_intron,
         }
     }
 
-    pub fn fmt(&self, chr: String, strand: Strand, start: u64, end: u64) -> String {
+    pub fn fmt(&self, chr: &String, strand: &Strand, start: u64, end: u64) -> String {
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             chr,
             start,
             end,
@@ -288,7 +343,11 @@ impl IntronPredStats {
             self.acceptor_context,
             self.intron_position,
             self.is_toga_supported,
-            self.is_in_frame
+            self.is_in_frame,
+            self.donor_rt_context,
+            self.acceptor_rt_context,
+            self.is_rt_intron,
+            self.is_nag_intron
         )
     }
 }
@@ -431,7 +490,7 @@ impl From<IntronPred> for GenePred {
             exon_count: 0,
             line: intron
                 .stats
-                .fmt(intron.chrom, intron.strand, intron.start, intron.end), // INFO: holds IntronPredStats
+                .fmt(&intron.chrom, &intron.strand, intron.start, intron.end), // INFO: holds IntronPredStats
             is_ref: true, // INFO: always true since it is a reference file being read
         }
     }
@@ -886,6 +945,10 @@ impl IntronBucket {
                         intron_position: position,
                         is_toga_supported,
                         is_in_frame: in_frame,
+                        donor_rt_context: String::new(),
+                        acceptor_rt_context: String::new(),
+                        is_rt_intron: false,
+                        is_nag_intron: false,
                     };
 
                     introns.insert(ref_intron.clone(), stats);
