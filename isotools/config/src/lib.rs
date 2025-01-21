@@ -57,8 +57,6 @@ pub const DONOR_PLUS: &str = "spliceAiDonorPlus.bw";
 
 // flags
 pub const COLORIZE: bool = false;
-pub const OVERLAP_CDS: bool = false;
-pub const OVERLAP_EXON: bool = true;
 
 // collections
 pub const COMPLEMENT: [u8; 128] = {
@@ -116,7 +114,7 @@ pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
 pub trait BedParser: Send + Sync + Sized {
     fn parse(
         line: &str,
-        cds_overlap: bool,
+        overlap: OverlapType,
         is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>>
     where
@@ -131,6 +129,13 @@ pub trait BedParser: Send + Sync + Sized {
 pub enum SpliceSite {
     Donor,
     Acceptor,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum OverlapType {
+    CDS,      // CDS-overlap
+    Exon,     // exon-overlap
+    Boundary, // boundary-overlap
 }
 
 #[derive(Debug, PartialEq, Clone)]
