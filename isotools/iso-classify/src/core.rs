@@ -16,7 +16,9 @@ use crate::utils::{
 };
 
 const WINDOW_SIZE: usize = 8;
+const RT_REPEAT: usize = 12;
 const MISMATCHES: u32 = 1;
+const MAX_ENT_DONOR_MIN_SIZE: usize = 9;
 const NAG_PATTERNS: [&str; 3] = ["CAG", "TAG", "AAG"];
 
 type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
@@ -206,7 +208,7 @@ fn get_sj_context(
                         .as_ref(),
                 );
                 let acceptor_seq = acceptor_context.slice(18, 20);
-                let acceptor_rt_context = acceptor_context.slice(8, 21);
+                let acceptor_rt_context = acceptor_context.slice(9, 21);
 
                 descriptor.donor_sequence = donor_seq;
                 descriptor.donor_context = donor_context;
@@ -238,7 +240,7 @@ fn get_sj_context(
                 )
                 .reverse_complement();
                 let acceptor_seq = acceptor_context.slice(18, 20);
-                let acceptor_rt_context = acceptor_context.slice(8, 21);
+                let acceptor_rt_context = acceptor_context.slice(9, 21);
 
                 descriptor.donor_sequence = donor_seq;
                 descriptor.donor_context = donor_context;
@@ -263,7 +265,7 @@ fn get_sj_max_entropy(descriptor: &mut IntronPredStats, scan_scores: &ScanScores
 
         let donor_max_ent_context = &descriptor.donor_context.slice(8, 17);
 
-        if donor_max_ent_context.len() != 9 {
+        if donor_max_ent_context.len() != MAX_ENT_DONOR_MIN_SIZE {
             eprintln!("ERROR: Donor context is not 9 bases long!");
         }
 
@@ -404,6 +406,11 @@ fn scan_rt_repeats(descriptor: &mut IntronPredStats) {
 unsafe fn scan_sequence(descriptor: &mut IntronPredStats) {
     let donor = &descriptor.donor_rt_context.as_bytes();
     let acceptor = &descriptor.acceptor_rt_context.as_bytes();
+
+    if donor.len() != RT_REPEAT || acceptor.len() != RT_REPEAT {
+        log::error!("ERROR: RT context is not 12 bases long, this is a bug!");
+        std::process::exit(1);
+    }
 
     #[inline(always)]
     fn base_to_bits(base: u8) -> u8 {
