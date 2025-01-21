@@ -556,28 +556,33 @@ pub fn calculate_acceptor_score(seq: &Sequence, tables: &SpliceScoreMap) -> f64 
 pub fn score_max_ent(seq: &Sequence, tables: &SpliceScoreMap) -> f64 {
     let seq = seq.skip(18, 20);
 
+    let binding = vec![0.0];
     let scores = vec![
-        tables.get(&seq.slice(0, 7)).unwrap_or(&vec![0.0])[0],
-        tables.get(&seq.slice(7, 14)).unwrap_or(&vec![0.0])[1],
-        tables.get(&seq.slice(14, 21)).unwrap_or(&vec![0.0])[2],
-        tables.get(&seq.slice(4, 11)).unwrap_or(&vec![0.0])[3],
-        tables.get(&seq.slice(11, 18)).unwrap_or(&vec![0.0])[4],
+        tables.get(&seq.slice(0, 7)).unwrap_or(&binding).get(0),
+        tables.get(&seq.slice(7, 14)).unwrap_or(&binding).get(1),
+        tables.get(&seq.slice(14, 21)).unwrap_or(&binding).get(2),
+        tables.get(&seq.slice(4, 11)).unwrap_or(&binding).get(3),
+        tables.get(&seq.slice(11, 18)).unwrap_or(&binding).get(4),
         tables
             .get(&seq.slice_as_seq(4, 7).fill(4))
-            .unwrap_or(&vec![0.0])[5],
+            .unwrap_or(&binding)
+            .get(5),
         tables
             .get(&seq.slice_as_seq(7, 11).fill(3))
-            .unwrap_or(&vec![0.0])[6],
+            .unwrap_or(&binding)
+            .get(6),
         tables
             .get(&seq.slice_as_seq(11, 14).fill(4))
-            .unwrap_or(&vec![0.0])[7],
+            .unwrap_or(&binding)
+            .get(7),
         tables
             .get(&seq.slice_as_seq(14, 18).fill(3))
-            .unwrap_or(&vec![0.0])[8],
+            .unwrap_or(&binding)
+            .get(8),
     ];
 
-    let num: f64 = scores[0..5].iter().product();
-    let den: f64 = scores[5..].iter().product();
+    let num: f64 = scores[..5].iter().map(|s| s.unwrap_or(&0.0)).product();
+    let den: f64 = scores[5..].iter().map(|s| s.unwrap_or(&0.0)).product();
 
     let me_score = num / den;
 
