@@ -1,4 +1,4 @@
-use config::{BedParser, Sequence, Strand, SCALE};
+use config::{BedParser, OverlapType, Sequence, Strand, SCALE};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
@@ -75,7 +75,7 @@ pub struct IntronPredStats {
 impl BedParser for IntronPred {
     fn parse(
         line: &str,
-        _cds_overlap: bool,
+        _overlap: OverlapType,
         _is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let data = IntronPred::read(line).expect("ERROR: Cannot parse line!");
@@ -451,10 +451,10 @@ impl GenePred {
 impl BedParser for GenePred {
     fn parse(
         line: &str,
-        cds_overlap: bool,
+        overlap: OverlapType,
         is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let data = Bed12::read(line, cds_overlap, is_ref).expect("ERROR: Cannot parse line");
+        let data = Bed12::read(line, overlap, is_ref).expect("ERROR: Cannot parse line");
         Ok(data)
     }
 
@@ -498,7 +498,7 @@ impl From<IntronPred> for GenePred {
 
 impl Bed12 {
     #[inline(always)]
-    pub fn read(line: &str, cds_overlap: bool, is_ref: bool) -> Result<GenePred, &'static str> {
+    pub fn read(line: &str, overlap: OverlapType, is_ref: bool) -> Result<GenePred, &'static str> {
         if line.is_empty() {
             return Err("Empty line");
         }
@@ -549,7 +549,7 @@ impl Bed12 {
             cds_start,
             cds_end,
             strand,
-            cds_overlap,
+            overlap,
         )?;
 
         let mut exons = exons.iter().cloned().collect::<Vec<_>>();
@@ -586,10 +586,10 @@ impl Bed12 {
 impl BedParser for Bed12 {
     fn parse(
         line: &str,
-        cds_overlap: bool,
+        overlap: OverlapType,
         is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let data = Bed12::read(line, cds_overlap, is_ref).expect("ERROR: Cannot parse line");
+        let data = Bed12::read(line, overlap, is_ref).expect("ERROR: Cannot parse line");
         Ok(Bed12 { data })
     }
 
@@ -619,7 +619,7 @@ fn get_coords(
     cds_start: u64,
     cds_end: u64,
     strand: char,
-    cds_overlap: bool,
+    overlap: OverlapType,
 ) -> Result<(HashSet<(u64, u64)>, HashSet<(u64, u64)>), &'static str> {
     let group = |field: &str| -> Result<Vec<u64>, &'static str> {
         field
@@ -652,10 +652,11 @@ fn get_coords(
         .iter()
         .zip(&sz)
         .map(|(&s, &z)| match strand {
-            '+' => {
-                if cds_overlap {
+            '+' => match overlap {
+                OverlapType::Exon | OverlapType::Boundary => Ok((s + offset, s + z + offset)),
+                OverlapType::CDS => {
                     if s + z + offset < cds_start || s + offset > cds_end {
-                        return Err("UTRs are not allowed in CDS exons");
+                        return Err("ERROR: UTRs are not allowed in CDS exons!");
                     } else if s + offset < cds_start {
                         if s + z + offset > cds_end {
                             return Ok((cds_start, cds_end));
@@ -663,13 +664,14 @@ fn get_coords(
                         return Ok((cds_start, s + z + offset));
                     } else if s + z + offset > cds_end {
                         return Ok((s + offset, cds_end));
+                    } else {
+                        Ok((s + offset, s + z + offset))
                     }
                 }
-
-                Ok((s + offset, s + z + offset))
-            }
-            '-' => {
-                if cds_overlap {
+            },
+            '-' => match overlap {
+                OverlapType::Exon | OverlapType::Boundary => Ok((SCALE - s - z, offset - s)),
+                OverlapType::CDS => {
                     if offset - s < cds_start || offset - s - z > cds_end {
                         return Err("UTRs are not allowed in CDS exons");
                     } else if offset - s - z < cds_start {
@@ -679,11 +681,11 @@ fn get_coords(
                         return Ok((cds_start, offset - s));
                     } else if offset - s > cds_end {
                         return Ok((offset - s - z, cds_end));
+                    } else {
+                        Ok((SCALE - s - z, offset - s))
                     }
-                };
-
-                Ok((offset - s - z, offset - s))
-            }
+                }
+            },
             _ => return Err("Strand is not + or -"),
         })
         .filter_map(Result::ok)
@@ -972,6 +974,8 @@ impl IntronBucket {
 
 #[cfg(test)]
 mod tests {
+    use std::env::consts::OS;
+
     use super::*;
 
     #[test]
@@ -1023,17 +1027,10 @@ mod tests {
         let cds_start = 15;
         let cds_end = 45;
         let strand = '+';
-        let cds_overlap = true;
+        let overlap = OverlapType::CDS;
 
         let (exons, introns) = get_coords(
-            start,
-            size,
-            tx_start,
-            tx_end,
-            cds_start,
-            cds_end,
-            strand,
-            cds_overlap,
+            start, size, tx_start, tx_end, cds_start, cds_end, strand, overlap,
         )
         .unwrap();
 
@@ -1059,21 +1056,14 @@ mod tests {
         let cds_start = "30";
         let cds_end = "80";
         let strand = '-';
-        let cds_overlap = true;
+        let overlap = OverlapType::CDS;
 
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
         let (tx_start, tx_end, cds_start, cds_end) =
             abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get).unwrap();
 
         let (exons, introns) = get_coords(
-            start,
-            size,
-            tx_start,
-            tx_end,
-            cds_start,
-            cds_end,
-            strand,
-            cds_overlap,
+            start, size, tx_start, tx_end, cds_start, cds_end, strand, overlap,
         )
         .unwrap();
 
@@ -1112,17 +1102,10 @@ mod tests {
         let cds_start = 15;
         let cds_end = 95;
         let strand = '+';
-        let cds_overlap = true;
+        let overlap = OverlapType::CDS;
 
         let (exons, introns) = get_coords(
-            start,
-            size,
-            tx_start,
-            tx_end,
-            cds_start,
-            cds_end,
-            strand,
-            cds_overlap,
+            start, size, tx_start, tx_end, cds_start, cds_end, strand, overlap,
         )
         .unwrap();
 
@@ -1157,21 +1140,14 @@ mod tests {
         let cds_start = "15";
         let cds_end = "75";
         let strand = '-';
-        let cds_overlap = true;
+        let overlap = OverlapType::CDS;
 
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
         let (tx_start, tx_end, cds_start, cds_end) =
             abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get).unwrap();
 
         let (exons, introns) = get_coords(
-            start,
-            size,
-            tx_start,
-            tx_end,
-            cds_start,
-            cds_end,
-            strand,
-            cds_overlap,
+            start, size, tx_start, tx_end, cds_start, cds_end, strand, overlap,
         )
         .unwrap();
 

@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use config::{get_progress_bar, BedParser};
+use config::{get_progress_bar, BedParser, OverlapType};
 use dashmap::DashMap;
 use hashbrown::HashMap;
 use log::info;
@@ -115,7 +115,7 @@ pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
 
 pub fn unpack<K, P>(
     files: Vec<P>,
-    cds_overlap: bool,
+    overlap: OverlapType,
     is_ref: bool,
 ) -> Result<HashMap<String, Vec<K>>, anyhow::Error>
 where
@@ -123,14 +123,14 @@ where
     P: AsRef<Path> + Debug + Sync + Send,
 {
     let contents = par_reader(files)?;
-    let tracks = parse_tracks::<K>(&contents, cds_overlap, is_ref)?;
+    let tracks = parse_tracks::<K>(&contents, overlap, is_ref)?;
 
     Ok(tracks)
 }
 
 pub fn parse_tracks<'a, K>(
     contents: &'a str,
-    cds_overlap: bool,
+    overlap: OverlapType,
     is_ref: bool,
 ) -> Result<HashMap<String, Vec<K>>, anyhow::Error>
 where
@@ -140,7 +140,7 @@ where
     let mut tracks = contents
         .par_lines()
         .filter(|row| !row.starts_with("#"))
-        .filter_map(|row| K::parse(row, cds_overlap, is_ref).ok())
+        .filter_map(|row| K::parse(row, overlap, is_ref).ok())
         .fold(
             || HashMap::new(),
             |mut acc: HashMap<String, Vec<K>>, record| {
@@ -212,8 +212,9 @@ impl UnionFind {
 
 pub fn buckerize(
     tracks: HashMap<String, Vec<GenePred>>,
-    overlap_cds: bool,
-    overlap_exon: bool,
+    // overlap_cds: bool,
+    // overlap_exon: bool,
+    overlap: OverlapType,
     amount: usize,
     mode: PackMode,
 ) -> DashMap<String, Vec<Box<dyn BedPackage>>> {
@@ -228,12 +229,15 @@ pub fn buckerize(
         for (i, transcript) in transcripts.iter().enumerate() {
             id_map.insert(i, transcript);
 
-            if !overlap_exon && !overlap_cds {
-                // INFO: if no overlap choice, use tx boundaries as exons
-                exons.push((transcript.start, transcript.end, i));
-            } else {
-                for &(start, end) in &transcript.exons {
-                    exons.push((start, end, i));
+            match overlap {
+                OverlapType::Boundary => {
+                    // INFO: if no overlap choice, use tx boundaries as exons
+                    exons.push((transcript.start, transcript.end, i));
+                }
+                OverlapType::CDS | OverlapType::Exon => {
+                    for &(start, end) in &transcript.exons {
+                        exons.push((start, end, i));
+                    }
                 }
             }
         }
@@ -327,18 +331,19 @@ fn choose_color<'a>() -> &'a str {
 pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     refs: Vec<T>,
     queries: Option<Vec<T>>,
-    overlap_cds: bool,
-    overlap_exon: bool,
+    overlap: OverlapType,
+    // overlap_cds: bool,
+    // overlap_exon: bool,
     mode: PackMode,
 ) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error> {
     let (tracks, n) = match mode {
         PackMode::Default | PackMode::Intron | PackMode::Exon => {
-            let refs = unpack::<GenePred, _>(refs, overlap_cds, true)
+            let refs = unpack::<GenePred, _>(refs, overlap, true)
                 .expect("ERROR: Failed to unpack reference tracks");
 
             if let Some(query) = queries {
-                let query = unpack(query, overlap_cds, false)
-                    .expect("ERROR: Failed to unpack query tracks");
+                let query =
+                    unpack(query, overlap, false).expect("ERROR: Failed to unpack query tracks");
                 combine::<GenePred, GenePred>(refs, query)
             } else {
                 let n = refs.values().flatten().count();
@@ -346,11 +351,11 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
             }
         }
         PackMode::Query => {
-            let refs = unpack::<IntronPred, _>(refs, overlap_cds, true)
+            let refs = unpack::<IntronPred, _>(refs, overlap, true)
                 .expect("ERROR: Failed to unpack reference tracks");
             let query = unpack::<GenePred, _>(
                 queries.expect("ERROR: queries were not provided!"),
-                overlap_cds,
+                overlap,
                 false,
             )
             .expect("ERROR: Failed to unpack query tracks");
@@ -359,7 +364,7 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
         }
     };
 
-    let buckets = buckerize(tracks, overlap_cds, overlap_exon, n, mode);
+    let buckets = buckerize(tracks, overlap, n, mode);
     Ok(buckets)
 }
 
