@@ -670,7 +670,7 @@ fn get_coords(
                 }
             },
             '-' => match overlap {
-                OverlapType::Exon | OverlapType::Boundary => Ok((SCALE - s - z, offset - s)),
+                OverlapType::Exon | OverlapType::Boundary => Ok((offset - s - z, offset - s)),
                 OverlapType::CDS => {
                     if offset - s < cds_start || offset - s - z > cds_end {
                         return Err("UTRs are not allowed in CDS exons");
@@ -682,7 +682,7 @@ fn get_coords(
                     } else if offset - s > cds_end {
                         return Ok((offset - s - z, cds_end));
                     } else {
-                        Ok((SCALE - s - z, offset - s))
+                        Ok((offset - s - z, offset - s))
                     }
                 }
             },

@@ -332,8 +332,6 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     refs: Vec<T>,
     queries: Option<Vec<T>>,
     overlap: OverlapType,
-    // overlap_cds: bool,
-    // overlap_exon: bool,
     mode: PackMode,
 ) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error> {
     let (tracks, n) = match mode {
