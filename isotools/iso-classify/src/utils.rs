@@ -13,9 +13,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use config::{
-    get_progress_bar, BedParser, CoordType, Sequence, SharedSpliceMap, SpliceScores, SpliceSite,
-    Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS, CONS1, CONS2,
-    DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB, OVERLAP_CDS, SCALE,
+    get_progress_bar, BedParser, CoordType, OverlapType, Sequence, SharedSpliceMap, SpliceScores,
+    SpliceSite, Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS,
+    CONS1, CONS2, DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB, SCALE,
 };
 
 pub const MINIMUM_ACCEPTOR_LENGTH: usize = 23;
@@ -178,7 +178,7 @@ impl Bed4 {
 impl BedParser for Bed4 {
     fn parse(
         line: &str,
-        _cds_overlap: bool,
+        _overlap: OverlapType,
         _is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Bed4::new(line.to_string())
@@ -280,7 +280,7 @@ impl Bed6 {
 impl BedParser for Bed6 {
     fn parse(
         line: &str,
-        _cds_overlap: bool,
+        _overlap: OverlapType,
         _is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Bed6::new(line.to_string())
@@ -321,7 +321,7 @@ where
         .par_lines()
         .filter(|line| !line.starts_with('#'))
         .filter_map(|line| {
-            T::parse(line, OVERLAP_CDS, false) // INFO: placeholders
+            T::parse(line, OverlapType::Exon, false) // INFO: placeholders
                 .map_err(|e| warn!("Error parsing {}: {}", line, e))
                 .ok()
         })

@@ -5,8 +5,7 @@ use packbed::{packbed, record::IntronPredStats, BedPackage, IntronBucket, PackMo
 use rayon::prelude::*;
 
 use config::{
-    get_progress_bar, write_objs, Sequence, SharedSpliceMap, Strand, INTRON_CLASSIFICATION,
-    OVERLAP_CDS, OVERLAP_EXON, SCALE,
+    get_progress_bar, write_objs, Sequence, SharedSpliceMap, Strand, INTRON_CLASSIFICATION, SCALE,
 };
 
 use crate::cli::IntronArgs as Args;
@@ -28,8 +27,7 @@ pub fn classify_introns(args: Args) -> Result<()> {
     let isoseqs = packbed(
         args.iso,
         args.toga,
-        OVERLAP_CDS,
-        OVERLAP_EXON,
+        config::OverlapType::Exon,
         PackMode::Intron,
     )?;
 
