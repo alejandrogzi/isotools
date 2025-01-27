@@ -1,11 +1,13 @@
 use anyhow::Result;
 use dashmap::{DashMap, DashSet};
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use packbed::{packbed, record::IntronPredStats, BedPackage, IntronBucket, PackMode};
 use rayon::prelude::*;
 
 use config::{
-    get_progress_bar, write_objs, Sequence, SharedSpliceMap, Strand, INTRON_CLASSIFICATION, SCALE,
+    get_progress_bar, write_objs, Sequence, SharedSpliceMap, Strand, SupportType,
+    INTRON_CLASSIFICATION, INTRON_FREQUENCY_RECOVERY_THRESHOLD, MAX_ENT_SCORE_RECOVERY_THRESHOLD,
+    SCALE, SPLICE_AI_SCORE_RECOVERY_THRESHOLD,
 };
 
 use crate::cli::IntronArgs as Args;
@@ -19,6 +21,7 @@ const RT_REPEAT: usize = 12;
 const MISMATCHES: u32 = 1;
 const MAX_ENT_DONOR_MIN_SIZE: usize = 9;
 const NAG_PATTERNS: [&str; 3] = ["CAG", "TAG", "AAG"];
+const WIGGLE_SWITCH: [usize; 2] = [2, 4];
 
 type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
 type Genome = DashMap<String, Vec<u8>>;
@@ -104,8 +107,10 @@ fn distribute(
 
         let info = process_component(comp, banned, splice_map, scan_scores, genome, nag);
 
-        info.into_iter().for_each(|intron| {
-            accumulator.introns.insert(intron);
+        info.into_iter().for_each(|(_, intron_descriptor)| {
+            if !intron_descriptor.is_empty() {
+                accumulator.introns.insert(intron_descriptor);
+            }
         });
     });
 }
@@ -118,14 +123,15 @@ fn process_component(
     scan_scores: &ScanScores,
     genome: &Option<Genome>,
     nag: bool,
-) -> Vec<String> {
+) -> HashMap<(u64, u64), String> {
     let chr = component.chrom.clone();
     let strand = component.strand.clone();
+    let ref_introns = component.introns.keys().cloned().collect::<HashSet<_>>();
 
     let mut acc = if nag {
-        Vec::new()
+        HashMap::new()
     } else {
-        Vec::with_capacity(component.introns.len())
+        HashMap::with_capacity(component.introns.len())
     };
 
     // INFO: getting stranded spliceAi scores
@@ -134,7 +140,6 @@ fn process_component(
         Strand::Reverse => Some(&splice_map.1),
     };
 
-    // QUESTION: should we parallelize this?
     for (intron, descriptor) in component.introns.iter_mut() {
         let intron_start = intron.0 as u64;
         let intron_end = intron.1 as u64;
@@ -146,7 +151,7 @@ fn process_component(
         get_sj_context(intron, descriptor, &strand, &chr, genome, scan_scores);
         get_sj_ai_scores(intron, descriptor, splice_scores, &strand);
 
-        if nag && descriptor.acceptor_sequence == "AG" {
+        if nag && descriptor.acceptor_sequence == "AG" && descriptor.is_toga_supported {
             scan_nag_repeats(
                 intron,
                 descriptor,
@@ -159,12 +164,51 @@ fn process_component(
             );
         }
 
+        // WARN: breaking point to convert coords!
         let (intron_start, intron_end) = match component.strand {
             Strand::Forward => (intron_start, intron_end),
             Strand::Reverse => ((SCALE - intron_end), (SCALE - intron_start)),
         };
 
-        acc.push(descriptor.fmt(&chr, &strand, intron_start, intron_end));
+        // WARN: bypass to allow forward swicthing work
+        if acc.contains_key(&(intron_start, intron_end)) {
+            descriptor.support = SupportType::Splicing;
+        }
+
+        // INFO: U12 switching using TOGA coords [will be included with --nag]
+        if nag && descriptor.support == SupportType::Unclear && descriptor.is_toga_supported {
+            wiggle_splice_sites(&mut acc, intron, &ref_introns, &strand)
+        }
+
+        // INFO: not including NAG-derived introns bc they are already Splicing
+        if descriptor.is_toga_supported
+            || (descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
+                && descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
+            || (descriptor.max_ent_donor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD
+                && descriptor.max_ent_acceptor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD)
+            || descriptor.support == SupportType::Splicing
+        {
+            descriptor.support = SupportType::Splicing;
+        } else if (descriptor.seen as f64 / descriptor.spanned as f64)
+            >= INTRON_FREQUENCY_RECOVERY_THRESHOLD
+        {
+            if descriptor.is_rt_intron {
+                descriptor.support = SupportType::RT;
+            } else {
+                descriptor.support = SupportType::Splicing;
+            }
+        } else {
+            if descriptor.is_rt_intron {
+                descriptor.support = SupportType::RT;
+            } else {
+                descriptor.support = SupportType::Unclear;
+            }
+        }
+
+        acc.insert(
+            (intron_start, intron_end),
+            descriptor.fmt(&chr, &strand, intron_start, intron_end),
+        );
     }
 
     acc
@@ -257,7 +301,6 @@ fn get_sj_context(
 }
 
 fn get_sj_max_entropy(descriptor: &mut IntronPredStats, scan_scores: &ScanScores) {
-    // get MaxEnt scores
     if let Some(scan_scores) = scan_scores {
         let (donor_score_map, acceptor_score_map): &(SpliceScoreMap, SpliceScoreMap) = scan_scores;
 
@@ -290,7 +333,6 @@ fn get_sj_ai_scores(
     let intron_start = intron.0 as u64;
     let intron_end = intron.1 as u64;
 
-    // get spliceAi scores
     if let Some(splice_scores) = splice_scores {
         if let Some(donor_score_map) = splice_scores.0.as_ref() {
             let acceptor_score_map = splice_scores
@@ -353,6 +395,8 @@ fn process_nag_pattern(
         Strand::Reverse => ((SCALE - intron.1), (SCALE - intron.0)),
     };
 
+    // WARN: NAG-derived introns will be always SupportType::Splicing
+    new_descriptor.support = SupportType::Splicing;
     new_descriptor.fmt(chr, strand, scaled_intron.0, scaled_intron.1)
 }
 
@@ -364,33 +408,20 @@ fn scan_nag_repeats(
     genome: &Option<Genome>,
     scan_scores: &ScanScores,
     splice_scores: Option<&SharedSpliceMap>,
-    acc: &mut Vec<String>,
+    // acc: &mut Vec<String>,
+    acc: &mut HashMap<(u64, u64), String>,
 ) {
     let pre_acceptor = &descriptor.acceptor_context.slice(14, 17);
     let post_acceptor = &descriptor.acceptor_context.slice(20, 23);
 
     if NAG_PATTERNS.contains(&pre_acceptor.as_str()) {
-        acc.push(process_nag_pattern(
-            intron,
-            -3,
-            strand,
-            chr,
-            genome,
-            scan_scores,
-            splice_scores,
-        ));
+        let rs = process_nag_pattern(intron, -3, strand, chr, genome, scan_scores, splice_scores);
+        acc.insert((intron.0, intron.1 - 3), rs);
     }
 
     if NAG_PATTERNS.contains(&post_acceptor.as_str()) {
-        acc.push(process_nag_pattern(
-            intron,
-            3,
-            strand,
-            chr,
-            genome,
-            scan_scores,
-            splice_scores,
-        ));
+        let rs = process_nag_pattern(intron, 3, strand, chr, genome, scan_scores, splice_scores);
+        acc.insert((intron.0, intron.1 + 3), rs);
     }
 }
 
@@ -465,4 +496,65 @@ unsafe fn scan_sequence(descriptor: &mut IntronPredStats) {
     }
 
     descriptor.is_rt_intron = false;
+}
+
+fn wiggle_splice_sites(
+    acc: &mut HashMap<(u64, u64), String>,
+    intron: &(u64, u64),
+    ref_introns: &HashSet<(u64, u64)>,
+    strand: &Strand,
+) {
+    fn process_intron(
+        acc: &mut HashMap<(u64, u64), String>,
+        ref_introns: &HashSet<(u64, u64)>,
+        intron_start: u64,
+        intron_end: u64,
+        strand: &Strand,
+    ) {
+        // INFO: look if swithed intron is inside ref_introns
+        if ref_introns.contains(&(intron_start, intron_end)) {
+            let (intron_start, intron_end) = match strand {
+                Strand::Forward => (intron_start, intron_end),
+                Strand::Reverse => ((SCALE - intron_end), (SCALE - intron_start)),
+            };
+
+            // INFO: if its already classified, change support and toga_support
+            if acc.contains_key(&(intron_start, intron_end)) {
+                let mut fields = acc
+                    .get(&(intron_start, intron_end))
+                    .unwrap()
+                    .split('\t')
+                    .collect::<Vec<_>>();
+
+                fields[15] = "true";
+                fields[21] = "SPLICED";
+
+                acc.insert((intron_start, intron_end), fields.join("\t"));
+            } else {
+                // WARN: if its not classified, we need to insert it, leaving the rest of the fields empty
+                // WARN: the String inserted here should be unreacheable!
+                acc.insert((intron_start, intron_end), String::new());
+            }
+        }
+    }
+
+    for wiggle in WIGGLE_SWITCH {
+        // INFO: backward
+        process_intron(
+            acc,
+            ref_introns,
+            intron.0 as u64 - wiggle as u64,
+            intron.1 as u64 - wiggle as u64,
+            strand,
+        );
+
+        // INFO: forward
+        process_intron(
+            acc,
+            ref_introns,
+            intron.0 as u64 + wiggle as u64,
+            intron.1 as u64 + wiggle as u64,
+            strand,
+        );
+    }
 }
