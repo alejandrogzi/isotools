@@ -170,23 +170,12 @@ fn process_component(
             Strand::Reverse => ((SCALE - intron_end), (SCALE - intron_start)),
         };
 
-        // WARN: bypass to allow forward swicthing work
-        if acc.contains_key(&(intron_start, intron_end)) {
-            descriptor.support = SupportType::Splicing;
-        }
-
-        // INFO: U12 switching using TOGA coords [will be included with --nag]
-        if nag && descriptor.support == SupportType::Unclear && descriptor.is_toga_supported {
-            wiggle_splice_sites(&mut acc, intron, &ref_introns, &strand)
-        }
-
         // INFO: not including NAG-derived introns bc they are already Splicing
         if descriptor.is_toga_supported
             || (descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
                 && descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
             || (descriptor.max_ent_donor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD
                 && descriptor.max_ent_acceptor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD)
-            || descriptor.support == SupportType::Splicing
         {
             descriptor.support = SupportType::Splicing;
         } else if (descriptor.seen as f64 / descriptor.spanned as f64)
@@ -484,8 +473,7 @@ unsafe fn scan_sequence(descriptor: &mut IntronPredStats) {
         let kmer2 = window_to_int(&acceptor[idx..idx + WINDOW_SIZE]);
 
         for &(kmer1, _) in &kmers {
-            // INFO: 2 bits difference = 1 base mismatch
-            if hamming_distance(kmer1, kmer2) <= MISMATCHES + 1 {
+            if hamming_distance(kmer1, kmer2) <= MISMATCHES {
                 // INFO: returning bool and skipping early
                 // repeats.push((i, j));
                 // dbg!("Match found: seq1[{}..{}], seq2[{}..{}]", _, _ + 8, idx, idx + 8);
@@ -498,6 +486,7 @@ unsafe fn scan_sequence(descriptor: &mut IntronPredStats) {
     descriptor.is_rt_intron = false;
 }
 
+#[allow(unused)]
 fn wiggle_splice_sites(
     acc: &mut HashMap<(u64, u64), String>,
     intron: &(u64, u64),
