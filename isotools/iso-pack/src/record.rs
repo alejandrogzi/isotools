@@ -1,4 +1,4 @@
-use config::{BedParser, OverlapType, Sequence, Strand, SCALE};
+use config::{BedParser, OverlapType, Sequence, Strand, SupportType, SCALE};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,7 @@ pub struct IntronPredStats {
     pub acceptor_rt_context: String,     // RT-switch
     pub is_rt_intron: bool,              // RT-switch
     pub is_nag_intron: bool,             // TOGA-nag
+    pub support: SupportType,            // Classification
 }
 
 impl BedParser for IntronPred {
@@ -127,6 +128,7 @@ impl IntronPred {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            support,
         ) = (
             data.next().expect("ERROR: Cannot parse chrom"),
             data.next().expect("ERROR: Cannot parse start"),
@@ -150,6 +152,7 @@ impl IntronPred {
                 .expect("ERROR: Cannot parse acceptor_rt_context"),
             data.next().expect("ERROR: Cannot parse is_rt_intron"),
             data.next().expect("ERROR: Cannot parse is_nag_intron"),
+            data.next().expect("ERROR: Cannot parse support"),
         );
 
         let strand = match strand {
@@ -191,6 +194,7 @@ impl IntronPred {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            support,
         ]);
 
         Ok(Self {
@@ -237,6 +241,7 @@ impl IntronPredStats {
             acceptor_rt_context: String::new(),
             is_rt_intron: false,
             is_nag_intron: false,
+            support: SupportType::Unclear,
         }
     }
 
@@ -259,6 +264,7 @@ impl IntronPredStats {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            support,
         ) = (
             data[0].parse::<usize>().expect("ERROR: Cannot parse seen"),
             data[1]
@@ -301,6 +307,9 @@ impl IntronPredStats {
             data[16]
                 .parse::<bool>()
                 .expect("ERROR: Cannot parse is_nag_intron"),
+            data[17]
+                .parse::<SupportType>()
+                .expect("ERROR: Cannot parse support"),
         );
 
         Self {
@@ -321,12 +330,13 @@ impl IntronPredStats {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            support,
         }
     }
 
     pub fn fmt(&self, chr: &String, strand: &Strand, start: u64, end: u64) -> String {
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             chr,
             start,
             end,
@@ -347,7 +357,8 @@ impl IntronPredStats {
             self.donor_rt_context,
             self.acceptor_rt_context,
             self.is_rt_intron,
-            self.is_nag_intron
+            self.is_nag_intron,
+            self.support
         )
     }
 }
@@ -396,6 +407,11 @@ impl GenePred {
     #[inline(always)]
     pub fn get_middle_exons(&self) -> BTreeSet<(u64, u64)> {
         self.exons[1..].iter().cloned().collect()
+    }
+
+    #[inline(always)]
+    pub fn get_exons(&self) -> BTreeSet<(u64, u64)> {
+        self.exons.iter().cloned().collect()
     }
 
     #[inline(always)]
@@ -918,6 +934,9 @@ impl IntronBucket {
                     stats.seen += 1;
                 } else {
                     let is_toga_supported = toga_introns.contains(ref_intron);
+                    if is_toga_supported {
+                        toga_introns.remove(ref_intron);
+                    }
 
                     let position = if is_toga_supported {
                         IntronPosition::CDS
@@ -951,6 +970,7 @@ impl IntronBucket {
                         acceptor_rt_context: String::new(),
                         is_rt_intron: false,
                         is_nag_intron: false,
+                        support: SupportType::Unclear,
                     };
 
                     introns.insert(ref_intron.clone(), stats);
@@ -964,6 +984,34 @@ impl IntronBucket {
             }
         }
 
+        // INFO: add remaining TOGA introns if any and include flag to indentify them
+        if !toga_introns.is_empty() {
+            for toga_intron in toga_introns {
+                let stats = IntronPredStats {
+                    seen: 0,
+                    spanned: 0,
+                    splice_ai_donor: 0.0,
+                    splice_ai_acceptor: 0.0,
+                    max_ent_donor: 0.0,
+                    max_ent_acceptor: 0.0,
+                    donor_sequence: String::new(),
+                    acceptor_sequence: String::new(),
+                    donor_context: Sequence::new(&[]),
+                    acceptor_context: Sequence::new(&[]),
+                    intron_position: IntronPosition::Unknown,
+                    is_toga_supported: true, // INFO: flag to identify TOGA introns
+                    is_in_frame: false,
+                    donor_rt_context: String::new(),
+                    acceptor_rt_context: String::new(),
+                    is_rt_intron: false,
+                    is_nag_intron: false,
+                    support: SupportType::Unclear, // INFO: flag to identify TOGA introns
+                };
+
+                introns.insert(toga_intron, stats);
+            }
+        }
+
         Self {
             chrom: chr,
             strand,
@@ -974,8 +1022,6 @@ impl IntronBucket {
 
 #[cfg(test)]
 mod tests {
-    use std::env::consts::OS;
-
     use super::*;
 
     #[test]
