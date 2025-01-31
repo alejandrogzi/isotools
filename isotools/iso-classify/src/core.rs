@@ -126,7 +126,6 @@ fn process_component(
 ) -> HashMap<(u64, u64), String> {
     let chr = component.chrom.clone();
     let strand = component.strand.clone();
-    let ref_introns = component.introns.keys().cloned().collect::<HashSet<_>>();
 
     let mut acc = if nag {
         HashMap::new()
