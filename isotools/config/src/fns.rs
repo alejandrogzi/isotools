@@ -142,10 +142,10 @@ pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
     }
 
     match arg.extension() {
-        Some(ext) if ext == "bed" => (),
+        Some(ext) if ext == "bed" || ext == "tsv" => (),
         _ => {
             return Err(CliError::InvalidInput(format!(
-                "ERROR: file {:?} is not a BED file",
+                "ERROR: file {:?} is not a BED or TSV file",
                 arg
             )))
         }
