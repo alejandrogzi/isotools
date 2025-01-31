@@ -24,10 +24,12 @@ pub const MIN_BED4_FIELDS: usize = 4;
 pub const TRUNCATION_THRESHOLD: f32 = 0.5;
 pub const TRUNCATION_RECOVERY_THRESHOLD: f32 = 0.5;
 
-// intron-retention numeric values
+// intron-retention numeric values || intron-classification numeric values
 pub const RETENTION_RATIO_THRESHOLD: f32 = 0.001; // WARN: allowing everthing to enter recover step
 pub const INTRON_RETENTION_RECOVERY_THRESHOLD: f32 = 0.5;
+pub const INTRON_FREQUENCY_RECOVERY_THRESHOLD: f64 = 0.5;
 pub const SPLICE_AI_SCORE_RECOVERY_THRESHOLD: f32 = 0.01; // INFO: if both splice sites are above, is a true intron
+pub const MAX_ENT_SCORE_RECOVERY_THRESHOLD: f32 = 1.5; // INFO: if both splice sites are above, is a true intron
 
 // fusion numeric values
 pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
@@ -133,6 +135,36 @@ pub enum OverlapType {
     CDS,      // CDS-overlap
     Exon,     // exon-overlap
     Boundary, // boundary-overlap
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum SupportType {
+    Splicing,
+    RT,
+    Unclear,
+}
+
+impl std::fmt::Display for SupportType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SupportType::Splicing => write!(f, "SPLICED"),
+            SupportType::RT => write!(f, "RT"),
+            SupportType::Unclear => write!(f, "UNCLEAR"),
+        }
+    }
+}
+
+impl std::str::FromStr for SupportType {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "SPLICED" => Ok(SupportType::Splicing),
+            "RT" => Ok(SupportType::RT),
+            "UNCLEAR" => Ok(SupportType::Unclear),
+            _ => Err("ERROR: Cannot parse support type!".into()),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
