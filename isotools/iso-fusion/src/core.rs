@@ -2,7 +2,6 @@ use anyhow::Result;
 use config::{
     exonic_overlap, get_progress_bar, write_objs, FusionDetectionValue, ModuleDescriptor,
     ModuleMap, ModuleType, FUSIONS, FUSION_FREE, FUSION_RATIO_THRESHOLD, FUSION_REVIEW,
-    OVERLAP_CDS, OVERLAP_EXON,
 };
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
@@ -20,30 +19,31 @@ pub fn detect_fusions(args: Args) -> Result<()> {
     info!("Preparing files for fusion detection...");
 
     let ref_str = prepare_refs(args.refs)?;
-    let refs = parse_tracks(ref_str.as_str(), OVERLAP_CDS, true)?;
-    let query = unpack(args.query, OVERLAP_CDS, false)?;
+    let refs = parse_tracks::<GenePred>(ref_str.as_str(), config::OverlapType::Exon, true)?;
+    let query = unpack(args.query, config::OverlapType::Exon, false)?;
 
     let (tracks, n) = combine(refs, query);
-    let buckets = buckerize(tracks, OVERLAP_CDS, OVERLAP_EXON, n);
+    let buckets = buckerize(
+        tracks,
+        config::OverlapType::Exon,
+        n,
+        packbed::PackMode::Default,
+    );
 
     let blacklist = if !args.blacklist.is_empty() {
-        unpack_blacklist(args.blacklist, true, false).ok()
+        unpack_blacklist(args.blacklist, config::OverlapType::Exon, false).ok()
     } else {
         None
     };
     let pb = get_progress_bar(buckets.len() as u64, "Detecting fusions...");
 
-    let n_comps = AtomicU32::new(0);
-    let dirty_count = AtomicU32::new(0);
-
-    let hits: DashSet<String> = DashSet::new();
-    let passes: DashSet<String> = DashSet::new();
-    let reviews: DashSet<String> = DashSet::new();
+    let counter = ParallelCounter::default();
+    let acc = ParallelAccumulator::default();
 
     buckets.par_iter().for_each(|bucket| {
         let chr = bucket.key();
         let components = bucket.value().to_owned();
-        n_comps.fetch_add(components.len() as u32, Ordering::Relaxed);
+        counter.inc_comp(components.len() as u32);
 
         let binding = HashSet::new();
         let banned = if let Some(bl) = blacklist.as_ref() {
@@ -53,23 +53,18 @@ pub fn detect_fusions(args: Args) -> Result<()> {
         };
 
         components.into_par_iter().for_each(|comp| {
+            let comp = comp
+                .as_any()
+                .downcast_ref::<(RefGenePred, Vec<GenePred>)>()
+                .expect("ERROR: Failed to downcast to RefGenePred");
+
             let (fusions, no_fusions, review, descriptor, is_dirty) =
                 process_component(comp, banned, args.recover);
 
-            fusions.into_iter().for_each(|hit| {
-                hits.insert(hit);
-            });
-            no_fusions.into_iter().for_each(|p| {
-                passes.insert(p);
-            });
-            if let Some(r) = review {
-                r.into_iter().for_each(|r| {
-                    reviews.insert(r);
-                });
-            }
+            acc.add(fusions, no_fusions, review);
 
             if is_dirty {
-                dirty_count.fetch_add(1, Ordering::Relaxed);
+                counter.inc_dirty(1);
             }
         });
 
@@ -77,32 +72,96 @@ pub fn detect_fusions(args: Args) -> Result<()> {
     });
 
     pb.finish_and_clear();
-    info!("Detected fusions: {}", hits.len());
-    info!("Fusion-free reads: {}", passes.len());
+    info!("Detected fusions: {}", acc.fusions.len());
+    info!("Fusion-free reads: {}", acc.passes.len());
 
     if args.recover {
         log::warn!(
             "Number of dirty components in query reads: {:?} ({:.3}%)",
-            dirty_count,
-            dirty_count.load(Ordering::Relaxed) as f64 / n_comps.load(Ordering::Relaxed) as f64
-                * 100.0
+            counter.num_of_dirty,
+            counter.load_ratio()
         );
 
-        if reviews.len() > 0 {
-            write_objs(&reviews, FUSION_REVIEW);
+        if acc.review.len() > 0 {
+            write_objs(&acc.review, FUSION_REVIEW);
         }
     }
 
-    [&hits, &passes]
+    [&acc.fusions, &acc.passes]
         .par_iter()
         .zip([FUSIONS, FUSION_FREE].par_iter())
         .for_each(|(rx, path)| write_objs(&rx, path));
 
+    if args.recover {
+        write_objs(&acc.review, FUSION_REVIEW);
+    }
+
     Ok(())
 }
 
+struct ParallelAccumulator {
+    fusions: DashSet<String>,
+    review: DashSet<String>,
+    passes: DashSet<String>,
+}
+
+impl Default for ParallelAccumulator {
+    fn default() -> Self {
+        Self {
+            fusions: DashSet::new(),
+            review: DashSet::new(),
+            passes: DashSet::new(),
+        }
+    }
+}
+
+impl ParallelAccumulator {
+    fn add(&self, fusions: Vec<String>, passes: Vec<String>, review: Option<Vec<String>>) {
+        fusions.into_iter().for_each(|fusion| {
+            self.fusions.insert(fusion);
+        });
+        passes.into_iter().for_each(|pass| {
+            self.passes.insert(pass);
+        });
+        if let Some(r) = review {
+            r.into_iter().for_each(|r| {
+                self.review.insert(r);
+            });
+        }
+    }
+}
+
+struct ParallelCounter {
+    num_of_comps: AtomicU32,
+    num_of_dirty: AtomicU32,
+}
+
+impl Default for ParallelCounter {
+    fn default() -> Self {
+        Self {
+            num_of_comps: AtomicU32::new(0),
+            num_of_dirty: AtomicU32::new(0),
+        }
+    }
+}
+
+impl ParallelCounter {
+    fn inc_comp(&self, value: u32) {
+        self.num_of_comps.fetch_add(value, Ordering::Relaxed);
+    }
+
+    fn inc_dirty(&self, value: u32) {
+        self.num_of_dirty.fetch_add(value, Ordering::Relaxed);
+    }
+
+    fn load_ratio(&self) -> f64 {
+        self.num_of_dirty.load(Ordering::Relaxed) as f64
+            / self.num_of_comps.load(Ordering::Relaxed) as f64
+    }
+}
+
 fn process_component(
-    component: (RefGenePred, Vec<GenePred>),
+    component: &(RefGenePred, Vec<GenePred>),
     banned: &HashSet<String>,
     recover: bool,
 ) -> (
@@ -119,8 +178,8 @@ fn process_component(
 
     let mut is_dirty = false;
 
-    let refs = component.0;
-    let queries = component.1;
+    let refs = &component.0;
+    let queries = &component.1;
 
     let genes = refs.get_names_split();
 
@@ -129,8 +188,8 @@ fn process_component(
     let (mut fusion_count, totals) = (0_f32, queries.len() as f32);
 
     if genes.len() > 1 {
-        // fusion
-        // log::warn!("Multiple ref genes in component: {:?}", genes);
+        // INFO: fusion loci
+        // INFO: we create a per-gene collection of exons
         let refs = refs.smash_exons_by_name();
 
         queries.iter().for_each(|query| {
