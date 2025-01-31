@@ -30,6 +30,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use hashbrown::{HashMap, HashSet};
 use log::{info, warn};
+use packbed::record::IntronPosition;
 use packbed::{packbed, BedPackage, GenePred, IntronPred, RefGenePred};
 use rayon::prelude::*;
 use serde_json::Value;
@@ -38,9 +39,9 @@ use crate::cli::Args;
 use crate::utils::{unpack_blacklist, write_results, ParallelAccumulator, ParallelCounter};
 
 use config::{
-    get_progress_bar, IntronRetentionValue, ModuleDescriptor, ModuleMap, ModuleType,
-    INTRON_RETENTION_RECOVERY_THRESHOLD, OVERLAP_CDS, OVERLAP_EXON, RETENTION_RATIO_THRESHOLD,
-    SCALE, SPLICE_AI_SCORE_RECOVERY_THRESHOLD,
+    get_progress_bar, IntronRetentionValue, ModuleDescriptor, ModuleMap, ModuleType, OverlapType,
+    INTRON_RETENTION_RECOVERY_THRESHOLD, RETENTION_RATIO_THRESHOLD, SCALE,
+    SPLICE_AI_SCORE_RECOVERY_THRESHOLD,
 };
 
 /// Detects intron retentions in an query set of reads
@@ -82,8 +83,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
     let tracks = packbed(
         args.refs,
         Some(args.query),
-        OVERLAP_CDS,
-        OVERLAP_EXON,
+        OverlapType::Exon,
         packbed::PackMode::Query,
     )?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
@@ -102,14 +102,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
         let binding = HashSet::new();
         let banned = blacklist.get(&chr).unwrap_or(&binding);
 
-        process_components(
-            components,
-            banned,
-            args.plot,
-            args.recover,
-            &accumulator,
-            &counter,
-        );
+        process_components(components, banned, &accumulator, &counter);
 
         pb.inc(1);
     });
@@ -120,20 +113,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
         accumulator.num_retentions()
     );
 
-    if args.recover {
-        let (dirties, prop) = counter.get_stat();
-        warn!(
-            "Number of dirty components in query reads: {:?} ({:.3}%)",
-            dirties, prop
-        );
-    }
-
-    // let (true_retentions, false_retentions, partial_retentions) = counter.load_retentions();
-    // warn!("Number of true retentions: {}", true_retentions);
-    // warn!("Number of false retentions: {}", false_retentions);
-    // warn!("Number of partial retentions: {}", partial_retentions);
-
-    write_results(&accumulator, args.plot);
+    write_results(&accumulator);
 
     Ok(())
 }
@@ -142,8 +122,6 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
 fn process_components(
     components: Vec<Box<dyn BedPackage>>,
     banned: &HashSet<(u64, u64)>,
-    plot: bool,
-    recover: bool,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
 ) {
@@ -153,27 +131,128 @@ fn process_components(
             .downcast_mut::<(Vec<IntronPred>, Vec<GenePred>)>()
             .expect("ERROR: Could not downcast to IntronPred!");
 
-        dbg!(comp);
+        let (keep, discard) = process_component(comp, banned, counter);
 
-        // let (retentions, non_retentions, blocks, _, is_dirty) =
-        //     process_component(comp, banned, plot, recover, counter);
+        discard.into_iter().for_each(|r| {
+            accumulator.retentions.insert(r);
+        });
 
-        // retentions.into_iter().for_each(|r| {
-        //     accumulator.retentions.insert(r);
-        // });
-
-        // non_retentions.into_iter().for_each(|nr| {
-        //     accumulator.non_retentions.insert(nr);
-        // });
-
-        // if let Some(blocks) = blocks {
-        //     accumulator.miscellaneous.insert(blocks);
-        // }
-
-        // if is_dirty {
-        //     counter.inc_dirty();
-        // }
+        keep.into_iter().for_each(|nr| {
+            accumulator.non_retentions.insert(nr);
+        });
     });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntronModuleReadCategory {
+    RT,      // RT-intron
+    Unclear, // Artifact
+    Clean,   // None
+    IR,      // Retention
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntronModuleReadAction {
+    // Review,  // Unclear
+    Discard, // RT-intron
+    Keep,
+}
+
+#[inline(always)]
+pub fn process_component(
+    comp: &mut (Vec<IntronPred>, Vec<GenePred>),
+    ban: &HashSet<(u64, u64)>,
+    counter: &ParallelCounter,
+) -> (
+    Vec<String>,
+    Vec<String>,
+    // HashMap<String, Box<dyn ModuleMap>>,
+) {
+    let mut keep = Vec::new();
+    let mut discard = Vec::new();
+
+    let introns = &comp.0;
+    let reads = &comp.1;
+
+    // INFO: convert Vec<IntronPred> into HashMap<(u64, u64), IntronPred>
+    let intron_map = introns
+        .iter()
+        .map(|intron| ((intron.start, intron.end), intron))
+        .collect::<HashMap<_, _>>();
+
+    // INFO: for every read -> see which introns are retained and which the read has!
+    for read in reads {
+        // INFO: Determine if read has RT introns
+        let read_introns = read.get_introns();
+        let mut intronic_status = IntronModuleReadAction::Keep;
+        for intron in read_introns {
+            let hit = intron_map
+                .get(&intron)
+                .expect("ERROR: Intron not found, this is likely a bug!");
+
+            match hit.stats.support {
+                config::SupportType::RT => {
+                    // INFO: if read is RT, discard
+                    intronic_status = IntronModuleReadAction::Discard;
+                }
+                config::SupportType::Splicing | config::SupportType::Unclear => {} // INFO: Do nothing
+            };
+
+            if intronic_status == IntronModuleReadAction::Discard {
+                break;
+            }
+        }
+
+        let read_exons = read.get_exons();
+        let mut exonic_status = IntronModuleReadAction::Keep;
+        for exon in read_exons {
+            let exon_start = exon.0;
+            let exon_end = exon.1;
+
+            for (intron, stats) in intron_map.iter() {
+                let intron_start = intron.0;
+                let intron_end = intron.1;
+
+                // INFO: early exit to avoid unnecessary checks
+                if intron_end < exon_start {
+                    break;
+                }
+
+                if exon_start < intron_start && intron_end < exon_end {
+                    match stats.stats.support {
+                        config::SupportType::RT => {} // INFO: retaining a false intron is not an IR, do nothing
+                        config::SupportType::Unclear | config::SupportType::Splicing => {
+                            match stats.stats.intron_position {
+                                IntronPosition::CDS => {
+                                    // INFO: if intron in frame keep read --> splice variant producing a longer protein
+                                    // INFO: else do not annotate read (exon structure is flawed)
+                                    if !stats.stats.is_in_frame {
+                                        exonic_status = IntronModuleReadAction::Discard;
+                                    }
+                                }
+                                // INFO: keep read --> variant would not affect CDS
+                                IntronPosition::UTR
+                                | IntronPosition::Unknown
+                                | IntronPosition::Mixed => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        match (intronic_status, exonic_status) {
+            (IntronModuleReadAction::Discard, _) | (_, IntronModuleReadAction::Discard) => {
+                counter.inc_retentions();
+                discard.push(read.line().to_owned());
+            }
+            _ => {
+                keep.push(read.line().to_owned());
+            }
+        };
+    }
+
+    (keep, discard)
 }
 
 // #[inline(always)]
