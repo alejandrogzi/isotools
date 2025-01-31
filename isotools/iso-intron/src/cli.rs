@@ -1,4 +1,4 @@
-use clap::{ArgAction, Parser};
+use clap::Parser;
 use config::ArgCheck;
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ pub struct Args {
         value_name = "PATHS",
         value_delimiter = ',',
         num_args = 1..,
-        help = "Paths to BED12 files delimited by comma"
+        help = "Paths to reference_introns TSV file produced by iso-classify"
     )]
     pub refs: Vec<PathBuf>,
 
@@ -45,45 +45,6 @@ pub struct Args {
         default_value_t = num_cpus::get()
     )]
     pub threads: usize,
-
-    #[arg(
-        short = 'p',
-        long = "plot",
-        help = "Flag to output retentions in a BED4 file",
-        value_name = "FLAG",
-        default_value = "false"
-    )]
-    pub plot: bool,
-
-    #[arg(
-        long = "recover",
-        help = "Flag to recover from disputed truncations",
-        value_name = "FLAG",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
-    )]
-    pub recover: bool,
-
-    #[arg(
-        long = "spliceai",
-        required = false,
-        value_name = "PATH",
-        num_args = 1,
-        help = "Path to spliceAI directory [will asume 2 files per strand: acceptor and donor .bw]"
-    )]
-    pub splice_scores: Option<PathBuf>,
-
-    #[arg(
-        long = "toga",
-        required = false,
-        value_name = "PATH",
-        num_args = 1..,
-        help = "Path to BED12 TOGA annotation file"
-    )]
-    pub toga: Option<PathBuf>,
 }
 
 impl ArgCheck for Args {

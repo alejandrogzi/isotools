@@ -9,14 +9,12 @@ use std::sync::Arc;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use config::{write_objs, CoordType, BED3, INTRON_RETENTIONS, INTRON_RETENTION_FREE};
+use config::{write_objs, CoordType, INTRON_RETENTIONS, INTRON_RETENTION_FREE};
 
 pub struct ParallelCounter {
     pub dirties: AtomicU32,
     pub components: AtomicU32,
-    pub true_retentions: AtomicU32,
-    pub false_retentions: AtomicU32,
-    pub partial_retentions: AtomicU32,
+    pub retentions: AtomicU32,
 }
 
 impl ParallelCounter {
@@ -24,9 +22,7 @@ impl ParallelCounter {
         Self {
             dirties: AtomicU32::new(0),
             components: AtomicU32::new(0),
-            true_retentions: AtomicU32::new(0),
-            false_retentions: AtomicU32::new(0),
-            partial_retentions: AtomicU32::new(0),
+            retentions: AtomicU32::new(0),
         }
     }
 
@@ -50,24 +46,8 @@ impl ParallelCounter {
         (dirties, (dirties / components) * 100.0)
     }
 
-    pub fn inc_true_retentions(&self) {
-        self.true_retentions.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn inc_false_retentions(&self) {
-        self.false_retentions.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn inc_partial_retentions(&self) {
-        self.partial_retentions.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn load_retentions(&self) -> (u32, u32, u32) {
-        (
-            self.true_retentions.load(Ordering::Relaxed),
-            self.false_retentions.load(Ordering::Relaxed),
-            self.partial_retentions.load(Ordering::Relaxed),
-        )
+    pub fn inc_retentions(&self) {
+        self.retentions.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -110,13 +90,9 @@ pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashS
     Some(tracks)
 }
 
-pub fn write_results(accumulator: &ParallelAccumulator, plot: bool) {
+pub fn write_results(accumulator: &ParallelAccumulator) {
     [&accumulator.retentions, &accumulator.non_retentions]
         .par_iter()
         .zip([INTRON_RETENTIONS, INTRON_RETENTION_FREE].par_iter())
         .for_each(|(acc, path)| write_objs(acc, path));
-
-    if plot {
-        write_objs(&accumulator.miscellaneous, BED3);
-    }
 }
