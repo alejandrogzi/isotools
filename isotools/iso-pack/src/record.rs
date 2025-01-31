@@ -851,7 +851,13 @@ impl RefGenePred {
         let mut middles = BTreeSet::new();
         let mut introns = BTreeSet::new();
         let mut bounds = (u64::MAX, 0);
-        let strand = reads[0].strand.clone();
+
+        let strand = if !reads.is_empty() {
+            reads[0].strand.clone()
+        } else {
+            // WARN: case where trying to create a RefGenePred from an empty Vec<GenePred>
+            Strand::Forward
+        };
 
         for read in &reads {
             bounds.0 = bounds.0.min(read.start);
