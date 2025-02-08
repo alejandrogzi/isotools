@@ -33,6 +33,7 @@ pub const RGB: [&str; 10] = [
 pub trait BedPackage: Send + Sync + Debug + Any {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any>;
 }
 
 pub type DefaultBucket = (RefGenePred, Vec<GenePred>);
@@ -45,6 +46,10 @@ impl BedPackage for DefaultBucket {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
 }
 
 impl BedPackage for IntronBucket {
@@ -53,6 +58,10 @@ impl BedPackage for IntronBucket {
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 }
@@ -65,6 +74,10 @@ impl BedPackage for Vec<GenePred> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
 }
 
 impl BedPackage for Vec<IntronPred> {
@@ -75,6 +88,10 @@ impl BedPackage for Vec<IntronPred> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
 }
 
 impl BedPackage for (Vec<IntronPred>, Vec<GenePred>) {
@@ -83,6 +100,10 @@ impl BedPackage for (Vec<IntronPred>, Vec<GenePred>) {
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 }
