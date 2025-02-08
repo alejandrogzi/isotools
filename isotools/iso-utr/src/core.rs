@@ -2,79 +2,93 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use config::{
-    get_progress_bar, write_objs, ModuleDescriptor, ModuleMap, ModuleType, StartTruncationValue,
-    OVERLAP_CDS, OVERLAP_EXON, TRUNCATIONS, TRUNCATION_FREE, TRUNCATION_RECOVERY_THRESHOLD,
-    TRUNCATION_THRESHOLD,
+    get_progress_bar, ModuleDescriptor, ModuleMap, ModuleType, OverlapType, StartTruncationValue,
+    TRUNCATION_RECOVERY_THRESHOLD, TRUNCATION_THRESHOLD,
 };
-use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
 use log::{info, warn};
-use packbed::{packbed, GenePred, RefGenePred};
+use packbed::{packbed, BedPackage, GenePred, RefGenePred};
 use rayon::prelude::*;
 use serde_json::Value;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::cli::Args;
-use crate::utils::unpack_blacklist;
+use crate::utils::*;
 
 pub fn detect_truncations(args: Args) -> Result<()> {
     info!("Detecting 5'end truncations...");
 
-    let tracks = packbed(args.refs, Some(args.query), OVERLAP_CDS, OVERLAP_EXON)?;
+    let tracks = packbed(
+        args.refs,
+        Some(args.query),
+        OverlapType::Exon,
+        packbed::PackMode::Default,
+    )?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
-    let hit_acc: DashSet<String> = DashSet::new();
-    let pass_acc: DashSet<String> = DashSet::new();
+    let accumulator = ParallelAccumulator::default();
+    let counter = ParallelCounter::default();
 
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
-    let dirty_count = AtomicU32::new(0);
-    let n_comps = AtomicU32::new(0);
-    tracks.par_iter().for_each(|bucket| {
-        let components = bucket.value().to_owned();
-        n_comps.fetch_add(components.len() as u32, Ordering::Relaxed);
+    tracks.into_par_iter().for_each(|bucket| {
+        let components = bucket.1;
+        counter.inc_components(components.len() as u32);
 
-        components.into_par_iter().for_each(|comp| {
-            let (hits, pass, descriptor, is_dirty) =
-                process_component(comp, &blacklist, args.recover);
-
-            hits.into_iter().for_each(|hit| {
-                hit_acc.insert(hit);
-            });
-            pass.into_iter().for_each(|p| {
-                pass_acc.insert(p);
-            });
-
-            if is_dirty {
-                dirty_count.fetch_add(1, Ordering::Relaxed);
-            }
-        });
+        process_components(components, &blacklist, &accumulator, &counter, args.recover);
 
         pb.inc(1);
     });
 
     pb.finish_and_clear();
-    info!("Reads with 5'end truncations: {}", hit_acc.len());
+    info!(
+        "Reads with 5'end truncations: {}",
+        accumulator.truncations.len()
+    );
 
     if args.recover {
+        let (count, ratio) = counter.get_counters();
         warn!(
             "Number of dirty components in query reads: {:?} ({:.3}%)",
-            dirty_count,
-            dirty_count.load(Ordering::Relaxed) as f64 / n_comps.load(Ordering::Relaxed) as f64
-                * 100.0
+            count, ratio
         );
     }
 
-    [hit_acc, pass_acc]
-        .par_iter()
-        .zip([TRUNCATIONS, TRUNCATION_FREE].par_iter())
-        .for_each(|(rx, path)| write_objs(&rx, path));
+    write_results(&accumulator);
 
     Ok(())
 }
 
+pub fn process_components(
+    components: Vec<Box<dyn BedPackage>>,
+    banned: &HashSet<String>,
+    accumulator: &ParallelAccumulator,
+    counter: &ParallelCounter,
+    recover: bool,
+) {
+    components.into_par_iter().for_each(|comp| {
+        let comp = comp
+            .as_any_owned()
+            .downcast::<(RefGenePred, Vec<GenePred>)>()
+            .expect("ERROR: Failed to downcast to RefGenePred");
+
+        let (truncations, no_truncations, descriptor, is_dirty) =
+            process_component(comp, &banned, recover);
+
+        truncations.into_iter().for_each(|hit| {
+            accumulator.truncations.insert(hit);
+        });
+        no_truncations.into_iter().for_each(|pass| {
+            accumulator.no_truncations.insert(pass);
+        });
+
+        if is_dirty {
+            counter.inc_dirty();
+        }
+    });
+}
+
 #[inline(always)]
 pub fn process_component(
-    comp: (RefGenePred, Vec<GenePred>),
+    comp: Box<(RefGenePred, Vec<GenePred>)>,
     ban: &HashSet<String>,
     recover: bool,
 ) -> (
