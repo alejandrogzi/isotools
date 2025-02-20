@@ -135,6 +135,7 @@ pub enum OverlapType {
     CDS,      // CDS-overlap
     Exon,     // exon-overlap
     Boundary, // boundary-overlap
+    CDSBound, // CDS-overlap-UTR-boundary
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
