@@ -20,7 +20,7 @@ pub fn detect_truncations(args: Args) -> Result<()> {
     let tracks = packbed(
         args.refs,
         Some(args.query),
-        OverlapType::Exon,
+        OverlapType::CDSBound,
         packbed::PackMode::Default,
     )?;
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
@@ -45,7 +45,7 @@ pub fn detect_truncations(args: Args) -> Result<()> {
     );
 
     if args.recover {
-        let (count, ratio) = counter.get_counters();
+        let (count, ratio) = counter.get_stat();
         warn!(
             "Number of dirty components in query reads: {:?} ({:.3}%)",
             count, ratio

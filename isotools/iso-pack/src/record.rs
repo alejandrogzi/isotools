@@ -669,7 +669,9 @@ fn get_coords(
         .zip(&sz)
         .map(|(&s, &z)| match strand {
             '+' => match overlap {
-                OverlapType::Exon | OverlapType::Boundary => Ok((s + offset, s + z + offset)),
+                OverlapType::Exon | OverlapType::Boundary | OverlapType::CDSBound => {
+                    Ok((s + offset, s + z + offset))
+                }
                 OverlapType::CDS => {
                     if s + z + offset < cds_start || s + offset > cds_end {
                         return Err("ERROR: UTRs are not allowed in CDS exons!");
@@ -686,7 +688,9 @@ fn get_coords(
                 }
             },
             '-' => match overlap {
-                OverlapType::Exon | OverlapType::Boundary => Ok((offset - s - z, offset - s)),
+                OverlapType::Exon | OverlapType::Boundary | OverlapType::CDSBound => {
+                    Ok((offset - s - z, offset - s))
+                }
                 OverlapType::CDS => {
                     if offset - s < cds_start || offset - s - z > cds_end {
                         return Err("UTRs are not allowed in CDS exons");

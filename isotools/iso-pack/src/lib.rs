@@ -233,8 +233,6 @@ impl UnionFind {
 
 pub fn buckerize(
     tracks: HashMap<String, Vec<GenePred>>,
-    // overlap_cds: bool,
-    // overlap_exon: bool,
     overlap: OverlapType,
     amount: usize,
     mode: PackMode,
@@ -255,7 +253,29 @@ pub fn buckerize(
                     // INFO: if no overlap choice, use tx boundaries as exons
                     exons.push((transcript.start, transcript.end, i));
                 }
-                OverlapType::CDS | OverlapType::Exon => {
+                OverlapType::CDSBound => {
+                    for &(start, end) in &transcript.exons {
+                        // INFO: UTRs are not considered in the overlap
+                        if end < transcript.cds_start || start > transcript.cds_end {
+                            continue;
+                        }
+
+                        // INFO: taking care of 5' UTR-CDS nested exons
+                        if start < transcript.cds_start && end < transcript.cds_end {
+                            exons.push((transcript.cds_start, end, i));
+                            continue;
+                        }
+
+                        // INFO: taking care of CDS-3' UTR nested exons
+                        if start > transcript.cds_start && end > transcript.cds_end {
+                            exons.push((start, transcript.cds_end, i));
+                            continue;
+                        }
+
+                        exons.push((start, end, i));
+                    }
+                }
+                OverlapType::Exon | OverlapType::CDS => {
                     for &(start, end) in &transcript.exons {
                         exons.push((start, end, i));
                     }
@@ -291,16 +311,19 @@ pub fn buckerize(
         let comps = groups
             .into_iter()
             .filter_map(|(_, group)| {
-                // INFO: separate refs from queries, use refs to build RefGenePred
+                // INFO: separate refs from queries and match mode
                 let (refs, queries): (Vec<_>, Vec<_>) = group.into_iter().partition(|x| x.is_ref);
 
                 match mode {
                     PackMode::Default => {
+                        // INFO: separate refs from queries, use refs to build RefGenePred
+                        // INFO: used in iso-utr
                         let refs = RefGenePred::from(refs);
                         return Some(Box::new((refs, queries)) as Box<dyn BedPackage>);
                     }
                     PackMode::Intron => {
                         // WARN: queries are TOGA introns -> avoid empty refs!
+                        // INFO: used in iso-classify
                         if refs.is_empty() {
                             return None;
                         }
@@ -310,6 +333,7 @@ pub fn buckerize(
                     }
                     PackMode::Query => {
                         // INFO: introns are refs, reads are queries [both Vec<GenePred>]
+                        // INFO: used in iso-intron
                         // WARN: avoid empty queries or refs -> should be at least one of each
                         // because we are using one to build the other!
                         if queries.is_empty() | refs.is_empty() {
