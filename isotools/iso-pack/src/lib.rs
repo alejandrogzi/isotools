@@ -108,12 +108,27 @@ impl BedPackage for (Vec<IntronPred>, Vec<GenePred>) {
     }
 }
 
+impl BedPackage for (Vec<GenePred>, Vec<GenePred>) {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PackMode {
     Default, // RefGenePred + Vec<GenePred>
     Intron,  // IntronPred
     Exon,    // ExonPred
-    Query,   // Vec<GenePred>
+    Query,   // Vec<GenePred> + Vec<IntronPred>
+    Paired,  // Vec<GenePred> + Vec<GenePred>
 }
 
 pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
@@ -353,6 +368,11 @@ pub fn buckerize(
                         // return refs;
                         todo!()
                     }
+                    PackMode::Paired => {
+                        // INFO: both refs and queries are Vec<GenePred>
+                        // INFO: used in iso-orf
+                        return Some(Box::new((refs, queries)) as Box<dyn BedPackage>);
+                    }
                 }
             })
             .collect::<Vec<_>>();
@@ -380,7 +400,7 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     mode: PackMode,
 ) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error> {
     let (tracks, n) = match mode {
-        PackMode::Default | PackMode::Intron | PackMode::Exon => {
+        PackMode::Default | PackMode::Intron | PackMode::Exon | PackMode::Paired => {
             let refs = unpack::<GenePred, _>(refs, overlap, true)
                 .expect("ERROR: Failed to unpack reference tracks");
 

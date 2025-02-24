@@ -462,6 +462,57 @@ impl GenePred {
 
         fields.join("\t")
     }
+
+    // WARN: modifies CDStart and CDEnd
+    pub fn insert_utr(&mut self, start: u64, end: u64) -> &mut Self {
+        self.cds_start = start;
+        self.cds_end = end;
+
+        self
+    }
+
+    // WARN: this needs to be refactored -> current impl is just a solution for iso-orf!
+    pub fn construct_bed_line(&mut self) -> String {
+        let line = self.line.clone();
+        let mut fields = line.split('\t').collect::<Vec<_>>();
+
+        match self.strand {
+            Strand::Forward => {
+                let mut s_binding = self.cds_start.to_string();
+                let mut e_binding = self.cds_end.to_string();
+
+                if self.cds_start < self.start {
+                    s_binding = self.start.to_string();
+                }
+
+                if self.cds_end > self.end {
+                    e_binding = self.end.to_string();
+                }
+
+                fields[6] = s_binding.as_str();
+                fields[7] = e_binding.as_str();
+
+                return fields.join("\t");
+            }
+            Strand::Reverse => {
+                let mut s_binding = (SCALE - self.cds_end).to_string();
+                let mut e_binding = (SCALE - self.cds_start).to_string();
+
+                if self.cds_start < self.start {
+                    s_binding = self.start.to_string();
+                }
+
+                if self.cds_end > self.end {
+                    e_binding = self.end.to_string();
+                }
+
+                fields[6] = s_binding.as_str();
+                fields[7] = e_binding.as_str();
+
+                return fields.join("\t");
+            }
+        }
+    }
 }
 
 impl BedParser for GenePred {
@@ -508,6 +559,25 @@ impl From<IntronPred> for GenePred {
                 .stats
                 .fmt(&intron.chrom, &intron.strand, intron.start, intron.end), // INFO: holds IntronPredStats
             is_ref: true, // INFO: always true since it is a reference file being read
+        }
+    }
+}
+
+impl From<Bed6> for GenePred {
+    fn from(record: Bed6) -> Self {
+        GenePred {
+            name: record.id,
+            chrom: record.chrom,
+            strand: record.strand,
+            start: record.coord.0,
+            end: record.coord.1,
+            cds_start: record.coord.0,
+            cds_end: record.coord.1,
+            exons: vec![record.coord],
+            introns: vec![],
+            exon_count: 0,
+            line: "".to_string(),
+            is_ref: false,
         }
     }
 }
@@ -1027,6 +1097,189 @@ impl IntronBucket {
             strand,
             introns,
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Bed4 {
+    pub chrom: String,
+    pub coord: (u64, u64),
+    pub id: String,
+}
+
+impl Bed4 {
+    pub fn new(line: String) -> Result<Bed4, Box<dyn std::error::Error>> {
+        if line.is_empty() {
+            return Err("Empty line".into());
+        }
+
+        let mut fields = line.split('\t');
+        let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
+
+        let (chrom, start, end, id) = (
+            fields.next().ok_or("Cannot parse chrom")?.to_string(),
+            get(fields.next().ok_or("Cannot parse start")?)?,
+            get(fields.next().ok_or("Cannot parse end")?)?,
+            fields.next().ok_or("Cannot parse id")?.to_string(),
+        );
+
+        Ok(Bed4 {
+            chrom,
+            coord: (start + 1, end - 1), // 0-based to 1-based
+            id,
+        })
+    }
+
+    pub fn from(chrom: String, start: u64, end: u64, id: String) -> Bed4 {
+        Bed4 {
+            chrom,
+            coord: (start, end),
+            id,
+        }
+    }
+
+    pub fn send(&self, acc: &mut String) {
+        acc.push_str(&format!(
+            "{}\t{}\t{}\n",
+            self.chrom, self.coord.0, self.coord.1
+        ));
+    }
+}
+
+impl BedParser for Bed4 {
+    fn parse(
+        line: &str,
+        _overlap: OverlapType,
+        _is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Bed4::new(line.to_string())
+    }
+
+    fn chrom(&self) -> &str {
+        &self.chrom
+    }
+
+    fn coord(&self) -> (u64, u64) {
+        self.coord
+    }
+
+    // WARN: placeholder for Bed4
+    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
+        let mut introns = HashSet::new();
+        introns.insert(self.coord);
+        introns
+    }
+
+    // WARN: placeholder for Bed4
+    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
+        let mut exons = HashSet::new();
+        exons.insert(self.coord);
+        exons
+    }
+}
+
+// WARN: will cover any high-order bed file [6,8,12]
+#[derive(Debug, PartialEq, Clone)]
+pub struct Bed6 {
+    pub chrom: String,
+    pub coord: (u64, u64),
+    pub id: String,
+    pub strand: Strand,
+}
+
+impl Bed6 {
+    pub fn new(line: String) -> Result<Bed6, Box<dyn std::error::Error>> {
+        if line.is_empty() {
+            return Err("ERROR: Empty line in .bed!".into());
+        }
+
+        let mut fields = line.split('\t');
+        let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
+
+        let (chrom, start, end, id, _, strand) = (
+            fields.next().ok_or("Cannot parse chrom")?.to_string(),
+            get(fields.next().ok_or("Cannot parse start")?)?,
+            get(fields.next().ok_or("Cannot parse end")?)?,
+            fields.next().ok_or("Cannot parse id")?.to_string(),
+            fields.next().ok_or("Cannot parse score")?,
+            fields
+                .next()
+                .ok_or("ERROR: Cannot parse strand!")?
+                .parse::<Strand>()?,
+        );
+
+        let (start, end) = match strand {
+            Strand::Forward => {
+                if start > end {
+                    return Err("ERROR: Start is greater than end!".into());
+                }
+
+                (start, end)
+            }
+            Strand::Reverse => {
+                let (start, end) = (SCALE - end, SCALE - start);
+                if start > end {
+                    return Err("ERROR: Start is less than end!".into());
+                }
+
+                (start, end)
+            }
+        };
+
+        Ok(Bed6 {
+            chrom,
+            coord: (start, end),
+            id,
+            strand,
+        })
+    }
+
+    pub fn from(chrom: String, start: u64, end: u64, id: String, strand: Strand) -> Bed6 {
+        Bed6 {
+            chrom,
+            coord: (start, end),
+            id,
+            strand,
+        }
+    }
+
+    pub fn send(&self, acc: &mut String) {
+        acc.push_str(&format!(
+            "{}\t{}\t{}\n",
+            self.chrom, self.coord.0, self.coord.1
+        ));
+    }
+}
+
+impl BedParser for Bed6 {
+    fn parse(
+        line: &str,
+        _overlap: OverlapType,
+        _is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Bed6::new(line.to_string())
+    }
+
+    fn chrom(&self) -> &str {
+        &self.chrom
+    }
+
+    fn coord(&self) -> (u64, u64) {
+        self.coord
+    }
+
+    // WARN: placeholder for Bed6
+    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
+        let mut introns = HashSet::new();
+        introns.insert(self.coord);
+        introns
+    }
+
+    // WARN: placeholder for Bed6
+    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
+        let mut exons = HashSet::new();
+        exons.insert(self.coord);
+        exons
     }
 }
 
