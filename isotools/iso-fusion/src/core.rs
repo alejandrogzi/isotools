@@ -20,12 +20,12 @@ pub fn detect_fusions(args: Args) -> Result<()> {
 
     let ref_str = prepare_refs(args.refs)?;
     let refs = parse_tracks::<GenePred>(ref_str.as_str(), config::OverlapType::Exon, true)?;
-    let query = unpack(args.query, config::OverlapType::Exon, false)?;
+    let query = unpack(args.query, config::OverlapType::CDS, false)?;
 
     let (tracks, n) = combine(refs, query);
     let buckets = buckerize(
         tracks,
-        config::OverlapType::Exon,
+        config::OverlapType::CDS,
         n,
         packbed::PackMode::Default,
     );
