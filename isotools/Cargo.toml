@@ -7,7 +7,7 @@ members = [
     "iso-fusion",
     "iso-cov",
     "iso-classify"
-]
+, "iso-orf", "iso-polya"]
 resolver = "2"
 
 [workspace.package]

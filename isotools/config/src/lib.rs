@@ -47,6 +47,7 @@ pub const FUSION_REVIEW: &str = "fusions.review.bed";
 pub const INTRON_CLASSIFICATION: &str = "reference_introns.tsv";
 pub const MAXENTSCAN_ACCEPTOR_DB: &str = "db.tsv";
 pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
+pub const ORF_ASSIGNED_READS: &str = "orf_reads.bed";
 
 // spliceai-related names
 pub const ACCEPTOR_MINUS: &str = "spliceAiAcceptorMinus.bw";
