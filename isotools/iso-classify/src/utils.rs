@@ -3,7 +3,7 @@ use bigtools::{utils::reopen::Reopen, BigWigRead};
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
 use log::{info, warn};
-use packbed::{par_reader, reader};
+use packbed::{par_reader, reader, record::Bed4};
 use rayon::prelude::*;
 use twobit::TwoBitFile;
 
@@ -14,8 +14,8 @@ use std::sync::Mutex;
 
 use config::{
     get_progress_bar, BedParser, CoordType, OverlapType, Sequence, SharedSpliceMap, SpliceScores,
-    SpliceSite, Strand, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS,
-    CONS1, CONS2, DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB, SCALE,
+    SpliceSite, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS, CONS1, CONS2,
+    DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB,
 };
 
 pub const MINIMUM_ACCEPTOR_LENGTH: usize = 23;
@@ -127,186 +127,6 @@ pub fn create_splice_map(
         get_splice_values(splice_plus),
         get_splice_values(splice_minus),
     )
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Bed4 {
-    pub chrom: String,
-    pub coord: (u64, u64),
-    pub id: String,
-}
-
-impl Bed4 {
-    pub fn new(line: String) -> Result<Bed4, Box<dyn std::error::Error>> {
-        if line.is_empty() {
-            return Err("Empty line".into());
-        }
-
-        let mut fields = line.split('\t');
-        let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
-
-        let (chrom, start, end, id) = (
-            fields.next().ok_or("Cannot parse chrom")?.to_string(),
-            get(fields.next().ok_or("Cannot parse start")?)?,
-            get(fields.next().ok_or("Cannot parse end")?)?,
-            fields.next().ok_or("Cannot parse id")?.to_string(),
-        );
-
-        Ok(Bed4 {
-            chrom,
-            coord: (start + 1, end - 1), // 0-based to 1-based
-            id,
-        })
-    }
-
-    pub fn from(chrom: String, start: u64, end: u64, id: String) -> Bed4 {
-        Bed4 {
-            chrom,
-            coord: (start, end),
-            id,
-        }
-    }
-
-    pub fn send(&self, acc: &mut String) {
-        acc.push_str(&format!(
-            "{}\t{}\t{}\n",
-            self.chrom, self.coord.0, self.coord.1
-        ));
-    }
-}
-
-impl BedParser for Bed4 {
-    fn parse(
-        line: &str,
-        _overlap: OverlapType,
-        _is_ref: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        Bed4::new(line.to_string())
-    }
-
-    fn chrom(&self) -> &str {
-        &self.chrom
-    }
-
-    fn coord(&self) -> (u64, u64) {
-        self.coord
-    }
-
-    // WARN: placeholder for Bed4
-    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
-        let mut introns = HashSet::new();
-        introns.insert(self.coord);
-        introns
-    }
-
-    // WARN: placeholder for Bed4
-    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
-        let mut exons = HashSet::new();
-        exons.insert(self.coord);
-        exons
-    }
-}
-
-// WARN: will cover any high-order bed file [6,8,12]
-#[derive(Debug, PartialEq, Clone)]
-pub struct Bed6 {
-    pub chrom: String,
-    pub coord: (u64, u64),
-    pub id: String,
-    pub strand: Strand,
-}
-
-impl Bed6 {
-    pub fn new(line: String) -> Result<Bed6, Box<dyn std::error::Error>> {
-        if line.is_empty() {
-            return Err("ERROR: Empty line in .bed!".into());
-        }
-
-        let mut fields = line.split('\t');
-        let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
-
-        let (chrom, start, end, id, _, strand) = (
-            fields.next().ok_or("Cannot parse chrom")?.to_string(),
-            get(fields.next().ok_or("Cannot parse start")?)?,
-            get(fields.next().ok_or("Cannot parse end")?)?,
-            fields.next().ok_or("Cannot parse id")?.to_string(),
-            fields.next().ok_or("Cannot parse score")?,
-            fields
-                .next()
-                .ok_or("ERROR: Cannot parse strand!")?
-                .parse::<Strand>()?,
-        );
-
-        let (start, end) = match strand {
-            Strand::Forward => {
-                if start > end {
-                    return Err("ERROR: Start is greater than end!".into());
-                }
-                (start, end)
-            }
-            Strand::Reverse => {
-                if start < end {
-                    return Err("ERROR: Start is less than end!".into());
-                }
-                (SCALE - end, SCALE - start)
-            }
-        };
-
-        Ok(Bed6 {
-            chrom,
-            coord: (start, end),
-            id,
-            strand,
-        })
-    }
-
-    pub fn from(chrom: String, start: u64, end: u64, id: String, strand: Strand) -> Bed6 {
-        Bed6 {
-            chrom,
-            coord: (start, end),
-            id,
-            strand,
-        }
-    }
-
-    pub fn send(&self, acc: &mut String) {
-        acc.push_str(&format!(
-            "{}\t{}\t{}\n",
-            self.chrom, self.coord.0, self.coord.1
-        ));
-    }
-}
-
-impl BedParser for Bed6 {
-    fn parse(
-        line: &str,
-        _overlap: OverlapType,
-        _is_ref: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        Bed6::new(line.to_string())
-    }
-
-    fn chrom(&self) -> &str {
-        &self.chrom
-    }
-
-    fn coord(&self) -> (u64, u64) {
-        self.coord
-    }
-
-    // WARN: placeholder for Bed6
-    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
-        let mut introns = HashSet::new();
-        introns.insert(self.coord);
-        introns
-    }
-
-    // WARN: placeholder for Bed6
-    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
-        let mut exons = HashSet::new();
-        exons.insert(self.coord);
-        exons
-    }
 }
 
 pub fn bed_to_map<T>(
