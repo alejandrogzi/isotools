@@ -1,7 +1,8 @@
 use anyhow::Result;
 use config::{
-    exonic_overlap, get_progress_bar, write_objs, FusionDetectionValue, ModuleDescriptor,
-    ModuleMap, ModuleType, FUSIONS, FUSION_FREE, FUSION_RATIO_THRESHOLD, FUSION_REVIEW,
+    exonic_overlap, get_progress_bar, splice_site_overlap, write_objs, FusionDetectionValue,
+    ModuleDescriptor, ModuleMap, ModuleType, FUSIONS, FUSION_FAKES, FUSION_FREE,
+    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, SCALE,
 };
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
@@ -19,13 +20,13 @@ pub fn detect_fusions(args: Args) -> Result<()> {
     info!("Preparing files for fusion detection...");
 
     let ref_str = prepare_refs(args.refs)?;
-    let refs = parse_tracks::<GenePred>(ref_str.as_str(), config::OverlapType::Exon, true)?;
-    let query = unpack(args.query, config::OverlapType::CDS, false)?;
+    let refs = parse_tracks::<GenePred>(ref_str.as_str(), config::OverlapType::Exon, true)?; // INFO: OverlapType does not matter with TOGA
+    let query = unpack(args.query, config::OverlapType::Exon, false)?;
 
     let (tracks, n) = combine(refs, query);
     let buckets = buckerize(
         tracks,
-        config::OverlapType::CDS,
+        config::OverlapType::Exon, // INFO: needs to be exonic to account for fused UTRs
         n,
         packbed::PackMode::Default,
     );
@@ -58,10 +59,10 @@ pub fn detect_fusions(args: Args) -> Result<()> {
                 .downcast_ref::<(RefGenePred, Vec<GenePred>)>()
                 .expect("ERROR: Failed to downcast to RefGenePred");
 
-            let (fusions, no_fusions, review, descriptor, is_dirty) =
-                process_component(comp, banned, args.recover);
+            let (fusions, no_fusions, fake_fusions, review, descriptor, is_dirty) =
+                process_component(comp, banned, args.recover).unwrap_or_default();
 
-            acc.add(fusions, no_fusions, review);
+            acc.add(fusions, no_fusions, review, fake_fusions);
 
             if is_dirty {
                 counter.inc_dirty(1);
@@ -92,8 +93,8 @@ pub fn detect_fusions(args: Args) -> Result<()> {
         .zip([FUSIONS, FUSION_FREE].par_iter())
         .for_each(|(rx, path)| write_objs(&rx, path));
 
-    if args.recover {
-        write_objs(&acc.review, FUSION_REVIEW);
+    if !acc.fakes.is_empty() {
+        write_objs(&acc.fakes, FUSION_FAKES);
     }
 
     Ok(())
@@ -103,6 +104,7 @@ struct ParallelAccumulator {
     fusions: DashSet<String>,
     review: DashSet<String>,
     passes: DashSet<String>,
+    fakes: DashSet<String>,
 }
 
 impl Default for ParallelAccumulator {
@@ -111,12 +113,19 @@ impl Default for ParallelAccumulator {
             fusions: DashSet::new(),
             review: DashSet::new(),
             passes: DashSet::new(),
+            fakes: DashSet::new(),
         }
     }
 }
 
 impl ParallelAccumulator {
-    fn add(&self, fusions: Vec<String>, passes: Vec<String>, review: Option<Vec<String>>) {
+    fn add(
+        &self,
+        fusions: Vec<String>,
+        passes: Vec<String>,
+        review: Option<Vec<String>>,
+        fakes: Vec<String>,
+    ) {
         fusions.into_iter().for_each(|fusion| {
             self.fusions.insert(fusion);
         });
@@ -126,6 +135,12 @@ impl ParallelAccumulator {
         if let Some(r) = review {
             r.into_iter().for_each(|r| {
                 self.review.insert(r);
+            });
+        }
+
+        if !fakes.is_empty() {
+            fakes.into_iter().for_each(|fake| {
+                self.fakes.insert(fake);
             });
         }
     }
@@ -164,16 +179,22 @@ fn process_component(
     component: &(RefGenePred, Vec<GenePred>),
     banned: &HashSet<String>,
     recover: bool,
-) -> (
+) -> Option<(
+    Vec<String>,
     Vec<String>,
     Vec<String>,
     Option<Vec<String>>,
     HashMap<String, Box<dyn ModuleMap>>,
     bool,
-) {
+)> {
+    if component.1.is_empty() {
+        return None;
+    }
+
     let mut descriptor = HashMap::new();
 
     let mut fusions = Vec::new();
+    let mut fake_fusions = Vec::new();
     let mut no_fusions = Vec::new();
 
     let mut is_dirty = false;
@@ -185,12 +206,14 @@ fn process_component(
 
     let comp_size = queries.len() + genes.len();
     let query_size = queries.len();
-    let (mut fusion_count, totals) = (0_f32, queries.len() as f32);
+    let (mut real_fusion_count, mut fake_fusion_count, totals) =
+        (0_f32, 0_f32, queries.len() as f32);
 
     if genes.len() > 1 {
-        // INFO: fusion loci
+        // INFO: fusion loci [more than one gene in component]
         // INFO: we create a per-gene collection of exons
-        let refs = refs.smash_exons_by_name();
+        let ref_exons = refs.smash_exons_by_name();
+        let ref_introns = refs.smash_introns_by_name();
 
         queries.iter().for_each(|query| {
             if banned.contains(&query.name) {
@@ -206,37 +229,78 @@ fn process_component(
 
             let mut count = 0;
 
-            // check if query read overlaps any of the gene exon collections
+            // INFO: check if query read overlaps any of the gene exon collections
             // WARN: we are not keeping track of gene names here
-            for ref_exons in refs.iter() {
-                if exonic_overlap(&query.exons, &ref_exons) {
+            for r_exons in ref_exons.iter() {
+                if exonic_overlap(&query.exons, &r_exons) {
                     count += 1;
                 }
             }
 
+            // INFO: query read overlaps more than one gene exon collection
             if count > 1 {
-                // query read overlaps more than one gene exon collection
-                fusions.push(query.line.clone());
-                fusion_count += 1.0;
+                // INFO: we need to pass a 2nd check following this logic:
+                //
+                //  gene1:  XXXX---XXX--XXX
+                //  gene2:                   XXX---XXX---XXX
+                //  normal: XXXX---XXX--XXX-XXXXXXXXXXXX [does not follow ex-in struct]
+                //  fusion: XXXX---XXX--XXX--XXX---XXX---XXX [follows ex-in struct]
+                //
+                // INFO: where not all reads that overlap 2 different genes
+                // INFO: should be catalogued as fusions!
+                let mut splicing_overlaps = 0_f32;
+                for r_introns in ref_introns.iter() {
+                    if splice_site_overlap(&query.introns, r_introns) {
+                        splicing_overlaps += 1.0;
+                    }
+                }
 
-                handle
-                    .set_value(
-                        Box::new(FusionDetectionValue::IsFusedRead),
-                        Value::Bool(true),
-                    )
-                    .ok();
-                handle
-                    .set_value(
-                        Box::new(FusionDetectionValue::LocationOfFusion),
-                        Value::String(format!("{}:{}-{}", query.chrom, query.start, query.end)),
-                    )
-                    .ok();
-                handle
-                    .set_value(
-                        Box::new(FusionDetectionValue::FusionInFrame),
-                        Value::Bool((query.cds_end - query.cds_start) % 3 == 0),
-                    )
-                    .ok();
+                if splicing_overlaps > 1.0 {
+                    real_fusion_count += 1.0;
+                    fusions.push(query.line.clone());
+
+                    handle
+                        .set_value(
+                            Box::new(FusionDetectionValue::IsFusedRead),
+                            Value::Bool(true),
+                        )
+                        .ok();
+                    handle
+                        .set_value(
+                            Box::new(FusionDetectionValue::FusionInFrame),
+                            Value::Bool((query.cds_end - query.cds_start) % 3 == 0),
+                        )
+                        .ok();
+
+                    let location = match query.strand {
+                        config::Strand::Forward => {
+                            format!("{}:{}-{}", query.chrom, query.start, query.end)
+                        }
+                        config::Strand::Reverse => {
+                            format!(
+                                "{}:{}-{}",
+                                query.chrom,
+                                SCALE - query.end,
+                                SCALE - query.start
+                            )
+                        }
+                    };
+                    handle
+                        .set_value(
+                            Box::new(FusionDetectionValue::LocationOfFusion),
+                            Value::String(location),
+                        )
+                        .ok();
+                } else {
+                    fake_fusion_count += 1.0;
+                    fake_fusions.push(query.line.clone());
+                    handle
+                        .set_value(
+                            Box::new(FusionDetectionValue::IsFusedRead),
+                            Value::Bool(false),
+                        )
+                        .ok();
+                }
             } else {
                 no_fusions.push(query.line.clone());
 
@@ -268,7 +332,7 @@ fn process_component(
                 .ok();
         });
     } else if genes.is_empty() {
-        // species-specific gene | intergenic region | missing gene in refs
+        // INFO: species-specific gene | intergenic region | missing gene in refs
         // log::warn!("No ref genes in component, check loci: {:?}", queries);
         queries.iter().for_each(|query| {
             no_fusions.push(query.line.clone());
@@ -305,7 +369,7 @@ fn process_component(
                 .ok();
         });
     } else {
-        // all good, no fusions here
+        // INFO: all good, no fusions here
         queries.iter().for_each(|query| {
             no_fusions.push(query.line.clone());
 
@@ -342,11 +406,14 @@ fn process_component(
         });
     }
 
-    let ratio = fusion_count / totals;
+    let whole_ratio = (real_fusion_count + fake_fusion_count) / totals;
+    let real_ratio = real_fusion_count / totals;
+    let fake_ratio = fake_fusion_count / totals;
+
     if recover {
-        // if the fusion ratio in the component is above the threshold,
-        // mark all queries as dirty and submit them for revie
-        if ratio >= FUSION_RATIO_THRESHOLD {
+        // INFO: if the fusion ratio in the component is above the threshold,
+        // INFO: mark all queries as dirty and submit them for revie
+        if real_ratio >= FUSION_RATIO_THRESHOLD {
             is_dirty = true;
             let mut review = vec![];
 
@@ -356,8 +423,20 @@ fn process_component(
 
                 handle
                     .set_value(
-                        Box::new(FusionDetectionValue::ComponentFusionRatio),
-                        serde_json::json!(ratio),
+                        Box::new(FusionDetectionValue::WholeComponentFusionRatio),
+                        serde_json::json!(whole_ratio),
+                    )
+                    .ok();
+                handle
+                    .set_value(
+                        Box::new(FusionDetectionValue::RealComponentFusionRatio),
+                        serde_json::json!(real_ratio),
+                    )
+                    .ok();
+                handle
+                    .set_value(
+                        Box::new(FusionDetectionValue::FakeComponentFusionRatio),
+                        serde_json::json!(fake_ratio),
                     )
                     .ok();
                 handle
@@ -368,15 +447,27 @@ fn process_component(
                     .ok();
             }
 
-            return (vec![], vec![], Some(review), descriptor, is_dirty);
+            return Some((vec![], vec![], vec![], Some(review), descriptor, is_dirty));
         } else {
             for query in queries.iter() {
                 let handle = descriptor.get_mut(&query.name).unwrap();
 
                 handle
                     .set_value(
-                        Box::new(FusionDetectionValue::ComponentFusionRatio),
-                        serde_json::json!(ratio),
+                        Box::new(FusionDetectionValue::WholeComponentFusionRatio),
+                        serde_json::json!(whole_ratio),
+                    )
+                    .ok();
+                handle
+                    .set_value(
+                        Box::new(FusionDetectionValue::RealComponentFusionRatio),
+                        serde_json::json!(real_ratio),
+                    )
+                    .ok();
+                handle
+                    .set_value(
+                        Box::new(FusionDetectionValue::FakeComponentFusionRatio),
+                        serde_json::json!(fake_ratio),
                     )
                     .ok();
                 handle
@@ -393,8 +484,20 @@ fn process_component(
 
             handle
                 .set_value(
-                    Box::new(FusionDetectionValue::ComponentFusionRatio),
-                    serde_json::json!(ratio),
+                    Box::new(FusionDetectionValue::WholeComponentFusionRatio),
+                    serde_json::json!(whole_ratio),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::RealComponentFusionRatio),
+                    serde_json::json!(real_ratio),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(FusionDetectionValue::FakeComponentFusionRatio),
+                    serde_json::json!(fake_ratio),
                 )
                 .ok();
             handle
@@ -408,5 +511,12 @@ fn process_component(
 
     // dbg!(&descriptor);
 
-    (fusions, no_fusions, None, descriptor, is_dirty)
+    Some((
+        fusions,
+        no_fusions,
+        fake_fusions,
+        None,
+        descriptor,
+        is_dirty,
+    ))
 }
