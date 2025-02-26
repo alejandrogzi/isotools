@@ -901,6 +901,26 @@ impl RefGenePred {
         smashed
     }
 
+    // WARN: returns HashSet instead of Vec in inner collection!
+    pub fn smash_introns_by_name(&self) -> Vec<HashSet<(u64, u64)>> {
+        let names = self.get_names_split();
+        let mut smashed = Vec::new();
+        for name in names {
+            let introns = self
+                .reads
+                .iter()
+                .filter(|read| read.get_split_name() == name)
+                .map(|read| read.introns.clone())
+                .flatten()
+                .collect::<HashSet<_>>();
+
+            // smashed.push(introns.into_iter().collect());
+            smashed.push(introns);
+        }
+
+        smashed
+    }
+
     pub fn smash_exons_by_name_split(&self) -> HashMap<&str, Vec<(u64, u64)>> {
         let names = self.get_names_split();
         let mut smashed = HashMap::new();

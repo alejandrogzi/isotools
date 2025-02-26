@@ -1,4 +1,5 @@
 use dashmap::DashSet;
+use hashbrown::HashSet;
 use indicatif::{ProgressBar, ProgressStyle};
 use num_traits::{Num, NumCast};
 use thiserror::Error;
@@ -162,6 +163,27 @@ pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
 }
 
 // quality of life improvement fns
+/// Exonic overlap between two sets of exons.
+///
+/// This function is used to determine if two
+/// sets of exons overlap by comparing the start
+/// and end positions of each exon.
+///
+/// # Arguments
+/// * `exons_a` - a collection of exons
+/// * `exons_b` - a collection of exons
+///
+/// # Returns
+/// * `bool` - true if there is an overlap, false otherwise
+///
+/// # Example
+/// ```rust
+/// use isotools::config::fns::exonic_overlap;
+///
+/// let exons_a = vec![(1, 10), (20, 30)];
+/// let exons_b = vec![(5, 15), (25, 35)];
+/// assert_eq!(exonic_overlap(&exons_a, &exons_b), true);
+/// ```
 #[inline(always)]
 pub fn exonic_overlap<N, I>(exons_a: &I, exons_b: &I) -> bool
 where
@@ -197,4 +219,34 @@ where
     }
 
     false
+}
+
+/// Splice site overlap between two sets of introns.
+///
+/// This function is used to determine if two sets of
+/// introns overlap by comparing the start and end
+/// positions of each intron.
+///
+/// # Arguments
+/// * `introns_a` - a collection of introns
+/// * `introns_b` - a collection of introns
+///
+/// # Returns
+/// * `bool` - true if there is an overlap, false otherwise
+///
+/// # Example
+/// ```rust
+/// use isotools::config::fns::splice_site_overlap;
+/// use hashbrown::HashSet;
+///
+/// let introns_a = vec![(1, 10), (20, 30)];
+/// let introns_b = [(5, 15), (25, 35)].iter().cloned().collect::<HashSet<_>>();
+/// assert_eq!(splice_site_overlap(&introns_a, &introns_b), true);
+/// ```
+#[inline(always)]
+pub fn splice_site_overlap<N>(introns_a: &Vec<(N, N)>, introns_b: &HashSet<(N, N)>) -> bool
+where
+    N: Num + NumCast + Copy + PartialOrd + Eq + std::hash::Hash,
+{
+    introns_a.iter().any(|b| introns_b.contains(b))
 }
