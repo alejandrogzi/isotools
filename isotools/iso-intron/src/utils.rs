@@ -1,7 +1,7 @@
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
-use iso_classify::utils::{bed_to_map, Bed4};
-use packbed::par_reader;
+use iso_classify::utils::bed_to_map;
+use packbed::{par_reader, record::Bed4};
 use rayon::prelude::*;
 
 use std::path::PathBuf;

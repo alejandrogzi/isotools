@@ -131,6 +131,12 @@ fn process_components(
             .downcast_mut::<(Vec<IntronPred>, Vec<GenePred>)>()
             .expect("ERROR: Could not downcast to IntronPred!");
 
+        // if comp is len 1 OR comp is len <=5 and no TOGA, continue
+        // if comp.1.len() <= 5 {
+        //     counter.inc_skipped();
+        //     return;
+        // }
+
         let (keep, discard) = process_component(comp, banned, counter);
 
         discard.into_iter().for_each(|r| {
