@@ -547,7 +547,9 @@ pub struct FusionDetectionDescriptor {
     component_size: Value,
     ref_component_size: Value,
     query_component_size: Value,
-    component_fusion_ratio: Value,
+    whole_component_fusion_ratio: Value,
+    real_component_fusion_ratio: Value,
+    fake_component_fusion_ratio: Value,
     is_dirty_component: Value,
     location_of_fusion: Value,
     fusion_in_frame: Value,
@@ -561,7 +563,9 @@ impl FusionDetectionDescriptor {
             component_size: Value::Null,
             ref_component_size: Value::Null,
             query_component_size: Value::Null,
-            component_fusion_ratio: Value::Null,
+            whole_component_fusion_ratio: Value::Null,
+            real_component_fusion_ratio: Value::Null,
+            fake_component_fusion_ratio: Value::Null,
             is_dirty_component: Value::Null,
             location_of_fusion: Value::Null,
             fusion_in_frame: Value::Null,
@@ -575,7 +579,9 @@ pub enum FusionDetectionValue {
     ComponentSize,
     RefComponentSize,
     QueryComponentSize,
-    ComponentFusionRatio,
+    WholeComponentFusionRatio,
+    RealComponentFusionRatio,
+    FakeComponentFusionRatio,
     IsDirtyComponent,
     LocationOfFusion,
     FusionInFrame,
@@ -590,8 +596,14 @@ impl ModuleMap for FusionDetectionDescriptor {
                 FusionDetectionValue::ComponentSize => Some(self.component_size.clone()),
                 FusionDetectionValue::RefComponentSize => Some(self.ref_component_size.clone()),
                 FusionDetectionValue::QueryComponentSize => Some(self.query_component_size.clone()),
-                FusionDetectionValue::ComponentFusionRatio => {
-                    Some(self.component_fusion_ratio.clone())
+                FusionDetectionValue::WholeComponentFusionRatio => {
+                    Some(self.whole_component_fusion_ratio.clone())
+                }
+                FusionDetectionValue::RealComponentFusionRatio => {
+                    Some(self.real_component_fusion_ratio.clone())
+                }
+                FusionDetectionValue::FakeComponentFusionRatio => {
+                    Some(self.fake_component_fusion_ratio.clone())
                 }
                 FusionDetectionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
                 FusionDetectionValue::LocationOfFusion => Some(self.location_of_fusion.clone()),
@@ -626,8 +638,16 @@ impl ModuleMap for FusionDetectionDescriptor {
                     self.query_component_size = value;
                     Ok(())
                 }
-                FusionDetectionValue::ComponentFusionRatio => {
-                    self.component_fusion_ratio = value;
+                FusionDetectionValue::WholeComponentFusionRatio => {
+                    self.whole_component_fusion_ratio = value;
+                    Ok(())
+                }
+                FusionDetectionValue::RealComponentFusionRatio => {
+                    self.real_component_fusion_ratio = value;
+                    Ok(())
+                }
+                FusionDetectionValue::FakeComponentFusionRatio => {
+                    self.fake_component_fusion_ratio = value;
                     Ok(())
                 }
                 FusionDetectionValue::IsDirtyComponent => {
@@ -665,7 +685,9 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             component_size: {:?},
             ref_component_size: {:?},
             query_component_size: {:?}
-            component_fusion_ratio: {:?},
+            whole_component_fusion_ratio: {:?},
+            real_component_fusion_ratio: {:?},
+            fake_component_fusion_ratio: {:?},
             is_dirty_component: {:?},
             location_of_fusion: {:?},
             fusion_in_frame: {:?}
@@ -675,7 +697,9 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             self.component_size,
             self.ref_component_size,
             self.query_component_size,
-            self.component_fusion_ratio,
+            self.whole_component_fusion_ratio,
+            self.real_component_fusion_ratio,
+            self.fake_component_fusion_ratio,
             self.is_dirty_component,
             self.location_of_fusion,
             self.fusion_in_frame,

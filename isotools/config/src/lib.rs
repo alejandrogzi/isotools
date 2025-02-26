@@ -44,6 +44,7 @@ pub const INTERGENIC_REGIONS: &str = "intergenic.bed";
 pub const FUSIONS: &str = "fusions.bed";
 pub const FUSION_FREE: &str = "fusions.free.bed";
 pub const FUSION_REVIEW: &str = "fusions.review.bed";
+pub const FUSION_FAKES: &str = "fusions.fakes.bed";
 pub const INTRON_CLASSIFICATION: &str = "reference_introns.tsv";
 pub const MAXENTSCAN_ACCEPTOR_DB: &str = "db.tsv";
 pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
