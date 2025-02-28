@@ -24,7 +24,7 @@ const NAG_PATTERNS: [&str; 3] = ["CAG", "TAG", "AAG"];
 const WIGGLE_SWITCH: [usize; 2] = [2, 4];
 
 type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
-type Genome = DashMap<String, Vec<u8>>;
+pub type Genome = DashMap<String, Vec<u8>>;
 
 pub fn classify_introns(args: Args) -> Result<()> {
     let isoseqs = packbed(
