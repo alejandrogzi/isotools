@@ -15,7 +15,7 @@ use crate::{cli::Args, utils::PolyAPred};
 
 pub const CHUNK_SIZE: usize = 500;
 pub const PARA: &str = "para";
-pub const APPARENT_PY: &str = "apparent.py";
+pub const APPARENT_PY: &str = "aparent.py";
 pub const ISO_POLYA: &str = "iso-polya";
 pub const ASSETS: &str = "assets";
 pub const RAM_PER_SITE: f32 = 0.025;
@@ -139,19 +139,24 @@ fn submit_jobs(accumulator: &ParallelAccumulator, max_peak: bool) {
 
     let code = std::process::Command::new(PARA)
         .arg("make")
-        .arg("apparent")
+        .arg("aparent")
         .arg(joblist)
         .arg("-q")
         .arg("shortmed")
         .arg("-memoryMb")
         .arg(mem.to_string())
-        .output();
+        .output()
+        .expect("ERROR: Failed to submit job");
 
-    if let Ok(_) = code {
-        log::info!("SUCCESS: Job submitted and finished succesfully!");
+    if !code.status.success() {
+        let err = String::from_utf8_lossy(&code.stderr);
+        log::error!("ERROR: Job failed to submit! {}", err);
+        std::process::exit(1);
     } else {
-        log::error!("ERROR: Job failed to submit!");
+        log::info!("SUCCESS: Jobs submitted!");
     }
+
+    log::info!("INFO: Jobs finished successfully!");
 
     // INFO: removing chunks!
     for entry in std::fs::read_dir(get_assets_dir())
@@ -224,7 +229,7 @@ fn merge_results() {
         if let Some(ext) = path.extension() {
             match ext.to_str() {
                 Some("bed") => beds.push(path),
-                Some("bedgraph") => bgs.push(path),
+                Some("bedGraph") => bgs.push(path),
                 _ => {}
             }
         }
