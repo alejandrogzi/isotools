@@ -15,6 +15,7 @@ EncoderType = Callable[[List[str]], List[np.ndarray]]
 SEQUENCE_STRIDE = 10
 CONV_SMOOTHING = True
 PEAK_MIN_HEIGHT = 0.001
+PEAK_THRESHOLD = 0.01
 PEAK_MIN_DISTANCE = 3
 PEAK_PROMINENCE = (0.01, None)
 LIB_BIAS = 4
@@ -32,7 +33,11 @@ def run() -> None:
     """
     args = parse()
 
-    model = aparent.predictor.load_model(INSTALL_DIR + MODEL)
+    if args.model:
+        model = aparent.predictor.load_model(args.model)
+    else:
+        model = aparent.predictor.load_model(INSTALL_DIR + MODEL)
+
     encoder = aparent.predictor.get_aparent_encoder(lib_bias=LIB_BIAS)
 
     (bedgraph, bed) = process_chunk(args, model, encoder)
@@ -84,9 +89,15 @@ def process_chunk(
 
         if strand == "-":
             for i, peak in enumerate(polya_profile):
+                if peak < PEAK_THRESHOLD:
+                    peak = 0
+
                 graph_lines.append(f"{chrom}\t{end - i - 1}\t{end - i}\t{peak}\n")
         else:
             for i, peak in enumerate(polya_profile):
+                if peak < PEAK_THRESHOLD:
+                    peak = 0
+
                 graph_lines.append(f"{chrom}\t{start + i - 1}\t{start + i}\t{peak}\n")
 
         if args.use_max_peak:
@@ -101,13 +112,18 @@ def process_chunk(
                 )
 
         for i, peak in enumerate(peak_ixs):
+            score = polya_profile[peak]
+
+            if score < PEAK_THRESHOLD:
+                score = 0
+
             if strand == "-":
                 line = [
                     chrom,
                     end - peak - 1,
                     end - peak,
-                    f"{name}_{polya_profile[peak]}",
-                    1000,
+                    name,
+                    score,
                     strand,
                 ]
                 bed_lines.append("\t".join(map(str, line)) + "\n")
@@ -116,8 +132,8 @@ def process_chunk(
                     chrom,
                     start + peak - 1,
                     start + peak,
-                    f"{name}_{polya_profile[peak]}",
-                    1000,
+                    name,
+                    score,
                     strand,
                 ]
                 bed_lines.append("\t".join(map(str, line)) + "\n")
@@ -228,6 +244,12 @@ def parse() -> argparse.Namespace:
         action="store_const",
         const=True,
         metavar="use only the max peak of the APARENT frame",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        type=str,
+        help="Path to APPARENT model",
     )
 
     return parser.parse_args()
