@@ -11,7 +11,10 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::{cli::Args, utils::PolyAPred};
+use crate::{
+    cli::{AparentArgs, FilterArgs},
+    utils::PolyAPred,
+};
 
 pub const CHUNK_SIZE: usize = 500;
 pub const PARA: &str = "para";
@@ -20,8 +23,9 @@ pub const ISO_POLYA: &str = "iso-polya";
 pub const ASSETS: &str = "assets";
 pub const RAM_PER_SITE: f32 = 0.025;
 pub const JOBLIST: &str = "joblist";
+pub const FILTER_MINIMAP: &str = "filterMinimapQuality.perl";
 
-pub fn calculate_polya(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Error>> {
     let isoseqs = unpack::<PolyAPred, _>(args.bed, config::OverlapType::Exon, true)
         .expect("ERROR: Could not unpack bed file!");
     let genome = get_sequences(args.twobit).expect("ERROR: Could not get read .2bit file!");
@@ -46,6 +50,8 @@ pub fn calculate_polya(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     // INFO: push each path to cluster and run APPARENT
     // INFO: in the future the arg should be parsed as Executor::Something
     if args.para {
+        // INFO: check if a .para dir is present
+        check_para_dir();
         submit_jobs(paths, args.use_max_peak);
 
         // INFO: wait until all jobs are don and then merge the results
@@ -268,4 +274,18 @@ fn merge_results() {
             }
         }
     }
+}
+
+fn check_para_dir() {
+    let para = std::env::current_dir()
+        .expect("ERROR: Failed to get current directory")
+        .join(PARA);
+
+    if para.exists() {
+        std::fs::remove_dir_all(&para).expect("ERROR: Failed to remove .para directory");
+    }
+}
+
+pub fn filter_minimap(args: FilterArgs) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
 }

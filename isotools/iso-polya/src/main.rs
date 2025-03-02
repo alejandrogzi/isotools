@@ -3,7 +3,10 @@ use config::ArgCheck;
 use log::{error, info, Level};
 use simple_logger::init_with_level;
 
-use iso_polya::{cli::Args, core::calculate_polya};
+use iso_polya::{
+    cli::{Args, SubArgs},
+    core::{calculate_polya, filter_minimap},
+};
 
 #[allow(unused_variables)]
 fn main() {
@@ -11,20 +14,39 @@ fn main() {
     init_with_level(Level::Info).unwrap();
 
     let args: Args = Args::parse();
-    args.check().unwrap_or_else(|e| {
-        error!("{}", e);
-        std::process::exit(1);
-    });
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build()
         .unwrap();
 
-    calculate_polya(args).unwrap_or_else(|e| {
-        error!("{}", e);
-        std::process::exit(1);
-    });
+    match args.command {
+        SubArgs::Aparent { args } => {
+            args.check().unwrap_or_else(|e| {
+                error!("{}", e);
+                std::process::exit(1);
+            });
+
+            calculate_polya(args).unwrap_or_else(|e| {
+                error!("{}", e);
+                std::process::exit(1);
+            });
+        }
+        SubArgs::Filter { args } => {
+            args.check().unwrap_or_else(|e| {
+                error!("{}", e);
+                std::process::exit(1);
+            });
+
+            filter_minimap(args).unwrap_or_else(|e| {
+                error!("{}", e);
+                std::process::exit(1);
+            });
+        }
+        SubArgs::Caller { args } => {
+            unimplemented!();
+        }
+    }
 
     let elapsed = start.elapsed();
     info!("Elapsed time: {:.3?}", elapsed);
