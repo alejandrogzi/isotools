@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "iso-fusion"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -862,7 +862,23 @@ dependencies = [
 
 [[package]]
 name = "iso-polya"
-version = "0.1.0"
+version = "0.0.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "config",
+ "dashmap",
+ "hashbrown 0.15.2",
+ "iso-classify",
+ "iso-pack",
+ "iso-utr",
+ "log",
+ "num_cpus",
+ "rayon",
+ "serde",
+ "simple_logger",
+ "thiserror 2.0.11",
+]
 
 [[package]]
 name = "iso-utr"
