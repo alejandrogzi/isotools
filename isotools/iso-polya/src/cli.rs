@@ -164,7 +164,7 @@ impl ArgCheck for AparentArgs {
     }
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Clone)]
 pub struct FilterArgs {
     #[arg(
         short = 's',
@@ -216,6 +216,73 @@ pub struct FilterArgs {
         default_value_t = EMIT_A,
     )]
     pub emit_a: f32,
+
+    #[arg(
+        long = "stat",
+        required = false,
+        value_name = "FLAG",
+        help = "If set output a {input}.tsv file that contains statistics of all reads readID {tab} perID {tab} 5'clip {tab} 3'clip (non-PolyA part){tab} polyA tail length of 3'clip [optionally]{tab} polyA tail length of read",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub stat: bool,
+
+    #[arg(
+        long = "keep",
+        required = false,
+        value_name = "FLAG",
+        help = "If set, produce an {input}.TESBad5Prime.bed file which contains reads that align well but only have a 5' clip above our threshold. Can be used for PAScaller",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub keep: bool,
+
+    #[arg(
+        long = "suffix",
+        required = false,
+        value_name = "FLAG",
+        help = "If >0, compute and output the length of the polyA tail in the polyAReadSuffix + 3'clip_len suffix of the read (default don't do that)"
+    )]
+    pub suffix: Option<usize>,
+
+    #[arg(
+        long = "para",
+        required = false,
+        value_name = "FLAG",
+        help = "Send jobs to Hillerlab cluster",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub para: bool,
+
+    #[arg(
+        short = 'q',
+        long = "queue",
+        required = false,
+        value_name = "QUEUE",
+        help = "Queue to send jobs to",
+        requires("para")
+    )]
+    pub queue: Option<String>,
+
+    #[arg(
+        short = 'm',
+        long = "mem",
+        required = false,
+        value_name = "QUEUE",
+        help = "Memory to send jobs to",
+        requires("para")
+    )]
+    pub mem: Option<usize>,
 }
 
 impl ArgCheck for FilterArgs {
