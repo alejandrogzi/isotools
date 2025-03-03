@@ -141,7 +141,7 @@ fn chunk_writer(accumulator: &ParallelAccumulator) -> &ParallelAccumulator {
 
 fn submit_jobs(accumulator: &ParallelAccumulator, max_peak: bool) {
     let mem = CHUNK_SIZE as f32 * RAM_PER_SITE * 1024.0;
-    let joblist = create_joblist(accumulator, max_peak);
+    let joblist = create_joblist_aparent(accumulator, max_peak);
 
     let code = std::process::Command::new(PARA)
         .arg("make")
@@ -182,7 +182,7 @@ fn submit_jobs(accumulator: &ParallelAccumulator, max_peak: bool) {
     }
 }
 
-fn create_joblist(accumulator: &ParallelAccumulator, max_peak: bool) -> PathBuf {
+fn create_joblist_aparent(accumulator: &ParallelAccumulator, max_peak: bool) -> PathBuf {
     let joblist = PathBuf::from(JOBLIST);
     let file = File::create(joblist.clone()).expect("Failed to create joblist");
     let mut writer = BufWriter::new(file);
@@ -279,7 +279,7 @@ fn merge_results() {
 fn check_para_dir() {
     let para = std::env::current_dir()
         .expect("ERROR: Failed to get current directory")
-        .join(PARA);
+        .join(format!(".{}", PARA));
 
     if para.exists() {
         std::fs::remove_dir_all(&para).expect("ERROR: Failed to remove .para directory");
@@ -287,5 +287,85 @@ fn check_para_dir() {
 }
 
 pub fn filter_minimap(args: FilterArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let joblist = create_job_filter_minimap(args.clone());
+
+    if args.para {
+        let mut additional_args = vec![];
+        if let Some(queue) = args.queue {
+            additional_args.push(format!("-q {}", queue));
+        }
+
+        if let Some(mem) = args.mem {
+            additional_args.push(format!("-memoryMb {}", mem));
+        }
+
+        let code = std::process::Command::new(PARA)
+            .arg("make")
+            .arg("filter_minimap")
+            .arg(joblist)
+            .args(additional_args)
+            .output()
+            .expect("ERROR: Failed to submit job");
+
+        if !code.status.success() {
+            let err = String::from_utf8_lossy(&code.stderr);
+            log::error!("ERROR: Job failed to submit! {}", err);
+            std::process::exit(1);
+        } else {
+            log::info!("SUCCESS: Jobs submitted!");
+        }
+
+        log::info!("INFO: Jobs finished successfully!");
+    } else {
+        log::info!(
+            "{}",
+            format!(
+                "INFO: Only writing joblist to: {}",
+                joblist.to_string_lossy()
+            )
+        );
+    }
+
     Ok(())
+}
+
+fn create_job_filter_minimap(args: FilterArgs) -> PathBuf {
+    let joblist = PathBuf::from(JOBLIST);
+    let file = File::create(joblist.clone()).expect("Failed to create joblist");
+    let mut writer = BufWriter::new(file);
+    let executable = get_assets_dir().join(FILTER_MINIMAP);
+
+    let mut cmd = format!(
+        "perl {} {} -perID {} -clip3 {} -clip5 {} -P2P {} -emitA {}",
+        executable.to_string_lossy(),
+        args.sam
+            .get(0)
+            .expect("ERROR: No sam file provided")
+            .to_string_lossy(),
+        args.per_id,
+        args.clip3,
+        args.clip5,
+        args.p2p,
+        args.emit_a
+    );
+
+    if args.stat {
+        cmd.push_str(" -statFile");
+    }
+
+    if args.keep {
+        cmd.push_str(" -keepBad5Prime");
+    }
+
+    if let Some(suffix) = args.suffix {
+        let suffix = format!(" -polyAReadSuffix {}", suffix);
+        cmd.push_str(&suffix);
+    }
+
+    let _ = writer.write_all(cmd.as_bytes());
+    let _ = writer.write_all(b"\n");
+
+    let _ = writer.flush();
+
+    return joblist;
 }
