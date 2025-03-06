@@ -10,6 +10,8 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::MatchType;
+
 // os
 #[cfg(not(windows))]
 const TICK_SETTINGS: (&str, u64) = ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", 80);
@@ -225,11 +227,13 @@ where
 ///
 /// This function is used to determine if two sets of
 /// introns overlap by comparing the start and end
-/// positions of each intron.
+/// positions of each intron. The latter will depend
+/// on the match type.
 ///
 /// # Arguments
 /// * `introns_a` - a collection of introns
 /// * `introns_b` - a collection of introns
+/// * `match_type` - the match type [Intron, SpliceSite]
 ///
 /// # Returns
 /// * `bool` - true if there is an overlap, false otherwise
@@ -244,9 +248,21 @@ where
 /// assert_eq!(splice_site_overlap(&introns_a, &introns_b), true);
 /// ```
 #[inline(always)]
-pub fn splice_site_overlap<N>(introns_a: &Vec<(N, N)>, introns_b: &HashSet<(N, N)>) -> bool
+pub fn splice_site_overlap<N>(
+    introns_a: &Vec<(N, N)>,
+    introns_b: &HashSet<(N, N)>,
+    match_type: MatchType,
+) -> bool
 where
     N: Num + NumCast + Copy + PartialOrd + Eq + std::hash::Hash,
 {
-    introns_a.iter().any(|b| introns_b.contains(b))
+    match match_type {
+        MatchType::Intron => introns_a.iter().any(|a| introns_b.contains(a)),
+        MatchType::SpliceSite => {
+            let splice_sites: HashSet<N> = introns_b.iter().flat_map(|&(x, y)| [x, y]).collect();
+            introns_a
+                .iter()
+                .any(|&(x, y)| splice_sites.contains(&x) || splice_sites.contains(&y))
+        }
+    }
 }

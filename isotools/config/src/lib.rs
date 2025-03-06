@@ -204,6 +204,27 @@ impl std::fmt::Display for Strand {
     }
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum MatchType {
+    Intron,
+    SpliceSite,
+}
+
+impl Default for MatchType {
+    fn default() -> Self {
+        MatchType::SpliceSite
+    }
+}
+
+impl From<bool> for MatchType {
+    fn from(value: bool) -> Self {
+        match value {
+            true => MatchType::Intron,
+            false => MatchType::SpliceSite,
+        }
+    }
+}
+
 // public structs
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct Sequence {
