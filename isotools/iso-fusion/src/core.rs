@@ -1,7 +1,7 @@
 use anyhow::Result;
 use config::{
     exonic_overlap, get_progress_bar, splice_site_overlap, write_objs, FusionDetectionValue,
-    ModuleDescriptor, ModuleMap, ModuleType, FUSIONS, FUSION_FAKES, FUSION_FREE,
+    MatchType, ModuleDescriptor, ModuleMap, ModuleType, FUSIONS, FUSION_FAKES, FUSION_FREE,
     FUSION_RATIO_THRESHOLD, FUSION_REVIEW, SCALE,
 };
 use dashmap::DashSet;
@@ -41,6 +41,8 @@ pub fn detect_fusions(args: Args) -> Result<()> {
     let counter = ParallelCounter::default();
     let acc = ParallelAccumulator::default();
 
+    let match_type = MatchType::from(args.intron_match);
+
     buckets.par_iter().for_each(|bucket| {
         let chr = bucket.key();
         let components = bucket.value().to_owned();
@@ -60,7 +62,7 @@ pub fn detect_fusions(args: Args) -> Result<()> {
                 .expect("ERROR: Failed to downcast to RefGenePred");
 
             let (fusions, no_fusions, fake_fusions, review, descriptor, is_dirty) =
-                process_component(comp, banned, args.recover).unwrap_or_default();
+                process_component(comp, banned, args.recover, match_type).unwrap_or_default();
 
             acc.add(fusions, no_fusions, review, fake_fusions);
 
@@ -179,6 +181,7 @@ fn process_component(
     component: &(RefGenePred, Vec<GenePred>),
     banned: &HashSet<String>,
     recover: bool,
+    match_type: MatchType,
 ) -> Option<(
     Vec<String>,
     Vec<String>,
@@ -250,7 +253,7 @@ fn process_component(
                 // INFO: should be catalogued as fusions!
                 let mut splicing_overlaps = 0_f32;
                 for r_introns in ref_introns.iter() {
-                    if splice_site_overlap(&query.introns, r_introns) {
+                    if splice_site_overlap(&query.introns, r_introns, match_type) {
                         splicing_overlaps += 1.0;
                     }
                 }
