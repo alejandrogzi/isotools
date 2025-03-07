@@ -6,8 +6,10 @@ members = [
     "iso-pack",
     "iso-fusion",
     "iso-cov",
-    "iso-classify"
-, "iso-orf", "iso-polya"]
+    "iso-classify",
+    "iso-orf",
+    "iso-polya",
+]
 resolver = "2"
 
 [workspace.package]
@@ -15,6 +17,7 @@ authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70.0"
+version = "0.0.1"
 
 [workspace.dependencies]
 dashmap = { version = "6", features = ["rayon"] }
@@ -34,9 +37,9 @@ serde_json = "1.0.133"
 num-traits = "0.2.19"
 bigtools = "0.5.4"
 twobit = "0.2.1"
+tokio = { version = "1.16", features = ["full"] }
 
 [profile.release]
 lto = true
 opt-level = 3
 codegen-units = 1
-
