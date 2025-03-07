@@ -1,10 +1,12 @@
+use bigtools::BigWigWrite;
 use config::{get_progress_bar, Sequence, Strand};
 use dashmap::DashSet;
-use iso_classify::{core::Genome, utils::get_sequences};
+use iso_classify::core::Genome;
 use packbed::{par_reader, unpack};
 use rayon::prelude::*;
 
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufWriter, Write},
     path::PathBuf,
@@ -12,23 +14,24 @@ use std::{
 };
 
 use crate::{
-    cli::{AparentArgs, FilterArgs},
-    utils::PolyAPred,
+    cli::{AparentArgs, FilterArgs, CHUNK_SIZE},
+    utils::{bg_par_reader, get_sequences, PolyAPred},
 };
 
-pub const CHUNK_SIZE: usize = 500;
 pub const PARA: &str = "para";
-pub const APPARENT_PY: &str = "aparent.py";
+pub const APPARENT_PY: &str = "run_aparent.py";
 pub const ISO_POLYA: &str = "iso-polya";
 pub const ASSETS: &str = "assets";
 pub const RAM_PER_SITE: f32 = 0.025;
 pub const JOBLIST: &str = "joblist";
 pub const FILTER_MINIMAP: &str = "filterMinimapQuality.perl";
+const TOKIO_RUNTIME_THREADS: usize = 8;
 
 pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Error>> {
     let isoseqs = unpack::<PolyAPred, _>(args.bed, config::OverlapType::Exon, true)
         .expect("ERROR: Could not unpack bed file!");
-    let genome = get_sequences(args.twobit).expect("ERROR: Could not get read .2bit file!");
+    let (genome, chrom_sizes) =
+        get_sequences(args.twobit).expect("ERROR: Could not get read .2bit file!");
 
     let pb = get_progress_bar(isoseqs.len() as u64, "Processing reads...");
     let accumulator = ParallelAccumulator::default();
@@ -55,7 +58,7 @@ pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Erro
         submit_jobs(paths, args.use_max_peak);
 
         // INFO: wait until all jobs are don and then merge the results
-        merge_results();
+        merge_results(chrom_sizes);
     }
 
     Ok(())
@@ -221,7 +224,7 @@ fn get_assets_dir() -> PathBuf {
     }
 }
 
-fn merge_results() {
+fn merge_results(chrom_sizes: HashMap<String, u32>) {
     let assets = get_assets_dir();
 
     let mut beds = Vec::new();
@@ -242,22 +245,31 @@ fn merge_results() {
     }
 
     let bed = par_reader(beds).expect("ERROR: Failed to merge bed files");
-    let bg = par_reader(bgs).expect("ERROR: Failed to merge bedGraph files");
+    let (bg_plus, bg_minus) = bg_par_reader(bgs).expect("ERROR: Failed to merge bedGraph files");
 
     // INFO: write bed and bedgraph files and remove the chunks
     let bed_dest = assets.join("iso_polya_aparent.bed");
-    let bg_dest = assets.join("iso_polya_aparent.bedGraph");
+    let bg_dest_plus = assets.join("iso_polya_aparent_plus.bedGraph");
+    let bg_dest_minus = assets.join("iso_polya_aparent_minus.bedGraph");
+    let bw_dest_plus = assets.join("iso_polya_aparent_plus.bw");
+    let bw_dest_minus = assets.join("iso_polya_aparent_minus.bw");
 
-    vec![(bed_dest, bed), (bg_dest, bg)]
-        .into_par_iter()
-        .for_each(|(dest, data)| {
-            let file = File::create(&dest).expect("ERROR :Failed to create file");
-            let mut writer = BufWriter::new(file);
+    vec![
+        (bed_dest, bed),
+        (bg_dest_plus.clone(), bg_plus),
+        (bg_dest_minus.clone(), bg_minus),
+    ]
+    .into_par_iter()
+    .for_each(|(dest, data)| {
+        let file = File::create(&dest).expect("ERROR :Failed to create file");
+        let mut writer = BufWriter::new(file);
 
-            writer
-                .write_all(data.as_bytes())
-                .expect("ERROR: Failed to write file");
-        });
+        writer
+            .write_all(data.as_bytes())
+            .expect("ERROR: Failed to write file");
+    });
+
+    log::info!("INFO: Merged chunks and cleaning...");
 
     // INFO: deleting APPARENT chunked output
     for entry in std::fs::read_dir(assets).expect("ERROR: Failed to read assets directory") {
@@ -274,6 +286,38 @@ fn merge_results() {
             }
         }
     }
+
+    log::info!("INFO: Writing BigWig file from bedGraph fragments...");
+
+    vec![(bg_dest_plus, bw_dest_plus), (bg_dest_minus, bw_dest_minus)]
+        .into_par_iter()
+        .for_each(|(bg_dest, bw_dest)| {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(TOKIO_RUNTIME_THREADS)
+                .build()
+                .expect("Unable to create runtime.");
+
+            write_bigwig(bg_dest, bw_dest, chrom_sizes.clone(), runtime);
+        });
+
+    log::info!("SUCCESS: APPARENT finished successfully!");
+}
+
+fn write_bigwig(
+    bg_dest: PathBuf,
+    bw_dest: PathBuf,
+    chrom_sizes: HashMap<String, u32>,
+    handle: tokio::runtime::Runtime,
+) {
+    let bedgraph = File::open(bg_dest.clone()).expect("ERROR: Failed to open bedgraph file");
+    let bw = BigWigWrite::create_file(bw_dest.to_string_lossy().as_ref(), chrom_sizes)
+        .expect("ERROR: Cannot create BigWig file");
+
+    let data = bigtools::beddata::BedParserStreamingIterator::from_bedgraph_file(bedgraph, true);
+    bw.write(data, handle)
+        .expect("ERROR: Failed to write BigWig file");
+
+    std::fs::remove_file(bg_dest).expect("ERROR: Failed to remove bedGraph file");
 }
 
 fn check_para_dir() {
@@ -368,4 +412,8 @@ fn create_job_filter_minimap(args: FilterArgs) -> PathBuf {
     let _ = writer.flush();
 
     return joblist;
+}
+
+pub fn pas_caller() {
+    unimplemented!();
 }
