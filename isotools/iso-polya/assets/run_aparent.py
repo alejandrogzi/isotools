@@ -70,11 +70,6 @@ def process_chunk(
     graph_lines = []
     bed_lines = []
 
-    if not args.use_max_peak:
-        graph_lines = ['track type=bedGraph name="APARENT" description="APARENT"\n']
-    else:
-        graph_lines = ['track type=bedGraph name="APARENT" description="APAREN_MaxMode"\n']
-
     for row in open(args.path, "r"):
         fields = row.strip().split("\t")
 
@@ -90,15 +85,17 @@ def process_chunk(
         if strand == "-":
             for i, peak in enumerate(polya_profile):
                 if peak < PEAK_THRESHOLD:
-                    peak = 0
+                    # peak = 0
+                    continue
 
-                graph_lines.append(f"{chrom}\t{end - i - 1}\t{end - i}\t{peak}\n")
+                graph_lines.append(f"{chrom}\t{end - i - 1}\t{end - i}\t{peak}\t{strand}\n")
         else:
             for i, peak in enumerate(polya_profile):
                 if peak < PEAK_THRESHOLD:
-                    peak = 0
+                    # peak = 0
+                    continue
 
-                graph_lines.append(f"{chrom}\t{start + i - 1}\t{start + i}\t{peak}\n")
+                graph_lines.append(f"{chrom}\t{start + i - 1}\t{start + i}\t{peak}\t{strand}\n")
 
         if args.use_max_peak:
             all_peak_ixs = peak_ixs
