@@ -1,6 +1,6 @@
 [package]
 name = "iso-polya"
-version = "0.0.2"
+version = "0.0.3"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -21,3 +21,6 @@ thiserror.workspace = true
 anyhow.workspace = true
 simple_logger.workspace = true
 serde.workspace = true
+twobit.workspace = true
+bigtools.workspace = true
+tokio.workspace = true
