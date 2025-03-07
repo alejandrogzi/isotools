@@ -2,6 +2,10 @@ use clap::{ArgAction, Parser, Subcommand};
 use config::ArgCheck;
 use std::path::PathBuf;
 
+// Aparent parameters
+pub const CHUNK_SIZE: usize = 500;
+
+// Read parameters
 pub const MIN_PER_ID: usize = 98;
 pub const MAX_CLIP5: usize = 20;
 pub const MAX_CLIP3: usize = 20;
@@ -9,6 +13,10 @@ pub const MAX_CLIP3: usize = 20;
 // HMM parameters
 pub const P2P: f32 = 0.9; // INFO: transition prob for polyA tail
 pub const EMIT_A: f32 = 0.99; // INFO: emission prob for A in polyA state
+
+// PASCaller parameters
+pub const POLYA_LENGTH: usize = 50;
+pub const WIGGLE: usize = 2;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -147,6 +155,15 @@ pub struct AparentArgs {
         action = ArgAction::Set,
     )]
     pub use_max_peak: bool,
+
+    #[arg(
+        short = 'c',
+        long = "chunk-size",
+        help = "Chunk size for parallel processing",
+        value_name = "CHUNK_SIZE",
+        default_value_t = CHUNK_SIZE
+    )]
+    pub chunk_size: usize,
 }
 
 impl ArgCheck for AparentArgs {
@@ -303,4 +320,42 @@ impl ArgCheck for FilterArgs {
 }
 
 #[derive(Debug, Parser)]
-pub struct CallerArgs {}
+pub struct CallerArgs {
+    #[arg(
+        short = 'a',
+        long = "aparent",
+        required = true,
+        value_name = "PATH",
+        help = "Path to output APARENT .bed file"
+    )]
+    pub aparent: PathBuf,
+
+    #[arg(
+        short = 'm',
+        long = "minimap",
+        required = true,
+        value_name = "PATH",
+        help = "Path to output filterMinimapQuality.perl output .bed file"
+    )]
+    pub minimap: PathBuf,
+
+    #[arg(
+        short = 'l',
+        long = "length",
+        required = false,
+        help = "Genomic polyA tail length threshold",
+        value_name = "VALUE",
+        default_value_t = POLYA_LENGTH,
+    )]
+    pub length: usize,
+
+    #[arg(
+        short = 'w',
+        long = "wiggle",
+        required = false,
+        help = "Wiggle room for polyA tail length",
+        value_name = "VALUE",
+        default_value_t = WIGGLE,
+    )]
+    pub wiggle: usize,
+}
