@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "entry",
     "config",
     "iso-intron",
     "iso-utr",

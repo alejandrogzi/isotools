@@ -1,0 +1,26 @@
+[package]
+name = "isotools"
+version = "0.0.1"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "gene-structure classifier source-based"
+keywords = ["intron", "exon", "classify", "isoseq"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+iso-polya = { path = "../iso-polya" }
+iso-intron = { path = "../iso-intron" }
+iso-utr = { path = "../iso-utr" }
+iso-pack = { path = "../iso-pack" }
+iso-fusion = { path = "../iso-fusion" }
+iso-cov = { path = "../iso-cov" }
+iso-classify = { path = "../iso-classify" }
+iso-orf = { path = "../iso-orf" }
+config = { path = "../config" }
+log.workspace = true
+simple_logger.workspace = true

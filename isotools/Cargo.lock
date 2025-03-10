@@ -862,7 +862,7 @@ dependencies = [
 
 [[package]]
 name = "iso-polya"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -899,6 +899,24 @@ dependencies = [
  "serde_json",
  "simple_logger",
  "tempfile",
+]
+
+[[package]]
+name = "isotools"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "config",
+ "iso-classify",
+ "iso-cov",
+ "iso-fusion",
+ "iso-intron",
+ "iso-orf",
+ "iso-pack",
+ "iso-polya",
+ "iso-utr",
+ "log",
+ "simple_logger",
 ]
 
 [[package]]
