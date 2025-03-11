@@ -1,16 +1,20 @@
-use dashmap::DashSet;
-use hashbrown::HashSet;
+use anyhow::Result;
+use dashmap::{DashMap, DashSet};
+use hashbrown::{HashMap, HashSet};
 use indicatif::{ProgressBar, ProgressStyle};
+use log::{info, warn};
 use num_traits::{Num, NumCast};
+use rayon::prelude::*;
 use thiserror::Error;
 
 use std::borrow::Borrow;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::MatchType;
+use crate::{BedColumn, BedColumnValue, BedParser, CoordType, MatchType, OverlapType};
 
 // os
 #[cfg(not(windows))]
@@ -265,4 +269,172 @@ where
                 .any(|&(x, y)| splice_sites.contains(&x) || splice_sites.contains(&y))
         }
     }
+}
+
+/// Convert a BED file into a HashMap of chrom-dependent intervals
+///
+/// This function is used to parse a BED file and convert it into a
+/// HashMap of chromosome-dependent intervals. The intervals are
+/// stored as a HashSet of tuples containing the start and end
+/// positions of each interval.
+///
+/// # Arguments
+///
+/// * `contents` - the contents of the BED file
+/// * `hint` - the coordinate type [Bounds, Intronic, Exonic]
+///
+/// # Returns
+///
+/// * `HashMap<String, HashSet<(u64, u64)>>` - a HashMap of chromosome-dependent intervals
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::bed_to_map;
+/// use isotools::config::BedParser;
+/// use isotools::config::CoordType;
+/// use isotools::config::OverlapType;
+/// use std::sync::Arc;
+/// use hashbrown::{HashSet, HashMap};
+///
+/// let contents = Arc::new("chr1\t10\t20\nchr2\t30\t40".to_string());
+/// let hint = CoordType::Bounds;
+/// let result = bed_to_map::<BedParser>(contents, hint).unwrap();
+///
+/// let mut expected = HashMap::new();
+/// expected.insert("chr1".to_string(), [(10, 20)].iter().cloned().collect::<HashSet<_>>());
+///
+/// assert_eq!(result, expected);
+/// ```
+pub fn bed_to_map<T>(
+    contents: Arc<String>,
+    hint: CoordType,
+) -> Result<HashMap<String, HashSet<(u64, u64)>>, anyhow::Error>
+where
+    T: BedParser,
+{
+    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
+    let tracks = contents
+        .par_lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            T::parse(line, OverlapType::Exon, false) // INFO: placeholders
+                .map_err(|e| warn!("Error parsing {}: {}", line, e))
+                .ok()
+        })
+        .fold(
+            || HashMap::new(),
+            |mut acc: HashMap<String, HashSet<(u64, u64)>>, record| {
+                let entry = acc.entry(record.chrom().to_owned()).or_default();
+                match hint {
+                    CoordType::Bounds => {
+                        entry.insert(record.coord());
+                        ()
+                    }
+                    CoordType::Intronic => entry.extend(record.intronic_coords()),
+                    CoordType::Exonic => entry.extend(record.exonic_coords()),
+                };
+
+                pb.inc(1);
+                acc
+            },
+        )
+        .reduce(
+            || HashMap::new(),
+            |mut acc, map| {
+                for (k, v) in map {
+                    acc.entry(k).or_default().extend(v);
+                }
+                acc
+            },
+        );
+
+    pb.finish_and_clear();
+
+    if tracks.is_empty() {
+        anyhow::bail!("No tracks found in the provided file!");
+    }
+    info!(
+        "Parsed {} blacklisted intervals.",
+        tracks.values().flatten().count()
+    );
+    Ok(tracks)
+}
+
+/// Convert a BED file into a row-wise nested structure
+///
+/// This function is used to parse a BED file and convert it into a
+/// DashMap of chromosome-dependent HashMaps. Each inner HashMap stores
+/// the 'attribute' of each row in the BED file as a `BedColumnValue`.
+/// The user specifies which attribute should be stored.
+///
+/// # Arguments
+///
+/// * `contents` - the contents of the BED file
+/// * `attribute` - the attribute to be stored in the inner HashMap
+///
+/// # Returns
+///
+/// * `DashMap<String, HashMap<String, BedColumnValue>>` - a DashMap where the key is the chromosome
+///   and the value is a HashMap mapping unique region names to the chosen `BedColumnValue`.
+pub fn bed_to_nested_map<T>(
+    contents: Arc<String>,
+    attribute: BedColumn,
+) -> Result<DashMap<String, HashMap<String, BedColumnValue>>, anyhow::Error>
+where
+    T: BedParser,
+{
+    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
+    let tracks = DashMap::new();
+
+    contents
+        .par_lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            T::parse(line, OverlapType::Exon, false) // WARN: placeholders
+                .map_err(|e| warn!("Error parsing {}: {}", line, e))
+                .ok()
+        })
+        .for_each(|record| {
+            let chrom = record.chrom().to_owned();
+            let name = record.name().to_owned(); // INFO: name is unique!
+
+            let value = match attribute {
+                BedColumn::Chrom => BedColumnValue::Chrom(record.chrom().to_string()),
+                BedColumn::Start => BedColumnValue::Start(record.start()),
+                BedColumn::End => BedColumnValue::End(record.end()),
+                BedColumn::Name => BedColumnValue::Name(record.name().to_string()),
+                BedColumn::Score => BedColumnValue::Score(record.score()),
+                BedColumn::Strand => BedColumnValue::Strand(record.strand()),
+                BedColumn::ThickStart => BedColumnValue::ThickStart(record.cds_start()),
+                BedColumn::ThickEnd => BedColumnValue::ThickEnd(record.cds_end()),
+                BedColumn::ItemRgb => BedColumnValue::ItemRgb(record.rgb().to_string()),
+                BedColumn::BlockCount => BedColumnValue::BlockCount(record.block_count()),
+                BedColumn::BlockSizes => BedColumnValue::BlockSizes(record.block_sizes().clone()),
+                BedColumn::BlockStarts => {
+                    BedColumnValue::BlockStarts(record.block_starts().clone())
+                }
+            };
+
+            let mut entry = tracks.entry(chrom).or_insert_with(HashMap::new);
+            entry.insert(name, value);
+
+            pb.inc(1);
+        });
+
+    pb.finish_and_clear();
+
+    if tracks.is_empty() {
+        anyhow::bail!("ERROR: No tracks found in the provided file!");
+    }
+
+    info!(
+        "INFO: Parsed {} rows from the BED file!",
+        tracks
+            .iter()
+            .map(|entry| entry.value().len())
+            .sum::<usize>()
+    );
+
+    Ok(tracks)
 }

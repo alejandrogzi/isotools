@@ -124,6 +124,17 @@ pub trait BedParser: Send + Sync + Sized {
     fn coord(&self) -> (u64, u64);
     fn intronic_coords(&self) -> HashSet<(u64, u64)>; // WARN: will not work for Bed[4,6,8]
     fn exonic_coords(&self) -> HashSet<(u64, u64)>; // WARN: will not work for Bed[4,6,8]
+    fn name(&self) -> &str; // WARN: will not work with Bed[3]
+    fn strand(&self) -> Strand;
+    fn score(&self) -> f32;
+    fn start(&self) -> u64;
+    fn end(&self) -> u64;
+    fn cds_start(&self) -> u64;
+    fn cds_end(&self) -> u64;
+    fn block_sizes(&self) -> Vec<u64>;
+    fn block_starts(&self) -> Vec<u64>;
+    fn block_count(&self) -> u64;
+    fn rgb(&self) -> &str;
 }
 
 // public enums
@@ -223,6 +234,38 @@ impl From<bool> for MatchType {
             false => MatchType::SpliceSite,
         }
     }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum BedColumn {
+    Chrom,
+    Start,
+    End,
+    Name,
+    Score,
+    Strand,
+    ThickStart,
+    ThickEnd,
+    ItemRgb,
+    BlockCount,
+    BlockSizes,
+    BlockStarts,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum BedColumnValue {
+    Chrom(String),
+    Start(u64),
+    End(u64),
+    Name(String),
+    Score(f32),
+    Strand(Strand),
+    ThickStart(u64),
+    ThickEnd(u64),
+    ItemRgb(String),
+    BlockCount(u64),
+    BlockSizes(Vec<u64>),
+    BlockStarts(Vec<u64>),
 }
 
 // public structs
