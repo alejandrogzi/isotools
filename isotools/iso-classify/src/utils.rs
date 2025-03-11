@@ -2,7 +2,7 @@ use anyhow::Result;
 use bigtools::{utils::reopen::Reopen, BigWigRead};
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
-use log::{info, warn};
+use log::info;
 use packbed::{par_reader, reader, record::Bed4};
 use rayon::prelude::*;
 use twobit::TwoBitFile;
@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use config::{
-    get_progress_bar, BedParser, CoordType, OverlapType, Sequence, SharedSpliceMap, SpliceScores,
-    SpliceSite, StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS, CONS1, CONS2,
+    bed_to_map, get_progress_bar, CoordType, Sequence, SharedSpliceMap, SpliceScores, SpliceSite,
+    StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS, CONS1, CONS2,
     DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB,
 };
 
@@ -127,61 +127,6 @@ pub fn create_splice_map(
         get_splice_values(splice_plus),
         get_splice_values(splice_minus),
     )
-}
-
-pub fn bed_to_map<T>(
-    contents: Arc<String>,
-    hint: CoordType,
-) -> Result<HashMap<String, HashSet<(u64, u64)>>, anyhow::Error>
-where
-    T: BedParser,
-{
-    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
-    let tracks = contents
-        .par_lines()
-        .filter(|line| !line.starts_with('#'))
-        .filter_map(|line| {
-            T::parse(line, OverlapType::Exon, false) // INFO: placeholders
-                .map_err(|e| warn!("Error parsing {}: {}", line, e))
-                .ok()
-        })
-        .fold(
-            || HashMap::new(),
-            |mut acc: HashMap<String, HashSet<(u64, u64)>>, record| {
-                let entry = acc.entry(record.chrom().to_owned()).or_default();
-                match hint {
-                    CoordType::Bounds => {
-                        entry.insert(record.coord());
-                        ()
-                    }
-                    CoordType::Intronic => entry.extend(record.intronic_coords()),
-                    CoordType::Exonic => entry.extend(record.exonic_coords()),
-                };
-
-                pb.inc(1);
-                acc
-            },
-        )
-        .reduce(
-            || HashMap::new(),
-            |mut acc, map| {
-                for (k, v) in map {
-                    acc.entry(k).or_default().extend(v);
-                }
-                acc
-            },
-        );
-
-    pb.finish_and_clear();
-
-    if tracks.is_empty() {
-        anyhow::bail!("No tracks found in the provided file!");
-    }
-    info!(
-        "Parsed {} blacklisted intervals.",
-        tracks.values().flatten().count()
-    );
-    Ok(tracks)
 }
 
 pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
