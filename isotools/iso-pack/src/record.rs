@@ -91,14 +91,49 @@ impl BedParser for IntronPred {
         (self.start, self.end)
     }
 
-    // WARN: placeholder producing dummy data
-    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
-        vec![(self.start, self.end)].iter().cloned().collect()
+    fn start(&self) -> u64 {
+        self.start
     }
 
-    // WARN: placeholder producing dummy data
+    fn end(&self) -> u64 {
+        self.end
+    }
+
+    fn strand(&self) -> Strand {
+        self.strand.clone()
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.start
+    }
+    fn cds_end(&self) -> u64 {
+        self.end
+    }
+
+    // WARN: placeholder for trait
+    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
+        HashSet::new()
+    }
     fn exonic_coords(&self) -> HashSet<(u64, u64)> {
-        vec![(self.start, self.end)].iter().cloned().collect()
+        HashSet::new()
+    }
+    fn name(&self) -> &str {
+        ""
+    }
+    fn score(&self) -> f32 {
+        0.0
+    }
+    fn block_sizes(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_starts(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_count(&self) -> u64 {
+        0
+    }
+    fn rgb(&self) -> &str {
+        ""
     }
 }
 
@@ -533,12 +568,56 @@ impl BedParser for GenePred {
         (self.start, self.end)
     }
 
+    fn start(&self) -> u64 {
+        self.start
+    }
+
+    fn end(&self) -> u64 {
+        self.end
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.cds_start
+    }
+
+    fn cds_end(&self) -> u64 {
+        self.cds_end
+    }
+
+    fn strand(&self) -> Strand {
+        self.strand.clone()
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     fn intronic_coords(&self) -> HashSet<(u64, u64)> {
         self.introns.iter().cloned().collect()
     }
 
     fn exonic_coords(&self) -> HashSet<(u64, u64)> {
         self.exons.iter().cloned().collect()
+    }
+
+    fn block_sizes(&self) -> Vec<u64> {
+        self.exons.iter().map(|(s, e)| e - s).collect()
+    }
+
+    fn block_starts(&self) -> Vec<u64> {
+        self.exons.iter().map(|(s, _)| *s).collect()
+    }
+
+    fn block_count(&self) -> u64 {
+        self.exon_count as u64
+    }
+
+    // WARN: placeholder for trait
+    fn score(&self) -> f32 {
+        0.0
+    }
+    fn rgb(&self) -> &str {
+        ""
     }
 }
 
@@ -694,6 +773,50 @@ impl BedParser for Bed12 {
     fn exonic_coords(&self) -> HashSet<(u64, u64)> {
         self.data.exons.iter().cloned().collect()
     }
+
+    fn start(&self) -> u64 {
+        self.data.start
+    }
+
+    fn end(&self) -> u64 {
+        self.data.end
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.data.cds_start
+    }
+
+    fn cds_end(&self) -> u64 {
+        self.data.cds_end
+    }
+
+    fn strand(&self) -> Strand {
+        self.data.strand.clone()
+    }
+
+    fn name(&self) -> &str {
+        &self.data.name
+    }
+
+    fn block_sizes(&self) -> Vec<u64> {
+        self.data.exons.iter().map(|(s, e)| e - s).collect()
+    }
+
+    fn block_starts(&self) -> Vec<u64> {
+        self.data.exons.iter().map(|(s, _)| *s).collect()
+    }
+
+    fn block_count(&self) -> u64 {
+        self.data.exon_count as u64
+    }
+
+    // WARN: placeholder for trait
+    fn score(&self) -> f32 {
+        0.0
+    }
+    fn rgb(&self) -> &str {
+        ""
+    }
 }
 
 #[inline(always)]
@@ -786,8 +909,41 @@ fn get_coords(
     Ok((exons, introns))
 }
 
+/// Convert relative positions to absolute positions
+///
+/// # Arguments
+///
+/// * `tx_start` - Start of transcript
+/// * `tx_end` - End of transcript
+/// * `cds_start` - Start of CDS
+/// * `cds_end` - End of CDS
+/// * `strand` - Strand of transcript
+/// * `get` - Function to parse string to u64
+///
+/// # Returns
+///
+/// * `Ok` - Tuple of absolute positions
+/// * `Err` - Error message
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let tx_start = "0";
+/// let tx_end = "100";
+/// let cds_start = "10";
+/// let cds_end = "90";
+/// let strand = '+';
+/// let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
+///
+/// let (tx_start, tx_end, cds_start, cds_end) = abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get).unwrap();
+///
+/// assert_eq!(tx_start, 0);
+/// assert_eq!(tx_end, 100);
+/// assert_eq!(cds_start, 10);
+/// assert_eq!(cds_end, 90);
+/// ```
 #[inline(always)]
-fn abs_pos(
+pub fn abs_pos(
     tx_start: &str,
     tx_end: &str,
     cds_start: &str,
@@ -821,6 +977,28 @@ fn abs_pos(
     }
 }
 
+/// Calculate intron coordinates based on exon boundaries
+///
+/// # Arguments
+///
+/// * `intervals` - HashSet of exon boundaries
+///
+/// # Returns
+///
+/// * `HashSet` of intron boundaries
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let intervals = HashSet::new();
+/// intervals.insert((0, 10));
+/// intervals.insert((20, 30));
+/// intervals.insert((40, 50));
+///
+/// let introns = gapper(&intervals);
+///
+/// assert_eq!(introns.len(), 2);
+/// ```
 fn gapper(intervals: &HashSet<(u64, u64)>) -> HashSet<(u64, u64)> {
     let mut vintervals: Vec<(u64, u64)> = intervals.iter().copied().collect();
     vintervals.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1120,6 +1298,26 @@ impl IntronBucket {
     }
 }
 
+/// Bed4
+///
+/// A struct to hold the Bed4 data
+///
+/// # Attributes
+///
+/// * `chrom` - The chromosome of the read
+/// * `coord` - The coordinates of the read
+/// * `id` - The name of the read
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let line = "chr1\t1000\t2000\tread1";
+/// let bed4 = Bed4::new(line).unwrap();
+///
+/// assert_eq!(bed4.chrom, "chr1");
+/// assert_eq!(bed4.coord, (1000, 2000));
+/// assert_eq!(bed4.id, "read1");
+/// ```
 #[derive(Debug, PartialEq, Clone)]
 pub struct Bed4 {
     pub chrom: String,
@@ -1183,28 +1381,89 @@ impl BedParser for Bed4 {
         self.coord
     }
 
+    fn start(&self) -> u64 {
+        self.coord.0
+    }
+
+    fn end(&self) -> u64 {
+        self.coord.1
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.coord.0
+    }
+
+    fn cds_end(&self) -> u64 {
+        self.coord.1
+    }
+
+    fn name(&self) -> &str {
+        &self.id
+    }
+
     // WARN: placeholder for Bed4
     fn intronic_coords(&self) -> HashSet<(u64, u64)> {
         let mut introns = HashSet::new();
         introns.insert(self.coord);
         introns
     }
-
-    // WARN: placeholder for Bed4
     fn exonic_coords(&self) -> HashSet<(u64, u64)> {
         let mut exons = HashSet::new();
         exons.insert(self.coord);
         exons
     }
+    fn strand(&self) -> Strand {
+        Strand::Forward
+    }
+    fn block_sizes(&self) -> Vec<u64> {
+        vec![self.coord.1 - self.coord.0]
+    }
+    fn block_starts(&self) -> Vec<u64> {
+        vec![self.coord.0]
+    }
+    fn block_count(&self) -> u64 {
+        1
+    }
+    fn score(&self) -> f32 {
+        0.0
+    }
+    fn rgb(&self) -> &str {
+        ""
+    }
 }
 
-// WARN: will cover any high-order bed file [6,8,12]
+/// Bed6
+///
+/// A struct to hold the Bed6 data
+///
+/// # Attributes
+///
+/// * `chrom` - The chromosome of the read
+/// * `coord` - The coordinates of the read
+/// * `id` - The name of the read
+/// * `strand` - The strand of the read
+/// * `score` - The score of the read
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let line = "chr1\t1000\t2000\tread1\t0.0\t+";
+/// let bed6 = Bed6::new(line).unwrap();
+///
+/// assert_eq!(bed6.chrom, "chr1");
+/// assert_eq!(bed6.coord, (1000, 2000));
+/// assert_eq!(bed6.id, "read1");
+/// assert_eq!(bed6.strand, Strand::Forward);
+/// assert_eq!(bed6.score, 0.0);
+/// ```
 #[derive(Debug, PartialEq, Clone)]
+// WARN: will cover any high-order bed file [6,8,12]
 pub struct Bed6 {
     pub chrom: String,
     pub coord: (u64, u64),
     pub id: String,
     pub strand: Strand,
+    pub score: f32,
 }
 
 impl Bed6 {
@@ -1216,7 +1475,7 @@ impl Bed6 {
         let mut fields = line.split('\t');
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
 
-        let (chrom, start, end, id, _, strand) = (
+        let (chrom, start, end, id, score, strand) = (
             fields.next().ok_or("Cannot parse chrom")?.to_string(),
             get(fields.next().ok_or("Cannot parse start")?)?,
             get(fields.next().ok_or("Cannot parse end")?)?,
@@ -1246,11 +1505,16 @@ impl Bed6 {
             }
         };
 
+        let score = score
+            .parse::<f32>()
+            .map_err(|_| "ERROR: Cannot parse score")?;
+
         Ok(Bed6 {
             chrom,
             coord: (start, end),
             id,
             strand,
+            score,
         })
     }
 
@@ -1260,6 +1524,7 @@ impl Bed6 {
             coord: (start, end),
             id,
             strand,
+            score: 0.0,
         }
     }
 
@@ -1288,18 +1553,303 @@ impl BedParser for Bed6 {
         self.coord
     }
 
-    // WARN: placeholder for Bed6
+    fn start(&self) -> u64 {
+        self.coord.0
+    }
+
+    fn end(&self) -> u64 {
+        self.coord.1
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.coord.0
+    }
+
+    fn cds_end(&self) -> u64 {
+        self.coord.1
+    }
+
+    fn name(&self) -> &str {
+        &self.id
+    }
+
+    fn strand(&self) -> Strand {
+        self.strand.clone()
+    }
+
+    fn score(&self) -> f32 {
+        self.score
+    }
+
+    // WARN: placeholder for Bed4
     fn intronic_coords(&self) -> HashSet<(u64, u64)> {
         let mut introns = HashSet::new();
         introns.insert(self.coord);
         introns
     }
-
-    // WARN: placeholder for Bed6
     fn exonic_coords(&self) -> HashSet<(u64, u64)> {
         let mut exons = HashSet::new();
         exons.insert(self.coord);
         exons
+    }
+    fn block_sizes(&self) -> Vec<u64> {
+        vec![self.coord.1 - self.coord.0]
+    }
+    fn block_starts(&self) -> Vec<u64> {
+        vec![self.coord.0]
+    }
+    fn block_count(&self) -> u64 {
+        1
+    }
+    fn rgb(&self) -> &str {
+        ""
+    }
+}
+
+/// PolyAPred
+///
+/// A struct to hold the PolyAPred data
+///
+/// # Attributes
+///
+/// * `name` - The name of the read
+/// * `chrom` - The chromosome of the read
+/// * `strand` - The strand of the read
+/// * `start` - The start position of the read
+/// * `end` - The end position of the read
+/// * `cds_start` - The start position of the CDS
+/// * `cds_end` - The end position of the CDS
+/// * `clip` - The number of clipped bases
+/// * `clipped_a` - The number of clipped A's
+/// * `poly_a` - The number of polyA bases
+/// * `gpa` - The number of genomic A's
+/// * `line` - The original line of the read
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let line = "chr1\t1000\t2000\tread1_3Clip0_PolyA50_PolyARead52\t0\t+\t1000\t2000\t0\t0\t0\t0";
+/// let data = PolyAPred::read(line, OverlapType::Exon, false).unwrap();
+///
+/// assert_eq!(data, PolyAPred {
+///   name: "read1".to_string(),
+///   chrom: "chr1".to_string(),
+///   strand: Strand::Forward,
+///   start: 1000,
+///   end: 2000,
+///   cds_start: 1000,
+///   cds_end: 2000,
+///   clip: 0,
+///   clipped_a: 50,
+///   poly_a: 52,
+///   gpa: 2,
+///   line: line.to_string(),
+/// });
+/// ```
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct PolyAPred {
+    pub name: String,
+    pub chrom: String,
+    pub strand: Strand,
+    pub start: u64,
+    pub end: u64,
+    pub cds_start: u64,
+    pub cds_end: u64,
+    pub clip: u32,
+    pub clipped_a: u32,
+    pub poly_a: u32,
+    pub gpa: u32,
+    pub line: String,
+}
+
+impl PolyAPred {
+    #[inline(always)]
+    pub fn read(line: &str, _: OverlapType, _: bool) -> Result<PolyAPred, &'static str> {
+        if line.is_empty() {
+            return Err("Empty line");
+        }
+
+        let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
+
+        let mut fields = line.split('\t');
+        let (chrom, tx_start, tx_end, name, _, strand, cds_start, cds_end) = (
+            fields.next().ok_or("Cannot parse chrom")?,
+            fields.next().ok_or("Cannot parse tx_start")?,
+            fields.next().ok_or("Cannot parse tx_end")?,
+            fields.next().ok_or("Cannot parse name")?,
+            fields.next().ok_or("Cannot parse score")?,
+            fields
+                .next()
+                .ok_or("Cannot parse strand")?
+                .chars()
+                .next()
+                .ok_or("Cannot parse strand as char")?,
+            fields.next().ok_or("Cannot parse cds_start")?,
+            fields.next().ok_or("Cannot parse cds_end")?,
+        );
+
+        let (tx_start, tx_end, cds_start, cds_end) =
+            abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get)?;
+
+        let strand = match strand {
+            '+' => Strand::Forward,
+            '-' => Strand::Reverse,
+            _ => return Err("ERROR: Strand is not + or -"),
+        };
+
+        let (clip, clipped_a, poly_a, gpa) = get_polya_stats(name);
+
+        Ok(PolyAPred {
+            name: name.into(),
+            chrom: chrom.into(),
+            strand,
+            start: tx_start,
+            end: tx_end,
+            cds_start,
+            cds_end,
+            clip,
+            clipped_a,
+            poly_a,
+            gpa,
+            line: line.into(),
+        })
+    }
+}
+
+impl BedParser for PolyAPred {
+    fn parse(
+        line: &str,
+        overlap: OverlapType,
+        is_ref: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let data = PolyAPred::read(line, overlap, is_ref).expect("ERROR: Cannot parse line");
+        Ok(data)
+    }
+
+    fn chrom(&self) -> &str {
+        &self.chrom.as_str()
+    }
+
+    fn coord(&self) -> (u64, u64) {
+        (self.start, self.end)
+    }
+
+    fn name(&self) -> &str {
+        &self.name.as_str()
+    }
+
+    fn strand(&self) -> Strand {
+        self.strand.clone()
+    }
+
+    fn start(&self) -> u64 {
+        self.start
+    }
+
+    fn end(&self) -> u64 {
+        self.end
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.cds_start
+    }
+
+    fn cds_end(&self) -> u64 {
+        self.cds_end
+    }
+
+    // WARN: placeholder for trait
+    fn intronic_coords(&self) -> HashSet<(u64, u64)> {
+        HashSet::new()
+    }
+    fn exonic_coords(&self) -> HashSet<(u64, u64)> {
+        HashSet::new()
+    }
+    fn score(&self) -> f32 {
+        0.0
+    }
+    fn block_sizes(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_starts(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_count(&self) -> u64 {
+        0
+    }
+    fn rgb(&self) -> &str {
+        ""
+    }
+}
+
+/// Extracts the polyA stats from the read name
+///
+/// # Arguments
+///
+/// * `read` - A string slice that holds the read name
+///
+/// # Returns
+///
+/// A tuple with the following values:
+///
+/// * `clip` - The number of clipped bases
+/// * `clipped_a` - The number of clipped A's
+/// * `read_a` - The number of A's in the read
+/// * `gpa` - The number of genomic A's
+///
+/// # Example
+///
+/// ```
+/// let read = "m54164U_210309_085211/74646562/ccs_PerID0.995_5Clip0_3Clip0_PolyA49_PolyARead50";
+/// let stats = get_polya_stats(read);
+///
+/// assert_eq!(stats, (0, 49, 50, 1));
+/// ```
+fn get_polya_stats(read: &str) -> (u32, u32, u32, u32) {
+    let fields = read.split('_').collect::<Vec<_>>();
+    let stats = fields
+        .get(fields.len() - 3..)
+        .expect("ERROR: Could not get polyA stats from name");
+
+    let clip = stats[0]
+        .split_at(5)
+        .1
+        .parse::<u32>()
+        .expect("ERROR: Could not parse clip");
+    let clipped_a = stats[1]
+        .split_at(5)
+        .1
+        .parse::<u32>()
+        .expect("ERROR: Could not parse clipped A's");
+    let read_a = stats[2]
+        .split_at(9)
+        .1
+        .parse::<u32>()
+        .expect("ERROR: Could not parse read A's");
+
+    let gpa = read_a - (clip + clipped_a);
+
+    (clip, clipped_a, read_a, gpa)
+}
+
+impl From<GenePred> for PolyAPred {
+    fn from(read: GenePred) -> Self {
+        let (clip, clipped_a, poly_a, gpa) = get_polya_stats(&read.name);
+
+        PolyAPred {
+            name: read.name,
+            chrom: read.chrom,
+            strand: read.strand,
+            start: read.start,
+            end: read.end,
+            cds_start: read.cds_start,
+            cds_end: read.cds_end,
+            clip,
+            clipped_a,
+            poly_a,
+            gpa,
+            line: read.line,
+        }
     }
 }
 

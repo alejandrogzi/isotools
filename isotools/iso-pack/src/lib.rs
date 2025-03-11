@@ -13,7 +13,7 @@ use rand::Rng;
 use rayon::prelude::*;
 
 pub mod record;
-pub use record::{Bed12, GenePred, IntronBucket, IntronPred, RefGenePred};
+pub use record::{Bed12, GenePred, IntronBucket, IntronPred, PolyAPred, RefGenePred};
 
 pub type GenePredMap = HashMap<String, Box<dyn BedPackage>>;
 
@@ -122,6 +122,20 @@ impl BedPackage for (Vec<GenePred>, Vec<GenePred>) {
     }
 }
 
+impl BedPackage for Vec<PolyAPred> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PackMode {
     Default, // RefGenePred + Vec<GenePred>
@@ -129,6 +143,7 @@ pub enum PackMode {
     Exon,    // ExonPred
     Query,   // Vec<GenePred> + Vec<IntronPred>
     Paired,  // Vec<GenePred> + Vec<GenePred>
+    PolyA,   // Vec<PolyAPred>
 }
 
 pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
@@ -373,6 +388,20 @@ pub fn buckerize(
                         // INFO: used in iso-orf
                         return Some(Box::new((refs, queries)) as Box<dyn BedPackage>);
                     }
+                    PackMode::PolyA => {
+                        // INFO: only will have refs, used in pas-caller [iso-polya caller]
+                        if refs.is_empty() {
+                            return None;
+                        }
+
+                        // INFO: Vec<GenePred> -> Vec<PolyAPred>
+                        let reads = refs
+                            .into_iter()
+                            .map(|read| PolyAPred::from(read))
+                            .collect::<Vec<_>>();
+
+                        return Some(Box::new(reads) as Box<dyn BedPackage>);
+                    }
                 }
             })
             .collect::<Vec<_>>();
@@ -400,7 +429,11 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     mode: PackMode,
 ) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error> {
     let (tracks, n) = match mode {
-        PackMode::Default | PackMode::Intron | PackMode::Exon | PackMode::Paired => {
+        PackMode::Default
+        | PackMode::Intron
+        | PackMode::Exon
+        | PackMode::Paired
+        | PackMode::PolyA => {
             let refs = unpack::<GenePred, _>(refs, overlap, true)
                 .expect("ERROR: Failed to unpack reference tracks");
 
