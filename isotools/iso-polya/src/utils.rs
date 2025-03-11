@@ -1,7 +1,7 @@
 use config::{BedParser, OverlapType, Strand};
 use dashmap::DashMap;
 use hashbrown::HashSet;
-use packbed::unpack;
+use packbed::{record::abs_pos, unpack};
 use serde::{Deserialize, Serialize};
 use twobit::TwoBitFile;
 
@@ -11,9 +11,11 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 pub const EXPANSION_SIZE: u64 = 150; // 150bp
+pub const ISO_POLYA: &str = "iso-polya";
+pub const ASSETS: &str = "assets";
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct PolyAPred {
+pub struct MiniPolyAPred {
     pub name: String,
     pub chrom: String,
     pub strand: Strand,
@@ -21,9 +23,9 @@ pub struct PolyAPred {
     pub end: u64,
 }
 
-impl PolyAPred {
+impl MiniPolyAPred {
     #[inline(always)]
-    pub fn read(line: &str, _: OverlapType, _: bool) -> Result<PolyAPred, &'static str> {
+    pub fn read(line: &str, _: OverlapType, _: bool) -> Result<Self, &'static str> {
         if line.is_empty() {
             return Err("Empty line");
         }
@@ -64,7 +66,7 @@ impl PolyAPred {
             ),
         };
 
-        Ok(PolyAPred {
+        Ok(MiniPolyAPred {
             name: name.into(),
             chrom: chrom.into(),
             strand,
@@ -74,13 +76,13 @@ impl PolyAPred {
     }
 }
 
-impl BedParser for PolyAPred {
+impl BedParser for MiniPolyAPred {
     fn parse(
         line: &str,
         overlap: OverlapType,
         is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let data = PolyAPred::read(line, overlap, is_ref).expect("ERROR: Cannot parse line");
+        let data = MiniPolyAPred::read(line, overlap, is_ref).expect("ERROR: Cannot parse line");
         Ok(data)
     }
 
@@ -92,14 +94,51 @@ impl BedParser for PolyAPred {
         (self.start, self.end)
     }
 
+    fn name(&self) -> &str {
+        &self.name.as_str()
+    }
+
+    fn strand(&self) -> Strand {
+        self.strand.clone()
+    }
+
+    fn start(&self) -> u64 {
+        self.start
+    }
+
+    fn end(&self) -> u64 {
+        self.end
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.start
+    }
+
+    fn cds_end(&self) -> u64 {
+        self.end
+    }
+
     // WARN: placeholder for trait
     fn intronic_coords(&self) -> HashSet<(u64, u64)> {
         HashSet::new()
     }
-
-    // WARN: placeholder for trait
     fn exonic_coords(&self) -> HashSet<(u64, u64)> {
         HashSet::new()
+    }
+    fn score(&self) -> f32 {
+        0.0
+    }
+    fn block_sizes(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_starts(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_count(&self) -> u64 {
+        0
+    }
+    fn rgb(&self) -> &str {
+        ""
     }
 }
 
@@ -188,14 +227,51 @@ impl BedParser for BedGraph {
         (self.start, self.end)
     }
 
+    fn strand(&self) -> Strand {
+        self.strand.clone()
+    }
+
+    fn start(&self) -> u64 {
+        self.start
+    }
+
+    fn end(&self) -> u64 {
+        self.end
+    }
+
+    fn cds_start(&self) -> u64 {
+        self.start
+    }
+
+    fn cds_end(&self) -> u64 {
+        self.end
+    }
+
+    fn score(&self) -> f32 {
+        self.score as f32
+    }
+
     // WARN: placeholder for trait
     fn intronic_coords(&self) -> HashSet<(u64, u64)> {
         HashSet::new()
     }
-
-    // WARN: placeholder for trait
     fn exonic_coords(&self) -> HashSet<(u64, u64)> {
         HashSet::new()
+    }
+    fn name(&self) -> &str {
+        ""
+    }
+    fn block_sizes(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_starts(&self) -> Vec<u64> {
+        vec![]
+    }
+    fn block_count(&self) -> u64 {
+        0
+    }
+    fn rgb(&self) -> &str {
+        ""
     }
 }
 
@@ -249,4 +325,17 @@ pub fn bg_par_reader(bgs: Vec<PathBuf>) -> Result<(String, String), Box<dyn Erro
     }
 
     Ok((plus, minus))
+}
+
+pub fn get_assets_dir() -> PathBuf {
+    let mut assets = std::env::current_dir().expect("Failed to get executable path");
+
+    if !assets.ends_with(ISO_POLYA) {
+        let rest = PathBuf::from(ISO_POLYA).join(ASSETS);
+        assets.push(rest);
+
+        return assets;
+    } else {
+        return assets.join(ASSETS);
+    }
 }
