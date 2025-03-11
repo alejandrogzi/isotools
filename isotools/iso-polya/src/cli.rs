@@ -331,13 +331,13 @@ pub struct CallerArgs {
     pub aparent: PathBuf,
 
     #[arg(
-        short = 'm',
-        long = "minimap",
+        short = 'b',
+        long = "bed",
         required = true,
         value_name = "PATH",
         help = "Path to output filterMinimapQuality.perl output .bed file"
     )]
-    pub minimap: PathBuf,
+    pub bed: PathBuf,
 
     #[arg(
         short = 'l',
