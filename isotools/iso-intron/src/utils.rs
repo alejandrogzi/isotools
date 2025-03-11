@@ -1,6 +1,5 @@
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
-use iso_classify::utils::bed_to_map;
 use packbed::{par_reader, record::Bed4};
 use rayon::prelude::*;
 
@@ -9,7 +8,7 @@ use std::sync::Arc;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use config::{write_objs, CoordType, INTRON_RETENTIONS, INTRON_RETENTION_FREE};
+use config::{bed_to_map, write_objs, CoordType, INTRON_RETENTIONS, INTRON_RETENTION_FREE};
 
 pub struct ParallelCounter {
     pub dirties: AtomicU32,
