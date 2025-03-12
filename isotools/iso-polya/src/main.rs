@@ -5,7 +5,7 @@ use simple_logger::init_with_level;
 
 use iso_polya::{
     cli::{Args, SubArgs},
-    core::{calculate_polya, filter_minimap},
+    core::{apa::calculate_polya, filter::filter_minimap, pas::pas_caller},
 };
 
 #[allow(unused_variables)]
@@ -44,7 +44,10 @@ fn main() {
             });
         }
         SubArgs::Caller { args } => {
-            unimplemented!();
+            pas_caller(args).unwrap_or_else(|e| {
+                error!("{}", e);
+                std::process::exit(1);
+            });
         }
     }
 
