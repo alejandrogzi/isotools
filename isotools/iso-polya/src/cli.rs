@@ -15,7 +15,9 @@ pub const P2P: f32 = 0.9; // INFO: transition prob for polyA tail
 pub const EMIT_A: f32 = 0.99; // INFO: emission prob for A in polyA state
 
 // PASCaller parameters
-pub const POLYA_LENGTH: usize = 50;
+pub const POLYA_LENGTH_THRESHOLD: usize = 50;
+pub const GENOMIC_POLYA_THRESHOLD: usize = 50;
+pub const APARENT_THRESHOLD: f32 = 0.01;
 pub const WIGGLE: usize = 2;
 
 #[derive(Parser, Debug)]
@@ -340,16 +342,6 @@ pub struct CallerArgs {
     pub bed: PathBuf,
 
     #[arg(
-        short = 'l',
-        long = "length",
-        required = false,
-        help = "Genomic polyA tail length threshold",
-        value_name = "VALUE",
-        default_value_t = POLYA_LENGTH,
-    )]
-    pub length: usize,
-
-    #[arg(
         short = 'w',
         long = "wiggle",
         required = false,
@@ -358,4 +350,46 @@ pub struct CallerArgs {
         default_value_t = WIGGLE,
     )]
     pub wiggle: usize,
+
+    #[arg(
+        long = "recover",
+        help = "Flag to recover from disputed components where discard ratio is bigger than threshold",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub recover: bool,
+
+    //GENOMIC_POLYA_THRESHOLD
+    #[arg(
+        long = "max-gpa-length",
+        required = false,
+        help = "Genomic polyA tail length threshold [max length allowed]",
+        value_name = "VALUE",
+        default_value_t = GENOMIC_POLYA_THRESHOLD,
+    )]
+    pub max_gpa_length: usize,
+
+    //POLYA_LENGTH_THRESHOLD
+    #[arg(
+        long = "min-polya-length",
+        required = false,
+        help = "PolyA tail length threshold [min length allowed]",
+        value_name = "VALUE",
+        default_value_t = POLYA_LENGTH_THRESHOLD,
+    )]
+    pub min_polya_length: usize,
+
+    //APARENT_THRESHOLD
+    #[arg(
+        long = "aparent-threshold",
+        required = false,
+        help = "APARENT threshold [min score allowed]",
+        value_name = "VALUE",
+        default_value_t = APARENT_THRESHOLD,
+    )]
+    pub aparent_threshold: f32,
 }
