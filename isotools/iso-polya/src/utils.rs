@@ -1,7 +1,7 @@
 use config::{BedParser, OverlapType, Strand};
 use dashmap::DashMap;
 use hashbrown::HashSet;
-use packbed::{record::abs_pos, unpack};
+use packbed::unpack;
 use serde::{Deserialize, Serialize};
 use twobit::TwoBitFile;
 
