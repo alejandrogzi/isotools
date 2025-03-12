@@ -16,7 +16,7 @@ pub const EMIT_A: f32 = 0.99; // INFO: emission prob for A in polyA state
 
 // PASCaller parameters
 pub const POLYA_LENGTH_THRESHOLD: usize = 50;
-pub const GENOMIC_POLYA_THRESHOLD: usize = 50;
+pub const GENOMIC_POLYA_THRESHOLD: usize = 5; // INFO: 5 A's in genome
 pub const APARENT_THRESHOLD: f32 = 0.01;
 pub const WIGGLE: usize = 2;
 
