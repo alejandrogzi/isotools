@@ -256,13 +256,15 @@ dependencies = [
 
 [[package]]
 name = "config"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
+ "anyhow",
  "dashmap",
  "hashbrown 0.15.2",
  "indicatif",
  "log",
  "num-traits",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.11",
@@ -845,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "iso-pack"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "anyhow",
  "clap",
