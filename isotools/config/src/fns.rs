@@ -397,14 +397,14 @@ where
         })
         .for_each(|record| {
             let chrom = record.chrom().to_owned();
-            let name = record.name().to_owned(); // INFO: name is unique!
+            let name = record.name().to_owned(); // INFO: name is unique (or should be)!
 
             let value = match attribute {
                 BedColumn::Chrom => BedColumnValue::Chrom(record.chrom().to_string()),
                 BedColumn::Start => BedColumnValue::Start(record.start()),
                 BedColumn::End => BedColumnValue::End(record.end()),
                 BedColumn::Name => BedColumnValue::Name(record.name().to_string()),
-                BedColumn::Score => BedColumnValue::Score(record.score()),
+                BedColumn::Score => BedColumnValue::Score(vec![record.score()]),
                 BedColumn::Strand => BedColumnValue::Strand(record.strand()),
                 BedColumn::ThickStart => BedColumnValue::ThickStart(record.cds_start()),
                 BedColumn::ThickEnd => BedColumnValue::ThickEnd(record.cds_end()),
@@ -417,7 +417,16 @@ where
             };
 
             let mut entry = tracks.entry(chrom).or_insert_with(HashMap::new);
-            entry.insert(name, value);
+            entry
+                .entry(name)
+                .and_modify(|existing| match (existing, &value) {
+                    // INFO: trick to handle duplicated rows with different scores!
+                    (BedColumnValue::Score(scores), BedColumnValue::Score(new_scores)) => {
+                        scores.extend(new_scores);
+                    }
+                    _ => {} // INFO: do nothing for other attributes
+                })
+                .or_insert(value);
 
             pb.inc(1);
         });

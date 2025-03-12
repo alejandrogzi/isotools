@@ -264,7 +264,7 @@ pub enum BedColumnValue {
     Start(u64),
     End(u64),
     Name(String),
-    Score(f32),
+    Score(Vec<f32>), // WARN: trick for duplicated rows!
     Strand(Strand),
     ThickStart(u64),
     ThickEnd(u64),
@@ -272,6 +272,52 @@ pub enum BedColumnValue {
     BlockCount(u64),
     BlockSizes(Vec<u64>),
     BlockStarts(Vec<u64>),
+}
+
+impl BedColumnValue {
+    /// Get the max score (if applicable)
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::BedColumnValue;
+    ///
+    /// let score = BedColumnValue::Score(vec![1.0, 2.0, 3.0]);
+    /// assert_eq!(score.max_score(), Some(3.0));
+    ///
+    /// let score = BedColumnValue::Score(vec![1.0]);
+    /// assert_eq!(score.max_score(), Some(1.0));
+    /// ```
+    pub fn max_score(&self) -> Option<f32> {
+        match self {
+            BedColumnValue::Score(scores) => scores
+                .iter()
+                .cloned()
+                .max_by(|a, b| a.partial_cmp(b).unwrap()),
+            _ => None,
+        }
+    }
+
+    /// Get the average score (if applicable)
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::BedColumnValue;
+    /// let score = BedColumnValue::Score(vec![1.0, 2.0, 3.0]);
+    ///
+    /// assert_eq!(score.avg_score(), Some(2.0));
+    /// ```
+    pub fn avg_score(&self) -> Option<f32> {
+        match self {
+            BedColumnValue::Score(scores) => {
+                if scores.is_empty() {
+                    None
+                } else {
+                    Some(scores.iter().sum::<f32>() / scores.len() as f32)
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 // public structs
