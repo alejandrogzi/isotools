@@ -34,6 +34,9 @@ pub const MAX_ENT_SCORE_RECOVERY_THRESHOLD: f32 = 1.5; // INFO: if both splice s
 // fusion numeric values
 pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
 
+// polya numeric values
+pub const INTRAPRIMING_RATIO_THRESHOLD: f32 = 0.5;
+
 // file names
 pub const INTRON_RETENTIONS: &str = "intron.retentions.bed";
 pub const INTRON_RETENTION_FREE: &str = "intron.retentions.free.bed";
@@ -49,6 +52,9 @@ pub const INTRON_CLASSIFICATION: &str = "reference_introns.tsv";
 pub const MAXENTSCAN_ACCEPTOR_DB: &str = "db.tsv";
 pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
 pub const ORF_ASSIGNED_READS: &str = "orf_reads.bed";
+pub const INTRAPRIMING_REVIEW: &str = "intrapriming_review.bed";
+pub const POLYA_PASS: &str = "polya_pass.bed";
+pub const POLYA_INTRAPRIMING: &str = "polya_intrapriming.bed";
 
 // spliceai-related names
 pub const ACCEPTOR_MINUS: &str = "spliceAiAcceptorMinus.bw";
