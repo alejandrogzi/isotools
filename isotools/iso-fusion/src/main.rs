@@ -3,7 +3,10 @@ use config::ArgCheck;
 use log::{error, info, Level};
 use simple_logger::init_with_level;
 
-use iso_fusion::{cli::Args, core::detect_fusions};
+use iso_fusion::{
+    cli::Args,
+    core::{detect_fusions, detect_fusions_with_mapping},
+};
 
 fn main() {
     let start = std::time::Instant::now();
@@ -20,10 +23,21 @@ fn main() {
         .build()
         .unwrap();
 
-    detect_fusions(args).unwrap_or_else(|e| {
-        error!("{}", e);
-        std::process::exit(1);
-    });
+    if !args.map {
+        info!("Detecting fusions in default mode...");
+
+        detect_fusions(args).unwrap_or_else(|e| {
+            error!("{}", e);
+            std::process::exit(1);
+        });
+    } else {
+        info!("Detecting fusions in isoform mapping mode...");
+
+        detect_fusions_with_mapping(args).unwrap_or_else(|e| {
+            error!("{}", e);
+            std::process::exit(1);
+        });
+    }
 
     let elapsed = start.elapsed();
     info!("Elapsed time: {:?}", elapsed);

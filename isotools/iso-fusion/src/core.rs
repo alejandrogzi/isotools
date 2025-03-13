@@ -1,20 +1,25 @@
 use anyhow::Result;
 use config::{
-    exonic_overlap, get_progress_bar, splice_site_overlap, write_objs, FusionDetectionValue,
-    MatchType, ModuleDescriptor, ModuleMap, ModuleType, FUSIONS, FUSION_FAKES, FUSION_FREE,
-    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, SCALE,
+    exonic_overlap, get_progress_bar, splice_site_overlap, tsv_to_map, write_objs,
+    FusionDetectionValue, MatchType, ModuleDescriptor, ModuleMap, ModuleType, FUSIONS,
+    FUSION_FAKES, FUSION_FREE, FUSION_RATIO_THRESHOLD, FUSION_REVIEW, SCALE,
 };
 use dashmap::DashSet;
 use hashbrown::{HashMap, HashSet};
 use log::info;
-use packbed::{buckerize, combine, parse_tracks, unpack, GenePred, RefGenePred};
+use packbed::{
+    buckerize, combine, packbed, par_reader, parse_tracks, unpack, GenePred, RefGenePred,
+};
 use rayon::prelude::*;
 use serde_json::Value;
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 
 use crate::cli::Args;
-use crate::utils::{prepare_refs, unpack_blacklist};
+use crate::utils::{prepare_refs, unpack_blacklist, IsoformParser};
 
 pub fn detect_fusions(args: Args) -> Result<()> {
     info!("Preparing files for fusion detection...");
@@ -61,7 +66,7 @@ pub fn detect_fusions(args: Args) -> Result<()> {
                 .downcast_ref::<(RefGenePred, Vec<GenePred>)>()
                 .expect("ERROR: Failed to downcast to RefGenePred");
 
-            let (fusions, no_fusions, fake_fusions, review, descriptor, is_dirty) =
+            let (fusions, no_fusions, fake_fusions, review, _, is_dirty) =
                 process_component(comp, banned, args.recover, match_type).unwrap_or_default();
 
             acc.add(fusions, no_fusions, review, fake_fusions);
@@ -145,6 +150,18 @@ impl ParallelAccumulator {
                 self.fakes.insert(fake);
             });
         }
+    }
+
+    fn add_fusions(&self, fusions: Vec<String>) {
+        fusions.into_iter().for_each(|fusion| {
+            self.fusions.insert(fusion);
+        });
+    }
+
+    fn add_passes(&self, passes: Vec<String>) {
+        passes.into_iter().for_each(|pass| {
+            self.passes.insert(pass);
+        });
     }
 }
 
@@ -235,7 +252,7 @@ fn process_component(
             // INFO: check if query read overlaps any of the gene exon collections
             // WARN: we are not keeping track of gene names here
             for r_exons in ref_exons.iter() {
-                if exonic_overlap(&query.exons, &r_exons) {
+                if exonic_overlap(&query.exons, r_exons) {
                     count += 1;
                 }
             }
@@ -522,4 +539,105 @@ fn process_component(
         descriptor,
         is_dirty,
     ))
+}
+
+pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
+    let contents = par_reader(args.refs).expect("ERROR: Failed to read isoform file(s)!");
+    let refs = tsv_to_map::<IsoformParser, String>(Arc::new(contents), 0, 1)
+        .expect("ERROR: Failed to parse isoform file(s)!");
+
+    let buckets = packbed(
+        args.query,
+        None,
+        args.overlap_type,
+        packbed::PackMode::Paired,
+    )
+    .expect("ERROR: Failed to pack query reads!");
+
+    let pb = get_progress_bar(buckets.len() as u64, "Detecting fusions in mapping mode...");
+
+    let counter = ParallelCounter::default();
+    let acc = ParallelAccumulator::default();
+
+    buckets.par_iter().for_each(|bucket| {
+        let _ = bucket.key();
+        let components = bucket.value().to_owned();
+        counter.inc_comp(components.len() as u32);
+
+        components.into_par_iter().for_each(|comp| {
+            let comp = comp
+                .as_any()
+                .downcast_ref::<(Vec<GenePred>, Vec<GenePred>)>()
+                .expect("ERROR: Failed to downcast to RefGenePred");
+
+            let (fusions, no_fusions) = process_mapping_component(comp, &refs);
+
+            acc.add_passes(no_fusions);
+            if let Some(f) = fusions {
+                acc.add_fusions(f);
+                // counter.inc_dirty(1);
+            }
+        });
+
+        pb.inc(1);
+    });
+
+    pb.finish_and_clear();
+
+    info!("Detected fusions: {}", acc.fusions.len());
+    info!("Fusion-free reads: {}", acc.passes.len());
+
+    [&acc.fusions, &acc.passes]
+        .par_iter()
+        .zip([FUSIONS, FUSION_FREE].par_iter())
+        .for_each(|(rx, path)| write_objs(&rx, path));
+
+    Ok(())
+}
+
+fn process_mapping_component(
+    component: &(Vec<GenePred>, Vec<GenePred>),
+    isoforms: &HashMap<String, Vec<String>>,
+) -> (Option<Vec<String>>, Vec<String>) {
+    let query: &Vec<GenePred> = component.0.as_ref(); // INFO: treating refs back to queries, discarding fake queries
+
+    let mut genes = HashMap::new();
+
+    query.iter().for_each(|query| {
+        let tx_to_gene = isoforms
+            .get(&query.name)
+            .expect("ERROR: Failed to get isoforms!");
+
+        // INFO: creates fills a hashmap with genes as keys and exons as values
+        tx_to_gene.iter().for_each(|gene| {
+            let exons = genes.entry(gene).or_insert_with(HashSet::new);
+            exons.extend(query.exons.iter().cloned());
+        });
+    });
+
+    // INFO: if at any point names is > 1, we have a fusion loci
+    if genes.len() > 1 {
+        let mut fusions = vec![];
+        let mut no_fusions = vec![];
+
+        query.iter().for_each(|query| {
+            let mut count = 0;
+
+            for (_, exons) in genes.iter() {
+                if exonic_overlap(&query.exons, exons) {
+                    count += 1;
+                }
+            }
+
+            if count > 1 {
+                fusions.push(query.line.clone());
+            } else {
+                no_fusions.push(query.line.clone());
+            }
+        });
+
+        return (Some(fusions), no_fusions);
+    }
+
+    return (None, query.iter().map(|q| q.line.clone()).collect());
 }

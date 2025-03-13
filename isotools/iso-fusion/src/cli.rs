@@ -1,5 +1,5 @@
 use clap::{ArgAction, Parser};
-use config::{validate, ArgCheck, CliError};
+use config::{validate, ArgCheck, CliError, OverlapType};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -9,7 +9,7 @@ pub struct Args {
         long = "ref",
         required = true,
         value_name = "PATH",
-        help = "Path to BED12 file with rule transcripts"
+        help = "Path to BED12/Isoform [--map] file with rule transcripts"
     )]
     pub refs: Vec<PathBuf>,
 
@@ -56,6 +56,32 @@ pub struct Args {
         action = ArgAction::Set,
     )]
     pub intron_match: bool,
+
+    #[arg(
+        short = 'm',
+        long = "map",
+        help = "Flag to read an isoforms file [tx->gene] instead of BED12",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        conflicts_with("intron_match"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub map: bool,
+
+    #[arg(
+        short = 'o',
+        long = "overlap-type",
+        help = "Type of overlap to consider",
+        value_name = "OVERLAP TYPE",
+        required = false,
+        requires_if("map", "true"),
+        conflicts_with("intron_match"),
+        default_value("exon")
+    )]
+    pub overlap_type: OverlapType,
 
     #[arg(
         short = 'b',
