@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::env;
 use std::str::from_utf8_unchecked;
+use std::str::FromStr;
 
 mod fns;
 pub use fns::*;
@@ -118,6 +119,45 @@ pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f
 pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
 
 // traits
+/// Trait for parsing bed files
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::BedParser;
+///
+/// #[derive(Debug)]
+/// struct Bed6 {
+///    chrom: String,
+///    start: u64,
+///    end: u64,
+///    name: String,
+///    score: f32,
+///    strand: Strand,
+/// }
+///
+/// impl BedParser for Bed6 {
+///   fn parse(
+///     line: &str,
+///     overlap: OverlapType,
+///     is_ref: bool,
+/// ) -> Result<Self, Box<dyn std::error::Error>> {
+///   let fields: Vec<&str> = line.split('\t').collect();
+///
+///    Ok(Self {
+///     chrom: fields[0].to_string(),
+///     start: fields[1].parse::<u64>()?,
+///     end: fields[2].parse::<u64>()?,
+///     name: fields[3].to_string(),
+///     score: fields[4].parse::<f32>()?,
+///     strand: fields[5].parse::<Strand>()?,
+///     })
+/// }
+///
+/// fn chrom(&self) -> &str {
+///     &self.chrom
+/// }
+/// ```
 pub trait BedParser: Send + Sync + Sized {
     fn parse(
         line: &str,
@@ -143,12 +183,73 @@ pub trait BedParser: Send + Sync + Sized {
     fn rgb(&self) -> &str;
 }
 
+/// Tab delimited parser
+///
+/// # Example
+/// ```rust, no_run
+/// use iso::TsvParser;
+///
+/// #[derive(Debug)]
+/// struct IsoformParser {
+///    fields: Vec<String>,
+/// }
+///
+/// impl TsvParser for IsoformParser {
+///    fn parse(line: &str) -> Result<Self, anyhow::Error> {
+///       Ok(Self {
+///          fields: line.split('\t').map(|s| s.to_string()).collect(),
+///      })
+///   }
+///
+///  fn key(&self, index: usize) -> &str {
+///     &self.fields[index]
+/// }
+///
+/// fn value<V: FromStr>(&self, index: usize) -> Result<V, V::Err> {
+///    self.fields[index].parse::<V>()
+/// }
+/// }
+/// ```
+pub trait TsvParser {
+    fn parse(line: &str) -> Result<Self, anyhow::Error>
+    where
+        Self: Sized;
+    fn key(&self, index: usize) -> &str;
+    fn value<V: FromStr>(&self, index: usize) -> Result<V, V::Err>; // INFO:value column can be any type that implements FromStr
+}
+
 // public enums
+/// Splice site type
+///
+/// This enum is used to store the type of splice site.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::SpliceSite;
+///
+/// let donor = SpliceSite::Donor;
+/// let acceptor = SpliceSite::Acceptor;
+/// ```
 pub enum SpliceSite {
     Donor,
     Acceptor,
 }
 
+/// Overlap type
+///
+/// This enum is used to store the type of overlap.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::OverlapType;
+///
+/// let cds = OverlapType::CDS;
+/// let exon = OverlapType::Exon;
+/// let boundary = OverlapType::Boundary;
+/// let cds_bound = OverlapType::CDSBound;
+/// ```
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum OverlapType {
     CDS,      // CDS-overlap
@@ -157,6 +258,31 @@ pub enum OverlapType {
     CDSBound, // CDS-overlap-UTR-boundary
 }
 
+impl From<&str> for OverlapType {
+    fn from(value: &str) -> Self {
+        match value {
+            "cds" => OverlapType::CDS,
+            "exon" => OverlapType::Exon,
+            "bounds" => OverlapType::Boundary,
+            "cds-bounded" => OverlapType::CDSBound,
+            _ => panic!("ERROR: Cannot parse overlap type!"),
+        }
+    }
+}
+
+/// Support type
+///
+/// This enum is used to store the type of support.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::SupportType;
+///
+/// let spliced = SupportType::Splicing;
+/// let rt = SupportType::RT;
+/// let unclear = SupportType::Unclear;
+/// ```
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SupportType {
     Splicing,
@@ -187,6 +313,19 @@ impl std::str::FromStr for SupportType {
     }
 }
 
+/// Coordinate type
+///
+/// This enum is used to store the type of coordinate.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::CoordType;
+///
+/// let bounds = CoordType::Bounds;
+/// let intronic = CoordType::Intronic;
+/// let exonic = CoordType::Exonic;
+/// ```
 #[derive(Debug, PartialEq, Clone)]
 pub enum CoordType {
     Bounds,
@@ -194,6 +333,18 @@ pub enum CoordType {
     Exonic,
 }
 
+/// Strand type
+///
+/// This enum is used to store the strand of a sequence.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::Strand;
+///
+/// let forward = Strand::Forward;
+/// let reverse = Strand::Reverse;
+/// ```
 #[derive(Debug, PartialEq, Clone, Hash, Eq, Serialize, Deserialize)]
 pub enum Strand {
     Forward,
@@ -221,6 +372,18 @@ impl std::fmt::Display for Strand {
     }
 }
 
+/// Match type
+///
+/// This enum is used to store the type of match.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::MatchType;
+///
+/// let intron = MatchType::Intron;
+/// let splice_site = MatchType::SpliceSite;
+/// ```
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum MatchType {
     Intron,
@@ -242,6 +405,18 @@ impl From<bool> for MatchType {
     }
 }
 
+/// Bed column names
+///
+/// This enum is used to store the names of a bed file.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::BedColumn;
+///
+/// let chrom = BedColumn::Chrom;
+/// let start = BedColumn::Start;
+/// ```
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BedColumn {
     Chrom,
@@ -258,6 +433,18 @@ pub enum BedColumn {
     BlockStarts,
 }
 
+/// Bed column values
+///
+/// This enum is used to store the values of a bed file.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::BedColumnValue;
+///
+/// let chrom = BedColumnValue::Chrom(String::from("chr1"));
+/// let start = BedColumnValue::Start(1);
+/// ```
 #[derive(Debug, PartialEq, Clone)]
 pub enum BedColumnValue {
     Chrom(String),
@@ -321,46 +508,158 @@ impl BedColumnValue {
 }
 
 // public structs
+/// Sequence struct
+///
+/// This struct is used to store a sequence of nucleotides.
+///
+/// # Example
+/// ```rust, no_run
+/// use iso::Sequence;
+///
+/// let seq = Sequence::new(b"ATCG");
+/// assert_eq!(seq.len(), 4);
+/// assert_eq!(seq.is_empty(), false);
+/// assert_eq!(seq.as_bytes(), b"ATCG");
+/// assert_eq!(seq.as_str(), "ATCG");
+/// assert_eq!(seq.to_string(), "ATCG");
+/// assert_eq!(seq.to_uppercase(), "ATCG");
+/// assert_eq!(seq.to_lowercase(), "atcg");
+/// assert_eq!(seq.reverse_complement().to_string(), "CGAT");
+/// assert_eq!(seq.slice(0, 2), "AT");
+/// assert_eq!(seq.slice_as_seq(0, 2).to_string(), "AT");
+/// assert_eq!(seq.slice_as_bytes(0, 2), b"AT");
+/// assert_eq!(seq.at_as_bytes(0), 65);
+/// assert_eq!(seq.fill(2), "AATCG");
+/// assert_eq!(seq.skip(1, 3).to_string(), "ACG");
+/// ```
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct Sequence {
     pub seq: String,
 }
 
 impl Sequence {
+    /// Create a new sequence
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.len(), 4);
+    /// ```
     pub fn new(seq: &[u8]) -> Self {
         Self {
             seq: unsafe { from_utf8_unchecked(seq).to_string() },
         }
     }
 
+    /// Get the length of the sequence
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.len(), 4);
+    /// ```
     pub fn len(&self) -> usize {
         self.seq.len()
     }
 
+    /// Check if the sequence is empty
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.is_empty(), false);
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.seq.is_empty()
     }
 
+    /// Get the sequence as bytes
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.as_bytes(), b"ATCG");
+    /// ```
     pub fn as_bytes(&self) -> &[u8] {
         self.seq.as_bytes()
     }
 
+    /// Get the sequence as a string
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.as_str(), "ATCG");
+    /// ```
     pub fn as_str(&self) -> &str {
         self.seq.as_str()
     }
 
+    /// Get the sequence as a string
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.to_string(), String::from("ATCG"));
+    /// ```
     pub fn to_string(&self) -> String {
         self.seq.clone()
     }
 
+    /// Get the sequence as uppercase
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"atcg");
+    /// assert_eq!(seq.to_uppercase(), "ATCG");
+    /// ```
     pub fn to_uppercase(&self) -> String {
         self.seq.to_uppercase()
     }
 
+    /// Get the sequence as lowercase
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.to_lowercase(), "atcg");
+    /// ```
     pub fn to_lowercase(&self) -> String {
         self.seq.to_lowercase()
     }
 
+    /// Get the reverse complement of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.reverse_complement().to_string(), "CGAT");
+    /// ```
     pub fn reverse_complement(&self) -> Self {
         let mut rev = self.seq.chars().rev().collect::<String>();
         rev.make_ascii_uppercase();
@@ -372,24 +671,74 @@ impl Sequence {
         Self { seq: rev }
     }
 
+    /// Get a slice of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.slice(0, 2), "AT");
+    /// ```
     pub fn slice(&self, start: usize, end: usize) -> String {
         self.seq[start..end].to_string()
     }
 
+    /// Get a slice of the sequence as a Sequence struct
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.slice_as_seq(0, 2).to_string(), "AT");
+    /// ```
     pub fn slice_as_seq(&self, start: usize, end: usize) -> Self {
         Self {
             seq: self.seq[start..end].to_string(),
         }
     }
 
+    /// Get a slice of the sequence as bytes
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.slice_as_bytes(0, 2), b"AT");
+    /// ```
     pub fn slice_as_bytes(&self, start: usize, end: usize) -> &[u8] {
         self.seq[start..end].as_bytes()
     }
 
+    /// Get the ASCII value of a nucleotide at a given index
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.at_as_bytes(0), 65);
+    /// ```
     pub fn at_as_bytes(&self, idx: usize) -> usize {
         self.seq.as_bytes()[idx] as usize
     }
 
+    /// Fill the sequence with a given kmer
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"TCG");
+    /// assert_eq!(seq.fill(2), "AATCG");
+    /// ```
     pub fn fill(&self, kmer: usize) -> String {
         let mut seq = "A".repeat(kmer);
         seq.push_str(self.seq.as_str());
@@ -397,6 +746,16 @@ impl Sequence {
         seq
     }
 
+    /// Skip a given range of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.skip(1, 3).to_string(), "ACG");
+    /// ```
     pub fn skip(&self, from: usize, to: usize) -> Sequence {
         Sequence {
             seq: self.seq[..from].to_string() + &self.seq[to..],

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -11,10 +11,11 @@ use std::borrow::Borrow;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{BedColumn, BedColumnValue, BedParser, CoordType, MatchType, OverlapType};
+use crate::{BedColumn, BedColumnValue, BedParser, CoordType, MatchType, OverlapType, TsvParser};
 
 // os
 #[cfg(not(windows))]
@@ -173,7 +174,8 @@ pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
 ///
 /// This function is used to determine if two
 /// sets of exons overlap by comparing the start
-/// and end positions of each exon.
+/// and end positions of each exon. The sets of
+/// exons could be any type of collection.
 ///
 /// # Arguments
 /// * `exons_a` - a collection of exons
@@ -191,12 +193,15 @@ pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
 /// assert_eq!(exonic_overlap(&exons_a, &exons_b), true);
 /// ```
 #[inline(always)]
-pub fn exonic_overlap<N, I>(exons_a: &I, exons_b: &I) -> bool
+pub fn exonic_overlap<N, I1, I2>(exons_a: &I1, exons_b: &I2) -> bool
 where
     N: Num + NumCast + Copy + PartialOrd,
-    I: IntoIterator,
-    I::Item: Borrow<(N, N)>,
-    for<'a> &'a I: IntoIterator<Item = &'a I::Item>,
+    I1: IntoIterator,
+    I2: IntoIterator,
+    I1::Item: Borrow<(N, N)>,
+    I2::Item: Borrow<(N, N)>,
+    for<'a> &'a I1: IntoIterator<Item = &'a I1::Item>,
+    for<'a> &'a I2: IntoIterator<Item = &'a I2::Item>,
 {
     let mut iter_a = exons_a.into_iter();
     let mut iter_b = exons_b.into_iter();
@@ -443,6 +448,120 @@ where
             .iter()
             .map(|entry| entry.value().len())
             .sum::<usize>()
+    );
+
+    Ok(tracks)
+}
+
+/// Convert a TSV file into a HashMap of key-dependent values
+///
+/// This function is used to parse a TSV file and convert it into a
+/// HashMap of key-dependent values. The user specifies which columns
+/// should be used as the key and value.
+///
+/// # Arguments
+///
+/// * `contents` - the contents of the TSV file
+/// * `key` - the column index to be used as the key
+/// * `value` - the column index to be used as the value
+///
+/// # Returns
+///
+/// * `HashMap<String, Vec<V>>` - a HashMap of key-dependent values
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::tsv_to_map;
+/// use isotools::config::TsvParser;
+/// use std::sync::Arc;
+/// use hashbrown::HashMap;
+///
+/// struct MyParser;
+///
+/// impl TsvParser for MyParser {
+///    fn parse(line: &str) -> Result<Self, anyhow::Error> {
+///       let fields: Vec<&str> = line.split('\t').collect();
+///      Ok(MyParser)
+///   }
+///
+///  fn key(&self, idx: usize) -> &str {
+///     "key"
+/// }
+///
+/// fn value<V>(&self, idx: usize) -> Result<V, anyhow::Error>
+/// where
+///    V: FromStr,
+///   <V as FromStr>::Err: std::fmt::Debug,
+/// {
+///    Ok("value".parse().unwrap())
+/// }
+///
+/// }
+///
+/// let contents = Arc::new("key\tvalue".to_string());
+/// let result = tsv_to_map::<MyParser, String>(contents, 0, 1).unwrap();
+///
+/// let mut expected = HashMap::new();
+/// expected.insert("key".to_string(), vec!["value".to_string()]);
+///
+/// assert_eq!(result, expected);
+/// ```
+pub fn tsv_to_map<T, V>(
+    contents: Arc<String>,
+    key: usize,
+    value: usize,
+) -> Result<HashMap<String, Vec<V>>, anyhow::Error>
+where
+    T: TsvParser + Send + Sync,
+    V: FromStr + Send + Sync,
+    <V as FromStr>::Err: std::fmt::Debug,
+{
+    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing TSV file...");
+
+    let tracks = contents
+        .par_lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|row| match T::parse(row) {
+            Ok(record) => match record.value::<V>(value) {
+                Ok(val) => Some((record.key(key).to_string(), val)),
+                Err(e) => {
+                    warn!("ERROR: Could not parse value from '{}': {:?}", row, e);
+                    None
+                }
+            },
+            Err(e) => {
+                warn!("ERROR: Could not parse '{}': {}", row, e);
+                None
+            }
+        })
+        .fold(
+            || HashMap::new(),
+            |mut acc: HashMap<String, Vec<V>>, (k, v)| {
+                acc.entry(k).or_default().push(v);
+                pb.inc(1);
+                acc
+            },
+        )
+        .reduce(
+            || HashMap::new(),
+            |mut acc, map| {
+                for (k, v) in map {
+                    acc.entry(k).or_default().extend(v);
+                }
+                acc
+            },
+        );
+
+    pb.finish_and_clear();
+
+    if tracks.is_empty() {
+        bail!("No tracks found in the provided file!");
+    }
+
+    info!(
+        "Parsed {} records from file!",
+        tracks.values().map(Vec::len).sum::<usize>()
     );
 
     Ok(tracks)
