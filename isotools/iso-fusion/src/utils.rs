@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::path::Path;
+use std::str::FromStr;
 
 use anyhow::{Ok, Result};
 use hashbrown::{HashMap, HashSet};
@@ -7,7 +8,7 @@ use log::info;
 use packbed::{packbed, par_reader, Bed12, GenePred, RefGenePred};
 use rayon::prelude::*;
 
-use config::{get_progress_bar, OverlapType};
+use config::{get_progress_bar, OverlapType, TsvParser};
 
 pub fn unpack_blacklist<P: AsRef<Path> + Debug + Sync + Send>(
     files: Vec<P>,
@@ -103,4 +104,25 @@ fn parse_tracks<'a>(
     info!("Records parsed: {}", tracks.values().flatten().count());
 
     Ok(tracks)
+}
+
+#[derive(Debug)]
+pub struct IsoformParser {
+    fields: Vec<String>,
+}
+
+impl TsvParser for IsoformParser {
+    fn parse(line: &str) -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            fields: line.split('\t').map(|s| s.to_string()).collect(),
+        })
+    }
+
+    fn key(&self, index: usize) -> &str {
+        &self.fields[index]
+    }
+
+    fn value<V: FromStr>(&self, index: usize) -> Result<V, V::Err> {
+        self.fields[index].parse::<V>()
+    }
 }
