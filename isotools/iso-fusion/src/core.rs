@@ -13,6 +13,7 @@ use packbed::{
 use rayon::prelude::*;
 use serde_json::Value;
 
+use std::collections::BTreeSet;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
@@ -543,7 +544,7 @@ fn process_component(
 
 pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
     let contents = par_reader(args.refs).expect("ERROR: Failed to read isoform file(s)!");
-    let refs = tsv_to_map::<IsoformParser, String>(Arc::new(contents), 0, 1)
+    let refs = tsv_to_map::<IsoformParser, String>(Arc::new(contents), 1, 0) // INFO: gene/ttranscript to transcript->gene Hash
         .expect("ERROR: Failed to parse isoform file(s)!");
 
     let buckets = packbed(
@@ -573,9 +574,9 @@ pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
             let (fusions, no_fusions) = process_mapping_component(comp, &refs);
 
             acc.add_passes(no_fusions);
+
             if let Some(f) = fusions {
                 acc.add_fusions(f);
-                // counter.inc_dirty(1);
             }
         });
 
@@ -603,24 +604,32 @@ fn process_mapping_component(
 
     let mut genes = HashMap::new();
 
-    query.iter().for_each(|query| {
+    query.iter().for_each(|q| {
+        // INFO: getting gene name from transcript name
         let tx_to_gene = isoforms
-            .get(&query.name)
-            .expect("ERROR: Failed to get isoforms!");
+            .get(&q.name)
+            .expect("ERROR: Failed to get isoforms!")
+            .get(0) // WARN: should be safe to get the first element
+            .expect("ERROR: Failed to get gene name!");
 
-        // INFO: creates fills a hashmap with genes as keys and exons as values
-        tx_to_gene.iter().for_each(|gene| {
-            let exons = genes.entry(gene).or_insert_with(HashSet::new);
-            exons.extend(query.exons.iter().cloned());
-        });
+        // INFO: fills a hashmap with genes as keys and exons as values
+        let exons = genes.entry(tx_to_gene).or_insert_with(BTreeSet::new);
+        exons.extend(q.exons.iter().cloned());
     });
 
+    return get_fusions_from_component(query, genes);
+}
+
+fn get_fusions_from_component(
+    component: &Vec<GenePred>,
+    genes: HashMap<&String, BTreeSet<(u64, u64)>>,
+) -> (Option<Vec<String>>, Vec<String>) {
     // INFO: if at any point names is > 1, we have a fusion loci
     if genes.len() > 1 {
         let mut fusions = vec![];
         let mut no_fusions = vec![];
 
-        query.iter().for_each(|query| {
+        component.iter().for_each(|query| {
             let mut count = 0;
 
             for (_, exons) in genes.iter() {
@@ -639,5 +648,5 @@ fn process_mapping_component(
         return (Some(fusions), no_fusions);
     }
 
-    return (None, query.iter().map(|q| q.line.clone()).collect());
+    return (None, component.iter().map(|q| q.line.clone()).collect());
 }
