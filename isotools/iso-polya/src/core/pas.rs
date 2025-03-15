@@ -10,6 +10,9 @@ use packbed::{
     BedPackage, PackMode,
 };
 use rayon::prelude::*;
+lazy_static::lazy_static! {
+    static ref _HASH: HashMap<String, BedColumnValue> = HashMap::new();
+}
 
 use std::{
     path::PathBuf,
@@ -39,33 +42,25 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
     isoseqs.into_par_iter().for_each(|(chr, components)| {
         counter.inc_comp(components.len() as u32);
 
-        if let Some(aparent) = aparent_scores.get(&chr) {
-            distribute(
-                components,
-                &*aparent,
-                &accumulator,
-                &counter,
-                args.recover,
-                args.wiggle,
-                args.max_gpa_length,
-                args.min_polya_length,
-                args.aparent_threshold,
-            );
-        } else {
-            log::warn!("No APARENT scores found for chromosome: {}", chr);
+        let aparent_ref = aparent_scores.get(&chr);
+        let scores = match &aparent_ref {
+            Some(r) => &**r,
+            None => &_HASH,
+        };
 
-            distribute(
-                components,
-                &HashMap::new(),
-                &accumulator,
-                &counter,
-                args.recover,
-                args.wiggle,
-                args.max_gpa_length,
-                args.min_polya_length,
-                args.aparent_threshold,
-            );
-        }
+        distribute(
+            components,
+            scores,
+            &accumulator,
+            &counter,
+            args.recover,
+            args.wiggle,
+            args.max_gpa_length,
+            args.min_polya_length,
+            args.aparent_threshold,
+            args.filter,
+            args.filter_side,
+        );
 
         pb.inc(1);
     });
@@ -137,6 +132,14 @@ fn get_aparent_scores(file: PathBuf) -> DashMap<String, HashMap<String, BedColum
 /// * `max_gpa_length` - Genomic polyA tail length threshold [max length allowed]
 /// * `min_polya_length` - PolyA tail length threshold [min length allowed]
 /// * `aparent_threshold` - APARENT threshold [min score allowed]
+/// * `filter` - Flag to filter components based on polyA tail length and APARENT score
+/// * `filter_side` - Side to filter components based on polyA tail length and APARENT score
+///
+/// # Example
+///
+/// ```rust, no_run
+/// distribute(args);
+/// ```
 #[inline(always)]
 fn distribute(
     components: Vec<Box<dyn BedPackage>>,
@@ -148,6 +151,8 @@ fn distribute(
     max_gpa_length: usize,
     min_polya_length: usize,
     aparent_threshold: f32,
+    filter: bool,
+    filter_side: config::FilterSide,
 ) {
     components.into_par_iter().for_each(|mut comp| {
         let comp = comp
@@ -155,21 +160,33 @@ fn distribute(
             .downcast_mut::<Vec<PolyAPred>>()
             .expect("ERROR: Could not downcast to PolyAPred!");
 
-        let rs = process_component(
-            comp,
-            scores,
-            recover,
-            wiggle,
-            max_gpa_length,
-            min_polya_length,
-            aparent_threshold,
-        );
+        if !filter {
+            let rs = process_component(
+                comp,
+                scores,
+                recover,
+                wiggle,
+                max_gpa_length,
+                min_polya_length,
+                aparent_threshold,
+            );
 
-        if rs.2.is_some() {
-            counter.inc_review(1);
+            if rs.2.is_some() {
+                counter.inc_review(1);
+            }
+
+            accumulator.add(rs);
+        } else {
+            let rs = filter_component(
+                comp,
+                scores,
+                min_polya_length,
+                aparent_threshold,
+                filter_side,
+            );
+
+            accumulator.add_filter(rs);
         }
-
-        accumulator.add(rs);
     });
 }
 
@@ -233,6 +250,12 @@ impl ParallelAccumulator {
                 self.review.insert(r);
             });
         }
+    }
+
+    fn add_filter(&self, result: Vec<String>) {
+        result.into_iter().for_each(|r| {
+            self.pass.insert(r);
+        });
     }
 }
 
@@ -383,7 +406,7 @@ fn process_component(
 
         if any_true!(
             read.gpa < max_gpa_length as u32,
-            read.poly_a > min_polya_length as u32,
+            read.poly_a >= min_polya_length as u32,
             seen_positions.contains(&read.end),
             seen_positions.contains(&(read.end - wiggle as u64)),
             seen_positions.contains(&(read.end + wiggle as u64)),
@@ -412,4 +435,69 @@ fn process_component(
     }
 
     return (passes, intrapraming, None);
+}
+
+/// Filter components based on polyA tail length and APARENT score
+///
+/// # Arguments
+///
+/// * `component` - Vector of PolyAPred to process
+/// * `scores` - Nested map with chromosome as key and a map of read name and aparent score as value
+/// * `min_polya_length` - PolyA tail length threshold [min length allowed]
+/// * `aparent_threshold` - APARENT threshold [min score allowed]
+///
+/// # Returns
+///
+/// * `Vec<String>` - Vector of reads that passed the filter
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let mut component = vec![PolyAPred::default()];
+/// let scores = HashMap::new();
+/// let min_polya_length = 10;
+/// let aparent_threshold = 0.5;
+/// let side = FilterSide::Above;
+///
+/// let filtered = filter_component(&mut component, &scores, min_polya_length, aparent_threshold, side);
+///
+/// assert_eq!(filtered.len(), 0);
+/// ```
+fn filter_component(
+    component: &mut Vec<PolyAPred>,
+    scores: &HashMap<String, BedColumnValue>,
+    min_polya_length: usize,
+    aparent_threshold: f32,
+    side: config::FilterSide,
+) -> Vec<String> {
+    component.sort_by(|a, b| a.end.cmp(&b.end));
+
+    let mut above = Vec::new();
+    let mut below = Vec::new();
+
+    component.iter().for_each(|read| {
+        let aparent_score = if let Some(score) = scores.get(&read.name) {
+            let score = score
+                .max_score()
+                .expect("ERROR: Could not get aparent score as float!");
+
+            score
+        } else {
+            0.0 // WARN: default to 0.0 if no score is found
+        };
+
+        if any_true!(
+            read.poly_a >= min_polya_length as u32,
+            aparent_score > aparent_threshold
+        ) {
+            above.push(read.line.clone());
+        } else {
+            below.push(read.line.clone());
+        }
+    });
+
+    match side {
+        config::FilterSide::Above => return above,
+        config::FilterSide::Below => return below,
+    }
 }

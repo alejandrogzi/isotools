@@ -187,6 +187,7 @@ pub struct AparentArgs {
         long = "number-of-reads",
         value_name = "VALUE",
         default_value_t = 1000,
+        help = "Number of reads to simulate",
         conflicts_with("bed"),
         conflicts_with("twobit")
     )]
@@ -195,6 +196,7 @@ pub struct AparentArgs {
     #[arg(
         long = "polya-range",
         value_name = "VALUE",
+        help = "PolyA range for simulation",
         default_value_t = 10,
         conflicts_with("bed"),
         conflicts_with("twobit")
@@ -204,6 +206,7 @@ pub struct AparentArgs {
     #[arg(
         long = "read-length",
         value_name = "VALUE",
+        help = "Read length for simulation",
         default_value_t = 300,
         conflicts_with("bed"),
         conflicts_with("twobit")
@@ -216,6 +219,7 @@ pub struct AparentArgs {
         default_missing_value("true"),
         default_value("false"),
         num_args(0..=1),
+        help = "Flag to simulate stranded reads",
         require_equals(true),
         action = ArgAction::Set,
         conflicts_with("bed"),
@@ -445,4 +449,26 @@ pub struct CallerArgs {
         default_value_t = APARENT_THRESHOLD,
     )]
     pub aparent_threshold: f32,
+
+    #[arg(
+        long = "filter",
+        help = "Flag to filter out reads above/below a certain polyA tail length + APARENT score threshold",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+        conflicts_with("recover"),
+    )]
+    pub filter: bool,
+
+    #[arg(
+        long = "filter-type",
+        help = "Filter out reads above/below a certain polyA tail length + APARENT score threshold",
+        value_name = "FLAG",
+        conflicts_with("recover"),
+        default_value("above")
+    )]
+    pub filter_side: config::FilterSide,
 }

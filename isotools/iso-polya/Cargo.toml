@@ -1,6 +1,6 @@
 [package]
 name = "iso-polya"
-version = "0.0.5"
+version = "0.0.6"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -25,3 +25,4 @@ twobit.workspace = true
 bigtools.workspace = true
 tokio.workspace = true
 rand.workspace = true
+lazy_static.workspace = true
