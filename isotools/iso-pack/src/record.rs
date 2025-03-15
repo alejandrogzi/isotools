@@ -1827,6 +1827,14 @@ fn get_polya_stats(read: &str) -> (u32, u32, u32, u32) {
         .parse::<u32>()
         .expect("ERROR: Could not parse read A's");
 
+    // INFO: the whole polyA is clipped!
+    if clipped_a == read_a {
+        return (clip, clipped_a, read_a, 0);
+    } else if clipped_a > read_a {
+        log::error!("ERROR: clipped A's is greater than read A's");
+        std::process::exit(1);
+    }
+
     let gpa = read_a - (clip + clipped_a);
 
     (clip, clipped_a, read_a, gpa)
