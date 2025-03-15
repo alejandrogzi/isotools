@@ -267,6 +267,90 @@ fn create_joblist_aparent(accumulator: &ParallelAccumulator, max_peak: bool) -> 
     return joblist;
 }
 
+/// Write a bed file from APARENT predictions
+///
+/// # Arguments
+///
+/// * `bed_dest` - PathBuf to the bed file
+/// * `bed` - String with the bed data
+///
+/// # Example
+///
+/// ```rust, no_run
+/// bed_write(bed_dest, bed);
+///
+/// assert_eq!(std::fs::metadata("iso_polya_aparent.bed").is_ok(), true);
+/// ```
+fn bed_write(bed_dest: PathBuf, bed: String) {
+    let file = File::create(&bed_dest).expect("ERROR: Failed to create bed file");
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(bed.as_bytes())
+        .expect("ERROR: Failed to write bed file");
+}
+
+/// Write bedGraph files from APARENT predictions
+///
+/// # Arguments
+///
+/// * `bg_dest_plus` - PathBuf to the bedGraph file for the plus strand
+/// * `bg_plus` - String with the bedGraph data for the plus strand
+/// * `bg_dest_minus` - PathBuf to the bedGraph file for the minus strand
+/// * `bg_minus` - String with the bedGraph data for the minus strand
+///
+/// # Example
+///
+/// ```rust, no_run
+/// bg_write(bg_dest_plus, bg_plus, bg_dest_minus, bg_minus);
+///
+/// assert_eq!(std::fs::metadata("iso_polya_aparent_plus.bedGraph").is_ok(), true);
+/// ```
+fn bg_write(bg_dest_plus: PathBuf, bg_plus: String, bg_dest_minus: PathBuf, bg_minus: String) {
+    vec![(bg_dest_plus, bg_plus), (bg_dest_minus, bg_minus)]
+        .into_par_iter()
+        .for_each(|(dest, data)| {
+            let file = File::create(&dest).expect("ERROR: Failed to create bedGraph file");
+            let mut writer = BufWriter::new(file);
+            writer
+                .write_all(data.as_bytes())
+                .expect("ERROR: Failed to write bedGraph file");
+        });
+}
+
+/// Write BigWig files from APARENT predictions
+///
+/// # Arguments
+///
+/// * `bg_dest_plus` - PathBuf to the bedGraph file for the plus strand
+/// * `bw_dest_plus` - PathBuf to the BigWig file for the plus strand
+/// * `bg_dest_minus` - PathBuf to the bedGraph file for the minus strand
+/// * `bw_dest_minus` - PathBuf to the BigWig file for the minus strand
+///
+/// # Example
+///
+/// ```rust, no_run
+/// bw_write(bg_dest_plus, bw_dest_plus, bg_dest_minus, bw_dest_minus, chrom_sizes);
+///
+/// assert_eq!(std::fs::metadata("iso_polya_aparent_plus.bw").is_ok(), true);
+/// ```
+fn bw_write(
+    bg_dest_plus: PathBuf,
+    bw_dest_plus: PathBuf,
+    bg_dest_minus: PathBuf,
+    bw_dest_minus: PathBuf,
+    chrom_sizes: HashMap<String, u32>,
+) {
+    vec![(bg_dest_plus, bw_dest_plus), (bg_dest_minus, bw_dest_minus)]
+        .into_par_iter()
+        .for_each(|(bg_dest, bw_dest)| {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(TOKIO_RUNTIME_THREADS)
+                .build()
+                .expect("Unable to create runtime.");
+            write_bigwig(bg_dest, bw_dest, chrom_sizes.clone(), runtime);
+        });
+}
+
 /// Merge the results from the APPARENT chunks
 ///
 /// # Arguments
@@ -282,7 +366,6 @@ fn create_joblist_aparent(accumulator: &ParallelAccumulator, max_peak: bool) -> 
 /// ```
 fn merge_results(chrom_sizes: HashMap<String, u32>) {
     let assets = get_assets_dir();
-
     let mut beds = Vec::new();
     let mut bgs = Vec::new();
 
@@ -303,31 +386,21 @@ fn merge_results(chrom_sizes: HashMap<String, u32>) {
     let bed = par_reader(beds).expect("ERROR: Failed to merge bed files");
     let (bg_plus, bg_minus) = bg_par_reader(bgs).expect("ERROR: Failed to merge bedGraph files");
 
-    // INFO: write bed and bedgraph files and remove the chunks
     let bed_dest = assets.join("iso_polya_aparent.bed");
     let bg_dest_plus = assets.join("iso_polya_aparent_plus.bedGraph");
     let bg_dest_minus = assets.join("iso_polya_aparent_minus.bedGraph");
     let bw_dest_plus = assets.join("iso_polya_aparent_plus.bw");
     let bw_dest_minus = assets.join("iso_polya_aparent_minus.bw");
 
-    vec![
-        (bed_dest, bed),
-        (bg_dest_plus.clone(), bg_plus),
-        (bg_dest_minus.clone(), bg_minus),
-    ]
-    .into_par_iter()
-    .for_each(|(dest, data)| {
-        let file = File::create(&dest).expect("ERROR :Failed to create file");
-        let mut writer = BufWriter::new(file);
-
-        writer
-            .write_all(data.as_bytes())
-            .expect("ERROR: Failed to write file");
-    });
+    bed_write(bed_dest, bed);
+    bg_write(
+        bg_dest_plus.clone(),
+        bg_plus,
+        bg_dest_minus.clone(),
+        bg_minus,
+    );
 
     log::info!("INFO: Merged chunks and cleaning...");
-
-    // INFO: deleting APPARENT chunked output
     for entry in std::fs::read_dir(assets).expect("ERROR: Failed to read assets directory") {
         if let Ok(entry) = entry {
             let path = entry.path();
@@ -344,18 +417,13 @@ fn merge_results(chrom_sizes: HashMap<String, u32>) {
     }
 
     log::info!("INFO: Writing BigWig file from bedGraph fragments...");
-
-    vec![(bg_dest_plus, bw_dest_plus), (bg_dest_minus, bw_dest_minus)]
-        .into_par_iter()
-        .for_each(|(bg_dest, bw_dest)| {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(TOKIO_RUNTIME_THREADS)
-                .build()
-                .expect("Unable to create runtime.");
-
-            write_bigwig(bg_dest, bw_dest, chrom_sizes.clone(), runtime);
-        });
-
+    bw_write(
+        bg_dest_plus,
+        bw_dest_plus,
+        bg_dest_minus,
+        bw_dest_minus,
+        chrom_sizes,
+    );
     log::info!("SUCCESS: APPARENT finished successfully!");
 }
 
@@ -475,7 +543,6 @@ fn make_reads(args: AparentArgs, accumulator: &ParallelAccumulator) {
 
         let start = rng.gen_range(0..size.saturating_sub(args.read_length as u32));
         let end = start + args.read_length as u32;
-        let name = format!("read_{}", counter);
 
         let strand = if args.stranded {
             if rng.gen_bool(0.5) {
@@ -489,6 +556,8 @@ fn make_reads(args: AparentArgs, accumulator: &ParallelAccumulator) {
 
         let polya_length = rng.gen_range(0..=args.polya_range);
         let seq = Sequence::random(args.read_length - polya_length).fill_back(polya_length);
+
+        let name = format!("read_{}_{}", counter, polya_length);
 
         let row = format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
