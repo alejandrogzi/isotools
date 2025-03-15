@@ -29,7 +29,7 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
         PackMode::PolyA,
     )?;
 
-    // WARN: need to fix duplicated aparent predictions here!
+    // WARN: duplicated aparent predictions are taken as max
     let aparent_scores = get_aparent_scores(args.aparent);
 
     let pb = get_progress_bar(isoseqs.len() as u64, "Processing reads...");
@@ -52,7 +52,19 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
                 args.aparent_threshold,
             );
         } else {
-            panic!("ERROR: Could not get aparent scores for chromosome!");
+            log::warn!("No APARENT scores found for chromosome: {}", chr);
+
+            distribute(
+                components,
+                &HashMap::new(),
+                &accumulator,
+                &counter,
+                args.recover,
+                args.wiggle,
+                args.max_gpa_length,
+                args.min_polya_length,
+                args.aparent_threshold,
+            );
         }
 
         pb.inc(1);
@@ -255,14 +267,51 @@ impl Default for ParallelCounter {
 impl ParallelCounter {
     /// Increment the component counter
     ///
+    /// # Arguments
+    ///
+    /// * `value` - Value to increment the counter
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::default();
+    /// counter.inc_comp(1);
+    ///
+    /// assert_eq!(counter.num_of_comps.load(Ordering::Relaxed), 1);
+    /// ```
     fn inc_comp(&self, value: u32) {
         self.num_of_comps.fetch_add(value, Ordering::Relaxed);
     }
 
+    /// Increment the review counter
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - Value to increment the counter
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::default();
+    /// counter.inc_review(1);
+    ///
+    /// assert_eq!(counter.num_of_reviews.load(Ordering::Relaxed), 1);
+    /// ```
     fn inc_review(&self, value: u32) {
         self.num_of_reviews.fetch_add(value, Ordering::Relaxed);
     }
 
+    /// Load the ratio of reviews to components
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::default();
+    /// counter.inc_comp(10);
+    /// counter.inc_review(2);
+    ///
+    /// assert_eq!(counter.load_ratio(), 0.2);
+    /// ```
     fn load_ratio(&self) -> f64 {
         self.num_of_reviews.load(Ordering::Relaxed) as f64
             / self.num_of_comps.load(Ordering::Relaxed) as f64
@@ -319,6 +368,8 @@ fn process_component(
 
     let (mut intrapriming_count, totals) = (0_f32, component.len() as f32);
 
+    // dbg!(&component);
+
     component.iter().for_each(|read| {
         let aparent_score = if let Some(score) = scores.get(&read.name) {
             let score = score
@@ -331,7 +382,7 @@ fn process_component(
         };
 
         if any_true!(
-            read.gpa < max_gpa_length as u32, // TODO: Test GPA 5-7 in genome
+            read.gpa < max_gpa_length as u32,
             read.poly_a > min_polya_length as u32,
             seen_positions.contains(&read.end),
             seen_positions.contains(&(read.end - wiggle as u64)),
