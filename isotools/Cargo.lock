@@ -264,6 +264,7 @@ dependencies = [
  "indicatif",
  "log",
  "num-traits",
+ "rand",
  "rayon",
  "serde",
  "serde_json",
@@ -787,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "iso-fusion"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -864,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "iso-polya"
-version = "0.0.3"
+version = "0.0.6"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -875,8 +876,10 @@ dependencies = [
  "iso-classify",
  "iso-pack",
  "iso-utr",
+ "lazy_static",
  "log",
  "num_cpus",
+ "rand",
  "rayon",
  "serde",
  "simple_logger",
