@@ -507,6 +507,38 @@ impl BedColumnValue {
     }
 }
 
+/// Filter side
+///
+/// This enum is used to store the side of the filter
+/// used by iso-polya caller --filter
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::FilterSide;
+///
+/// let above = FilterSide::Above;
+/// let below = FilterSide::Below;
+///
+/// assert_eq!(above, FilterSide::Above);
+/// assert_eq!(below, FilterSide::Below);
+/// ```
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum FilterSide {
+    Above,
+    Below,
+}
+
+impl From<&str> for FilterSide {
+    fn from(s: &str) -> Self {
+        match s {
+            "above" => FilterSide::Above,
+            "below" => FilterSide::Below,
+            _ => panic!("ERROR: Invalid filter side!"),
+        }
+    }
+}
+
 // public structs
 /// Sequence struct
 ///
