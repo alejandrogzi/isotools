@@ -5,7 +5,11 @@ use simple_logger::init_with_level;
 
 use iso_polya::{
     cli::{Args, SubArgs},
-    core::{apa::calculate_polya, filter::filter_minimap, pas::pas_caller},
+    core::{
+        apa::{calculate_polya, simulate_polya_reads},
+        filter::filter_minimap,
+        pas::pas_caller,
+    },
 };
 
 #[allow(unused_variables)]
@@ -22,15 +26,25 @@ fn main() {
 
     match args.command {
         SubArgs::Aparent { args } => {
-            args.check().unwrap_or_else(|e| {
-                error!("{}", e);
-                std::process::exit(1);
-            });
+            if !args.simulate {
+                args.check().unwrap_or_else(|e| {
+                    error!("{}", e);
+                    std::process::exit(1);
+                });
 
-            calculate_polya(args).unwrap_or_else(|e| {
-                error!("{}", e);
-                std::process::exit(1);
-            });
+                calculate_polya(args).unwrap_or_else(|e| {
+                    error!("{}", e);
+                    std::process::exit(1);
+                });
+            } else {
+                info!("INFO: Running iso-polya aparent in simulation mode...");
+                info!("INFO: args: {:?}", args);
+
+                simulate_polya_reads(args).unwrap_or_else(|e| {
+                    error!("{}", e);
+                    std::process::exit(1);
+                });
+            }
         }
         SubArgs::Filter { args } => {
             args.check().unwrap_or_else(|e| {

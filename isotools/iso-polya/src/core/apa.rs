@@ -3,6 +3,7 @@ use config::{get_progress_bar, Sequence, Strand};
 use dashmap::DashSet;
 use iso_classify::core::Genome;
 use packbed::{par_reader, unpack};
+use rand::Rng;
 use rayon::prelude::*;
 
 use std::{
@@ -18,17 +19,20 @@ use crate::{
     utils::{bg_par_reader, get_assets_dir, get_sequences, MiniPolyAPred},
 };
 
-pub const PARA: &str = "para";
-pub const APPARENT_PY: &str = "run_aparent.py";
-pub const RAM_PER_SITE: f32 = 0.025;
-pub const JOBLIST: &str = "joblist";
+const PARA: &str = "para";
+const APPARENT_PY: &str = "run_aparent.py";
+const RAM_PER_SITE: f32 = 0.025;
+const JOBLIST: &str = "joblist";
 const TOKIO_RUNTIME_THREADS: usize = 8;
 
 pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Error>> {
     let isoseqs = unpack::<MiniPolyAPred, _>(args.bed, config::OverlapType::Exon, true)
         .expect("ERROR: Could not unpack bed file!");
-    let (genome, chrom_sizes) =
-        get_sequences(args.twobit).expect("ERROR: Could not get read .2bit file!");
+    let (genome, chrom_sizes) = get_sequences(
+        args.twobit
+            .expect("ERROR: Provide a .2bit file using --twobit!"),
+    )
+    .expect("ERROR: Could not get read .2bit file!");
 
     let pb = get_progress_bar(isoseqs.len() as u64, "Processing reads...");
     let accumulator = ParallelAccumulator::default();
@@ -96,6 +100,20 @@ fn distribute(
     });
 }
 
+/// ParallelAccumulator struct
+///
+/// # Fields
+///
+/// * `lines` - DashSet with the lines to be written
+/// * `paths` - DashSet with the paths to the chunks
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let accumulator = ParallelAccumulator::default();
+///
+/// assert_eq!(accumulator.lines.len(), 0);
+/// ```
 struct ParallelAccumulator {
     lines: DashSet<String>,
     paths: DashSet<String>,
@@ -110,6 +128,19 @@ impl Default for ParallelAccumulator {
     }
 }
 
+/// Write lines in ParallelAccumulator to chunks of a given size
+///
+/// # Arguments
+///
+/// * `accumulator` - ParallelAccumulator struct
+///
+/// # Example
+///
+/// ```rust, no_run
+/// chunk_writer(accumulator);
+///
+/// assert_eq!(std::fs::metadata("chunk_0").is_ok(), true);
+/// ```
 fn chunk_writer(accumulator: &ParallelAccumulator) -> &ParallelAccumulator {
     let counter = AtomicUsize::new(0);
 
@@ -139,6 +170,20 @@ fn chunk_writer(accumulator: &ParallelAccumulator) -> &ParallelAccumulator {
     accumulator
 }
 
+/// Submit the APPARENT jobs to the cluster
+///
+/// # Arguments
+///
+/// * `accumulator` - ParallelAccumulator struct
+/// * `max_peak` - bool to use the max peak
+///
+/// # Example
+///
+/// ```rust, no_run
+/// submit_jobs(accumulator, max_peak);
+///
+/// assert_eq!(std::fs::metadata("joblist").is_ok(), true);
+/// ```
 fn submit_jobs(accumulator: &ParallelAccumulator, max_peak: bool) {
     let mem = CHUNK_SIZE as f32 * RAM_PER_SITE * 1024.0;
     let joblist = create_joblist_aparent(accumulator, max_peak);
@@ -182,6 +227,20 @@ fn submit_jobs(accumulator: &ParallelAccumulator, max_peak: bool) {
     }
 }
 
+/// Create a joblist file for APPARENT
+///
+/// # Arguments
+///
+/// * `accumulator` - ParallelAccumulator struct
+/// * `max_peak` - bool to use the max peak
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let joblist = create_joblist_aparent(accumulator, max_peak);
+///
+/// assert_eq!(std::fs::metadata("joblist").is_ok(), true);
+/// ```
 fn create_joblist_aparent(accumulator: &ParallelAccumulator, max_peak: bool) -> PathBuf {
     let joblist = PathBuf::from(JOBLIST);
     let file = File::create(joblist.clone()).expect("Failed to create joblist");
@@ -208,6 +267,19 @@ fn create_joblist_aparent(accumulator: &ParallelAccumulator, max_peak: bool) -> 
     return joblist;
 }
 
+/// Merge the results from the APPARENT chunks
+///
+/// # Arguments
+///
+/// * `chrom_sizes` - HashMap with the chromosome names and sizes
+///
+/// # Example
+///
+/// ```rust, no_run
+/// merge_results(chrom_sizes);
+///
+/// assert_eq!(std::fs::metadata("iso_polya_aparent.bed").is_ok(), true);
+/// ```
 fn merge_results(chrom_sizes: HashMap<String, u32>) {
     let assets = get_assets_dir();
 
@@ -287,6 +359,22 @@ fn merge_results(chrom_sizes: HashMap<String, u32>) {
     log::info!("SUCCESS: APPARENT finished successfully!");
 }
 
+/// Write a BigWig file from a bedGraph file
+///
+/// # Arguments
+///
+/// * `bg_dest` - PathBuf to the bedGraph file
+/// * `bw_dest` - PathBuf to the BigWig file
+/// * `chrom_sizes` - HashMap with the chromosome names and sizes
+/// * `handle` - tokio runtime handle
+///
+/// # Example
+///
+/// ```rust, no_run
+/// write_bigwig(bg_dest, bw_dest, chrom_sizes, handle);
+///
+/// assert_eq!(std::fs::metadata("iso_polya_aparent_plus.bw").is_ok(), true);
+/// ```
 fn write_bigwig(
     bg_dest: PathBuf,
     bw_dest: PathBuf,
@@ -304,6 +392,15 @@ fn write_bigwig(
     std::fs::remove_file(bg_dest).expect("ERROR: Failed to remove bedGraph file");
 }
 
+/// Check if a .para directory is present and remove it
+///
+/// # Example
+///
+/// ```rust, no_run
+/// check_para_dir();
+///
+/// assert_eq!(std::fs::metadata(".para").is_err(), true);
+/// ```
 fn check_para_dir() {
     let para = std::env::current_dir()
         .expect("ERROR: Failed to get current directory")
@@ -312,4 +409,113 @@ fn check_para_dir() {
     if para.exists() {
         std::fs::remove_dir_all(&para).expect("ERROR: Failed to remove .para directory");
     }
+}
+
+/// Simulate reads from/to a given bp space
+/// where the last k bp are polyadenylated on purpose
+///
+/// # Arguments
+///
+/// * `args` - AparentArgs struct
+///
+/// # Example
+///
+/// ```rust, no_run
+/// simulate_polya_reads(args);
+/// ```
+pub fn simulate_polya_reads(args: AparentArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let accumulator = ParallelAccumulator::default();
+
+    make_reads(args.clone(), &accumulator);
+    let paths = chunk_writer(&accumulator);
+
+    // INFO: push each path to cluster and run APPARENT
+    // INFO: in the future the arg should be parsed as Executor::Something
+    if args.para {
+        // INFO: check if a .para dir is present
+        check_para_dir();
+        submit_jobs(paths, args.use_max_peak);
+
+        // INFO: wait until all jobs are don and then merge the results
+        let chrom_sizes = make_chrom_sizes();
+        merge_results(chrom_sizes);
+    }
+
+    Ok(())
+}
+
+/// Simulate reads from/to a given bp space
+///
+/// # Arguments
+///
+/// * `args` - AparentArgs struct
+/// * 'accumulator' - ParallelAccumulator struct
+///
+/// # Example
+///
+/// ```rust, no_run
+/// make_reads(args, accumulator);
+/// ```
+fn make_reads(args: AparentArgs, accumulator: &ParallelAccumulator) {
+    log::info!("INFO: Simulating reads...");
+
+    let mut rng = rand::thread_rng();
+    let chroms = make_chrom_sizes();
+
+    for counter in 0..args.number_of_reads {
+        let chrom = chroms
+            .keys()
+            .nth(rng.gen_range(0..chroms.len()))
+            .expect("ERROR: Chromosome not found!");
+        let size = chroms.get(chrom).expect("ERROR: Chromosome not found!");
+
+        if *size < args.read_length as u32 {
+            continue;
+        }
+
+        let start = rng.gen_range(0..size.saturating_sub(args.read_length as u32));
+        let end = start + args.read_length as u32;
+        let name = format!("read_{}", counter);
+
+        let strand = if args.stranded {
+            if rng.gen_bool(0.5) {
+                Strand::Reverse
+            } else {
+                Strand::Forward
+            }
+        } else {
+            Strand::Forward
+        };
+
+        let polya_length = rng.gen_range(0..=args.polya_range);
+        let seq = Sequence::random(args.read_length - polya_length).fill_back(polya_length);
+
+        let row = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            chrom, start, end, name, strand, seq
+        );
+        accumulator.lines.insert(row);
+    }
+}
+
+/// Create a HashMap with the chromosome names and sizes
+/// for the simulation
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let chrom_sizes = make_chrom_sizes();
+///
+/// assert_eq!(chrom_sizes.get("1"), Some(&100000));
+/// ```
+fn make_chrom_sizes() -> HashMap<String, u32> {
+    let chroms = vec!["chr1", "chr2", "chr3"];
+    let sizes = vec![100000, 200000, 300000];
+
+    let mut chrom_sizes = HashMap::new();
+    chroms.iter().zip(sizes.iter()).for_each(|(chrom, size)| {
+        chrom_sizes.insert(chrom.to_string(), *size);
+    });
+
+    chrom_sizes
 }

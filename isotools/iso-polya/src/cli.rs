@@ -58,12 +58,12 @@ pub enum SubArgs {
     },
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Clone)]
 pub struct AparentArgs {
     #[arg(
         short = 'b',
         long = "bed",
-        required = true,
+        required_if_eq("simulate","false"),
         value_name = "PATHS",
         value_delimiter = ',',
         num_args = 1..,
@@ -73,12 +73,13 @@ pub struct AparentArgs {
 
     #[arg(
         long = "twobit",
-        required = true,
+        conflicts_with = "simulate",
+        required = false,
         value_name = "PATH",
         num_args = 1,
         help = "Path to genome 2bit file"
     )]
-    pub twobit: PathBuf,
+    pub twobit: Option<PathBuf>,
 
     #[arg(
         short = 'b',
@@ -166,6 +167,61 @@ pub struct AparentArgs {
         default_value_t = CHUNK_SIZE
     )]
     pub chunk_size: usize,
+
+    #[arg(
+        long = "simulate",
+        required = false,
+        value_name = "FLAG",
+        help = "Simulate reads and run APARENT on them",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+        conflicts_with("bed"),
+        conflicts_with("twobit"),
+    )]
+    pub simulate: bool,
+
+    #[arg(
+        long = "number-of-reads",
+        value_name = "VALUE",
+        default_value_t = 1000,
+        conflicts_with("bed"),
+        conflicts_with("twobit")
+    )]
+    pub number_of_reads: usize,
+
+    #[arg(
+        long = "polya-range",
+        value_name = "VALUE",
+        default_value_t = 10,
+        conflicts_with("bed"),
+        conflicts_with("twobit")
+    )]
+    pub polya_range: usize,
+
+    #[arg(
+        long = "read-length",
+        value_name = "VALUE",
+        default_value_t = 300,
+        conflicts_with("bed"),
+        conflicts_with("twobit")
+    )]
+    pub read_length: usize,
+
+    #[arg(
+        long = "stranded",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+        conflicts_with("bed"),
+        conflicts_with("twobit")
+    )]
+    pub stranded: bool,
 }
 
 impl ArgCheck for AparentArgs {
@@ -363,7 +419,6 @@ pub struct CallerArgs {
     )]
     pub recover: bool,
 
-    //GENOMIC_POLYA_THRESHOLD
     #[arg(
         long = "max-gpa-length",
         required = false,
@@ -373,7 +428,6 @@ pub struct CallerArgs {
     )]
     pub max_gpa_length: usize,
 
-    //POLYA_LENGTH_THRESHOLD
     #[arg(
         long = "min-polya-length",
         required = false,
@@ -383,7 +437,6 @@ pub struct CallerArgs {
     )]
     pub min_polya_length: usize,
 
-    //APARENT_THRESHOLD
     #[arg(
         long = "aparent-threshold",
         required = false,
