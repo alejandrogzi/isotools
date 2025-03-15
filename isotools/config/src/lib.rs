@@ -553,6 +553,31 @@ impl Sequence {
         }
     }
 
+    /// Create a random sequence
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::random(4);
+    /// assert_eq!(seq.len(), 4);
+    /// ```
+    pub fn random(length: usize) -> Self {
+        let mut seq = String::new();
+        for _ in 0..length {
+            let idx = rand::random::<usize>() % 4;
+            seq.push(match idx {
+                0 => 'A',
+                1 => 'T',
+                2 => 'C',
+                3 => 'G',
+                _ => 'N',
+            });
+        }
+
+        Self { seq }
+    }
+
     /// Get the length of the sequence
     ///
     /// # Example
@@ -742,6 +767,23 @@ impl Sequence {
     pub fn fill(&self, kmer: usize) -> String {
         let mut seq = "A".repeat(kmer);
         seq.push_str(self.seq.as_str());
+
+        seq
+    }
+
+    /// Fill the sequence with a given kmer at the back
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"TCG");
+    /// assert_eq!(seq.fill_back(2), "TCGAA");
+    /// ```
+    pub fn fill_back(&self, kmer: usize) -> String {
+        let mut seq = self.seq.clone();
+        seq.push_str("A".repeat(kmer).as_str());
 
         seq
     }
