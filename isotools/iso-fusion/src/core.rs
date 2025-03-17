@@ -542,6 +542,26 @@ fn process_component(
     ))
 }
 
+/// Detect fusions using mapping data
+///
+/// # Arguments
+///
+/// * `args` - A struct containing the command line arguments
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_fusion::cli::Args;
+/// use iso_fusion::core::detect_fusions_with_mapping;
+///
+/// let args = Args {
+///     refs: vec!["path/to/isoforms.tsv".to_string()],
+///     query: "path/to/mapping.bed".to_string(),
+///     overlap_type: "exon".to_string(),
+/// };
+///
+/// detect_fusions_with_mapping(args);
+/// ```
 pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
     let contents = par_reader(args.refs).expect("ERROR: Failed to read isoform file(s)!");
     let refs = tsv_to_map::<IsoformParser, String>(Arc::new(contents), 1, 0) // INFO: gene/ttranscript to transcript->gene Hash
@@ -560,6 +580,8 @@ pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
     let counter = ParallelCounter::default();
     let acc = ParallelAccumulator::default();
 
+    let match_type = MatchType::from(args.intron_match);
+
     buckets.par_iter().for_each(|bucket| {
         let _ = bucket.key();
         let components = bucket.value().to_owned();
@@ -571,7 +593,7 @@ pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
                 .downcast_ref::<(Vec<GenePred>, Vec<GenePred>)>()
                 .expect("ERROR: Failed to downcast to RefGenePred");
 
-            let (fusions, no_fusions) = process_mapping_component(comp, &refs);
+            let (fusions, no_fusions) = process_mapping_component(comp, &refs, match_type);
 
             acc.add_passes(no_fusions);
 
@@ -596,9 +618,41 @@ pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
     Ok(())
 }
 
+/// Receives a component of mapping data and returns fusions and non-fusions
+///
+/// # Arguments
+///
+/// * `component` - A tuple containing two vectors of GenePred structs
+/// * `isoforms` - A HashMap containing isoform data
+/// * `match_type` - A MatchType enum
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_fusion::core::process_mapping_component;
+/// use iso_fusion::config::MatchType;
+/// use std::collections::HashMap;
+/// use packbed::GenePred;
+///
+/// let component = (
+///    vec![GenePred::default()],
+///    vec![GenePred::default()]
+/// );
+///
+/// let isoforms = HashMap::new();
+///
+/// let match_type = MatchType::Exact;
+///
+/// process_mapping_component(
+///    &component,
+///    &isoforms,
+///    match_type
+/// );
+/// ```
 fn process_mapping_component(
     component: &(Vec<GenePred>, Vec<GenePred>),
     isoforms: &HashMap<String, Vec<String>>,
+    match_type: MatchType,
 ) -> (Option<Vec<String>>, Vec<String>) {
     let query: &Vec<GenePred> = component.0.as_ref(); // INFO: treating refs back to queries, discarding fake queries
 
@@ -617,17 +671,48 @@ fn process_mapping_component(
         exons.extend(q.exons.iter().cloned());
     });
 
-    return get_fusions_from_component(query, genes);
+    return get_fusions_from_component(query, genes, match_type);
 }
 
+/// Single-component handler for fusions
+///
+/// # Arguments
+///
+/// * `component` - A vector of GenePred structs
+/// * `genes` - A HashMap containing gene names and exons
+/// * `match_type` - A MatchType enum
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_fusion::core::get_fusions_from_component;
+/// use iso_fusion::config::MatchType;
+/// use std::collections::{BTreeSet, HashMap};
+/// use packbed::GenePred;
+///
+/// let component = vec![GenePred::default()];
+///
+/// let genes = HashMap::new();
+///
+/// let match_type = MatchType::Exact;
+///
+/// get_fusions_from_component(
+///   &component,
+///   genes,
+///   match_type
+/// );
+/// ```
 fn get_fusions_from_component(
     component: &Vec<GenePred>,
     genes: HashMap<&String, BTreeSet<(u64, u64)>>,
+    match_type: MatchType,
 ) -> (Option<Vec<String>>, Vec<String>) {
     // INFO: if at any point names is > 1, we have a fusion loci
     if genes.len() > 1 {
         let mut fusions = vec![];
         let mut no_fusions = vec![];
+
+        let ref_introns = get_intron_coords_from_gene_map(&genes);
 
         component.iter().for_each(|query| {
             let mut count = 0;
@@ -638,8 +723,20 @@ fn get_fusions_from_component(
                 }
             }
 
+            // INFO: query read overlaps more than one gene exon collection
+            // INFO: we need to pass again to prove that query shares splice sites
+            // INFO: with more than one gene
             if count > 1 {
-                fusions.push(query.line.clone());
+                let mut splicing_overlaps = 0_f32;
+                for r_introns in ref_introns.iter() {
+                    if splice_site_overlap(&query.introns, r_introns, match_type) {
+                        splicing_overlaps += 1.0;
+                    }
+                }
+
+                if splicing_overlaps > 1.0 {
+                    fusions.push(query.line.clone());
+                }
             } else {
                 no_fusions.push(query.line.clone());
             }
@@ -649,4 +746,41 @@ fn get_fusions_from_component(
     }
 
     return (None, component.iter().map(|q| q.line.clone()).collect());
+}
+
+/// Get intron coordinates from gene map
+///
+/// # Arguments
+///
+/// * `genes` - A HashMap containing gene names and exons
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_fusion::core::get_intron_coords_from_gene_map;
+/// use std::collections::HashMap;
+///
+/// let genes = HashMap::new();
+///
+/// get_intron_coords_from_gene_map(&genes);
+/// ```
+fn get_intron_coords_from_gene_map(
+    genes: &HashMap<&String, BTreeSet<(u64, u64)>>,
+) -> Vec<HashSet<(u64, u64)>> {
+    let mut introns = vec![];
+
+    for (_, exons) in genes.iter() {
+        let mut intron = HashSet::new();
+        let mut exons = exons.iter().peekable();
+
+        while let Some(exon) = exons.next() {
+            if let Some(next_exon) = exons.peek() {
+                intron.insert((exon.1 + 1, next_exon.0 - 1));
+            }
+        }
+
+        introns.push(intron);
+    }
+
+    introns
 }
