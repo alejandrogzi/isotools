@@ -542,7 +542,7 @@ fn make_reads(args: AparentArgs, accumulator: &ParallelAccumulator) {
         }
 
         let start = rng.gen_range(0..size.saturating_sub(args.read_length as u32));
-        let end = start + args.read_length as u32;
+        let end = start + (args.read_length as u32) / 2; // INFO: only half of the read to add +(length/2) context
 
         let strand = if args.stranded {
             if rng.gen_bool(0.5) {
@@ -555,7 +555,10 @@ fn make_reads(args: AparentArgs, accumulator: &ParallelAccumulator) {
         };
 
         let polya_length = rng.gen_range(0..=args.polya_range);
-        let seq = Sequence::random(args.read_length - polya_length).fill_back(polya_length);
+        let mut seq = Sequence::random(args.read_length / 2).fill_back(polya_length);
+
+        // INFO: adding context after polyA insertion
+        seq.push_str(Sequence::random((args.read_length / 2) - polya_length).as_str());
 
         let name = format!("read_{}_{}", counter, polya_length);
 
