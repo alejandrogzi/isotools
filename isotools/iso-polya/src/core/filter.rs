@@ -12,7 +12,7 @@ pub const JOBLIST: &str = "joblist";
 pub const FILTER_MINIMAP: &str = "filterMinimapQuality.perl";
 
 pub fn filter_minimap(args: FilterArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let joblist = create_job_filter_minimap(args.clone());
+    let (joblist, cmd) = create_job_filter_minimap(args.clone());
 
     if args.para {
         let mut additional_args = vec![];
@@ -44,17 +44,20 @@ pub fn filter_minimap(args: FilterArgs) -> Result<(), Box<dyn std::error::Error>
     } else {
         log::info!(
             "{}",
-            format!(
-                "INFO: Only writing joblist to: {}",
-                joblist.to_string_lossy()
-            )
+            format!("INFO: Writing joblist to: {}", joblist.to_string_lossy())
         );
+
+        let _ = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .expect("ERROR: Failed to execute process");
     }
 
     Ok(())
 }
 
-fn create_job_filter_minimap(args: FilterArgs) -> PathBuf {
+fn create_job_filter_minimap(args: FilterArgs) -> (PathBuf, String) {
     let joblist = PathBuf::from(JOBLIST);
     let file = File::create(joblist.clone()).expect("Failed to create joblist");
     let mut writer = BufWriter::new(file);
@@ -92,5 +95,5 @@ fn create_job_filter_minimap(args: FilterArgs) -> PathBuf {
 
     let _ = writer.flush();
 
-    return joblist;
+    return (joblist, cmd);
 }

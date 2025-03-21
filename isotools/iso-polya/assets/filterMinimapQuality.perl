@@ -24,6 +24,7 @@ my $maxClip3=20;
 # HMM parameters
 my $P2P = 0.9;		# transition prob for polyA tail
 my $emitA = 0.99;	# emission prob for A in polyA state
+my $outdir = ".";  # default to the current directory
 
 # HMM matrix for viterbi and traceback
 my @V;	# dynamic programming matrix; every cell holds the log score
@@ -35,15 +36,15 @@ my @state2IncomingTransitionsScore;
 
 
 # options
-my $usage = "usage: $0 input.sam [-perID int[0-100] -clip5 int -clip3 int -statFile file -polyAReadSuffix int -P2P double -emitA double -v[verbose]  -v1[verboseHMM]]
+my $usage = "usage: $0 input.sam [-perID int[0-100] -clip5 int -clip3 int -statFile file -polyAReadSuffix int -P2P double -emitA double -v[verbose]  -v1[verboseHMM]] -outdir string\n
  Input is a sam file, must be computed with -eqx (X as mismatch in the CIGAR) otherwise the perID value is wrong
  Output are two files
-	{input}.good.sam  for sam entries that pass the filters.
-	{input}.bad.sam   for sam entries that do not pass. 
-	PerID, 5/3 clip and polyA length is added to the read ID 
+	{outdir}/{input}.good.sam  for sam entries that pass the filters.
+	{outdir}/{input}.bad.sam   for sam entries that do not pass.
+	PerID, 5/3 clip and polyA length is added to the read ID
  \
 # mapping filter parameters
- -perID int      min %id (computed without the 5' and 3' clip). Must be [0-100] (percent). Default $minPerID  
+ -perID int      min %id (computed without the 5' and 3' clip). Must be [0-100] (percent). Default $minPerID
  -clip5 int      max 5' soft or hard clip. Default $maxClip5
  -clip3 int      max 3' soft or hard clip. Default $maxClip3
 # polyA HMM parameters
@@ -53,13 +54,14 @@ my $usage = "usage: $0 input.sam [-perID int[0-100] -clip5 int -clip3 int -statF
  -statFile       flag: if set output a {input}.tsv file that contains statistics of all reads
                     readID {tab} perID {tab} 5'clip {tab} 3'clip (non-PolyA part){tab} polyA tail length of 3'clip [optionally]{tab} polyA tail length of read
  -keepBad5Prime  flag: if set, produce an {input}.TESBad5Prime.bed file which contains reads that align well but only have a 5' clip above our threshold. Can be used for PAScaller
- -polyAReadSuffix int  if >0, compute and output the length of the polyA tail in the \$polyAReadSuffix + 3'clip_len suffix of the read (default don't do that)\n";
+ -polyAReadSuffix int  if >0, compute and output the length of the polyA tail in the \$polyAReadSuffix + 3'clip_len suffix of the read (default don't do that)
+ -outdir string   output directory (default $outdir)\n";
 
 ################################
-GetOptions ("v|verbose"  => \$verbose, "v1|verboseHMM"  => \$verboseHMM, "keepBad5Prime" => \$keepBad5Prime, "statFile" => \$statFile, 
-   "polyAReadSuffix=i" => \$polyAReadSuffix, 
+GetOptions ("v|verbose"  => \$verbose, "v1|verboseHMM"  => \$verboseHMM, "keepBad5Prime" => \$keepBad5Prime, "statFile" => \$statFile,
+   "polyAReadSuffix=i" => \$polyAReadSuffix,
    "perID=i"  => \$minPerID, "clip5=i"  => \$maxClip5, "clip3=i"  => \$maxClip3,
-   "P2P=f" => \$P2P, "emitA=f" => \$emitA) || die "$usage\n";
+   "P2P=f" => \$P2P, "emitA=f" => \$emitA, "outdir=s" => \$outdir) || die "$usage\n";
 die "$usage\n" if ($#ARGV < 0);
 die "ERROR: perID ($minPerID) must be [0,100]\n" if ($minPerID < 0 || $minPerID > 100);
 die "ERROR: clip5 ($maxClip5) must be >= 0\n" if ($maxClip5 <0);
@@ -67,6 +69,9 @@ die "ERROR: clip3 ($maxClip3) must be >= 0\n" if ($maxClip3 <0);
 die "ERROR: polyAReadSuffix ($polyAReadSuffix) must be > 0\n" if ($polyAReadSuffix < 0);
 die "ERROR: P2P ($P2P) must be [0,1]\n" if ($P2P < 0 || $P2P > 1);
 die "ERROR: emitA ($emitA) must be [0,1]\n" if ($emitA < 0 || $emitA > 1);
+
+# Ensure output directory exists
+mkdir $outdir if (! -d $outdir);
 
 # pre-compute log emission probs for the HMM
 my $logemitA = log($emitA);
@@ -78,11 +83,11 @@ print "Transition PolyA->PolyA state: $P2P    Prob emit A in polyA state: $emitA
 # output files
 die "ERROR: input file $ARGV[0] does not end with .sam\n" if ($ARGV[0] !~ /.*\.sam$/);
 my $filePrefix = substr($ARGV[0], 0, rindex($ARGV[0], ".sam"));
-my $outGood = $filePrefix . ".good.sam";
-my $outBad = $filePrefix . ".bad.sam";
-my $outTES = $filePrefix . ".TES.bed";
-my $outTESBad5Prime = $filePrefix . ".TESBad5Prime.bed";
-my $outStat = $filePrefix . ".tsv";
+my $outGood = $outdir . "/" . $filePrefix . ".good.sam";
+my $outBad = $outdir . "/" . $filePrefix . ".bad.sam";
+my $outTES = $outdir . "/" . $filePrefix . ".TES.bed";
+my $outTESBad5Prime = $outdir . "/" . $filePrefix . ".TESBad5Prime.bed";
+my $outStat = $outdir . "/" . $filePrefix . ".tsv";
 print "read $ARGV[0] and write output to $outGood + $outBad and the TES coordinates of reads to $outTES\n";
 print "output $outTESBad5Prime which contains TES coordinates of reads that align well but only have a 5' clip above our threshold\n" if ($keepBad5Prime);
 die "ERROR: output file $outGood already exists. Pls delete it or rename it\n" if (-e $outGood);
@@ -126,7 +131,7 @@ while ($line1 = <fileIn>) {
 
 	print "\n$line1\n--> $ID $strandFlag $CIGAR\n" if ($verbose);
 	# 4 == unmapped read
-	if ($strandFlag == 4) {	
+	if ($strandFlag == 4) {
 		print "==> skip unmapped read\n" if ($verbose);
 		next;
 	}
@@ -160,9 +165,9 @@ while ($line1 = <fileIn>) {
 	$clip3 = $clip3 - $polyAlen;
 	print "--> perID: $perID,  clip5: $clip5,  clip3: $clip3,  polyAlen: $polyAlen  $polyAseq\n" if ($verbose);
 
-	# determine the length of the polyA tail in the read by taking the unmapped portion + $polyAReadSuffix 
+	# determine the length of the polyA tail in the read by taking the unmapped portion + $polyAReadSuffix
 	# this difference informs us about the intrapriming potential
-	my $polyAlenRead = -1; 
+	my $polyAlenRead = -1;
 	my $polyAseqRead = "";
 	if ($polyAReadSuffix > 0) {
 		# we take the suffix of the read that has length $polyAReadSuffix + $clip3
@@ -174,7 +179,7 @@ while ($line1 = <fileIn>) {
 		# TGTGCCTATGTAATAAAGTCTATACACTGGCAAAAACAC,AAAAAAAAAAAAAAAAAAAA,39,20
 		# segmentPolyA.perl CAAAAACACAAAAAAAAAAAAAAAAAAAA
 		# CAAAAACAC,AAAAAAAAAAAAAAAAAAAA,9,20
-		# but segmenting only the unaligning 3'clip, we get 
+		# but segmenting only the unaligning 3'clip, we get
 		# segmentPolyA.perl AAAAACACAAAAAAAAAAAAAAAAAAAA
 		# ,AAAAACACAAAAAAAAAAAAAAAAAAAA,0,28
 		# --> edge cases. If polyA read < polyA 3'clip, then polyA read = polyA 3'clip
@@ -190,24 +195,24 @@ while ($line1 = <fileIn>) {
 		print fileTSVStat "$ID\t$perID\t$clip5\t$clip3", ($hasHardclip3==0 ? "" : "Hardclip"), "\t$polyAlen\t$polyAseq\n" if ($statFile);
 		$ID = sprintf("%s_PerID%1.3f_5Clip%d_3Clip%d_PolyA%d", $ID, $perID, $clip5, $clip3, $polyAlen);
 	}
-	
+
 #	$ID = sprintf("%s,%1.3f,%d,%d,polyA%d", $ID, $perID, $clip5, $clip3, $polyAlen);
 	$f[0] = $ID;
 	$" = "\t";
 	$line1 = "@f";
 	print "result: $line1\n" if ($verbose);
-	
+
 	if ($perID*100 >= $minPerID && $clip5 <= $maxClip5 && $clip3 <= $maxClip3) {
 		print "====> GOOD\n" if ($verbose);
 		print fileSAMGood "$line1\n";
-		print fileBedTES "$chrom\t",$TES-1,"\t$TES\t$ID\t1000\t$strand\n";		
+		print fileBedTES "$chrom\t",$TES-1,"\t$TES\t$ID\t1000\t$strand\n";
 	}else{
 		if ($keepBad5Prime && $perID*100 >= $minPerID && $clip3 <= $maxClip3) {
 			print fileBedTESBad5Prime "$chrom\t",$TES-1,"\t$TES\t$ID\t1000\t$strand\n";
 		}
 		print fileSAMBad "$line1\n";
 	}
-	
+
 }
 close fileIn;
 close fileSAMGood;
@@ -225,7 +230,7 @@ if ($statFile) {
 #########################################################################################################
 sub segmentPolyARead {
 	my ($suffixLen, $seq) = @_;
-	
+
 	my $polyAlenRead = -1;
 	my $polyAseqRead = "";
 	for (;;) {
@@ -264,7 +269,7 @@ sub getSuffix {
 #########################################################################################################
 sub parseCIGAR {
 	my ($CIGAR, $seq, $genomicStart, $strand) = @_;
-	
+
 	die "ERROR: CIGAR string contains 'M', indicating that it was not run with minimap -eqx\n" if ($CIGAR =~ /M/);
 
 	my $hasHardclip3 = 0;   # flag to return if that read has a hard clipped 3' end --> if so
@@ -296,7 +301,7 @@ sub parseCIGAR {
 
 		# skip intron
 		next if ($c eq "N");
-		
+
 		# 5' clip (then $aliLength == 0) or 3' clip
 		if ($c eq "S" || $c eq "H") {
 			if ($aliLength == 0) {
@@ -313,7 +318,7 @@ sub parseCIGAR {
 		die "ERROR: $c is not = X I or D\n" if (! ($c eq "=" || $c eq "X" || $c eq "I" || $c eq "D"));
 		$aliLength += $x;
 	}
-	
+
 	my $perID = $match / $aliLength;
 	print "\t==> perID = match/aliLen:  $perID = $match / $aliLength\n" if ($verbose);
 
@@ -350,17 +355,17 @@ sub getTES {
 		my $c = substr($f[$i], $len-1, 1);	# = X D I N S H
 		my $x = substr($f[$i], 0, $len-1);	# integer
 		die "ERROR: $x ($f[$i]) is not an integer\n" if ($x !~ /^\d+$/);
-	
+
 		# do not count hard or soft clips
 		next if ($c eq "S" || $c eq "H");
 		# skip insertions in the read
 		next if ($c eq "I");
-		
+
 		$genomicStart += $x;
 		print "\t\t$f[$i]  --> genomicPos $genomicStart\n" if ($verbose);
 	}
 	return $genomicStart - 1;   # why? See above. Note, we only call getTES() for plus strand mappings
-}	
+}
 
 
 ##############################################
@@ -386,7 +391,7 @@ sub revComp {
 sub segmentPolyA {
 	my $seq = shift;
 
-	# reverse and append an X at seq[0] --> this allows us substr($seq, $pos, 1) 
+	# reverse and append an X at seq[0] --> this allows us substr($seq, $pos, 1)
 	$seq = "X" . uc reverse($seq);
 	my $seqLen = length($seq);
 	print "\tPolyA: sequence of length: $seqLen\n$seq\n" if ($verboseHMM);
@@ -411,7 +416,7 @@ sub segmentPolyA {
 	###################
 	# Viterbi
 	print "\nstart dynamic programming for [1-$seqLen] sequence\n" if ($verboseHMM);
-	for (my $seqPos=1; $seqPos < $seqLen; $seqPos ++) { 
+	for (my $seqPos=1; $seqPos < $seqLen; $seqPos ++) {
 		print "------------------------------------------------------------------------------------------\n" if ($verboseHMM);
 		# we only have 2 states
 		computeScore(0, $seqPos, $seq);
@@ -494,7 +499,7 @@ sub traceback {
 	$" = "";
 	print "$seq\n@path\n" if ($verboseHMM);
 	# this is the final output
-	print substr($seq, 0, $endOfPolyA), ",", substr($seq, $endOfPolyA, length($seq)),",$endOfPolyA,", length($seq)-$endOfPolyA, "\n" if ($verboseHMM); 
+	print substr($seq, 0, $endOfPolyA), ",", substr($seq, $endOfPolyA, length($seq)),",$endOfPolyA,", length($seq)-$endOfPolyA, "\n" if ($verboseHMM);
 	return (length($seq)-$endOfPolyA, substr($seq, $endOfPolyA, length($seq)));
 }
 
@@ -511,34 +516,34 @@ sub computeScore {
 	my $argMax = "";
 
 	print "\tState $state2Name[$stateNumber]   (stateNumber $stateNumber)\n" if ($verboseHMM);
-	my @prevStates = split(/,/, $state2IncomingTransitions[$stateNumber]); 
-	my @transitionScores = split(/,/, $state2IncomingTransitionsScore[$stateNumber]); 
+	my @prevStates = split(/,/, $state2IncomingTransitions[$stateNumber]);
+	my @transitionScores = split(/,/, $state2IncomingTransitionsScore[$stateNumber]);
 	print "\tprevStates @prevStates   transitionScores @transitionScores\n" if ($verboseHMM);
 
 	for (my $k=0; $k<=$#prevStates; $k++) {
 		my $prev = $prevStates[$k];
-		
+
 		my $emitScore = getEmissionScore($stateNumber, $seqPos, $seq);
-		# previous position (where to access the matrix V[k,i-1]) 
+		# previous position (where to access the matrix V[k,i-1])
 		my $prevPos = $seqPos - 1;
 
-		die "ERROR in computeScore($stateNumber, $seqPos): matrix cell V[$prev][$prevPos] is undefined\n" if (! defined $V[$prev][$prevPos]); 
+		die "ERROR in computeScore($stateNumber, $seqPos): matrix cell V[$prev][$prevPos] is undefined\n" if (! defined $V[$prev][$prevPos]);
 		my $score = $emitScore + $transitionScores[$k] + $V[$prev][$prevPos];
 		printf "\t    Emit + Trans (%s-->%s) + V[$state2Name[$prev]][$prevPos] =  %1.3f + %1.3f + %1.3f = %1.3f  %s\n", ,$state2Name[$prev],$state2Name[$stateNumber],$emitScore, $transitionScores[$k], $V[$prev][$prevPos], $score, ($score > $max ? " --> NEW MAX" : "") if ($verboseHMM);
 		if ($score > $max) {
 			$max = $score;
 			$argMax = "$prev,$prevPos";
 		}
-	}	
+	}
 
 	print "\tResult for V[$state2Name[$stateNumber]][$seqPos] = $max  ($argMax)\n" if ($verboseHMM);
 	$V[$stateNumber][$seqPos] = $max;
 	$T[$stateNumber][$seqPos] = $argMax;
 	return;
-}	
+}
 
 ##############################################
-# compute emission score 
+# compute emission score
 ##############################################
 sub getEmissionScore {
 	my ($stateNumber, $seqPos, $seq) = @_;
@@ -547,7 +552,7 @@ sub getEmissionScore {
 	if ($stateNumber == 0) {
 		if (substr($seq, $seqPos, 1) eq "A") {
 			return $logemitA;
-		}else{	
+		}else{
 			return $logemitNotA;
 		}
 	# S emits uniform
@@ -561,7 +566,7 @@ sub getEmissionScore {
 
 
 #########################################
-# setup two-state HMM 
+# setup two-state HMM
 #########################################
 sub generateHMM {
 	# PolyA state
@@ -579,8 +584,6 @@ sub generateHMM {
 	$state2IncomingTransitionsScore[$stateNumber] .= log(1) . ",";
 	$state2IncomingTransitions[$stateNumber] .= 0 . ",";				# P -> S
 	$state2IncomingTransitionsScore[$stateNumber] .= log(1-$P2P) . ",";
-	
+
 	return $stateNumber+1;
 }
-
-
