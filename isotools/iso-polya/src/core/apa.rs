@@ -59,7 +59,7 @@ pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Erro
         submit_jobs(paths, args.use_max_peak);
 
         // INFO: wait until all jobs are don and then merge the results
-        merge_results(chrom_sizes);
+        merge_results(chrom_sizes, args.outdir);
     }
 
     Ok(())
@@ -364,7 +364,7 @@ fn bw_write(
 ///
 /// assert_eq!(std::fs::metadata("iso_polya_aparent.bed").is_ok(), true);
 /// ```
-fn merge_results(chrom_sizes: HashMap<String, u32>) {
+fn merge_results(chrom_sizes: HashMap<String, u32>, outdir: PathBuf) {
     let assets = get_assets_dir();
     let mut beds = Vec::new();
     let mut bgs = Vec::new();
@@ -424,7 +424,36 @@ fn merge_results(chrom_sizes: HashMap<String, u32>) {
         bw_dest_minus,
         chrom_sizes,
     );
+
     log::info!("SUCCESS: APPARENT finished successfully!");
+
+    // WARN: do not know if it will work!
+    if outdir != PathBuf::from(".") {
+        move_results(outdir);
+    }
+}
+
+fn move_results(outpath: PathBuf) {
+    let assets = get_assets_dir();
+
+    for entry in std::fs::read_dir(assets).expect("ERROR: Failed to read assets directory") {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path
+                .file_name()
+                .expect("ERROR: Failed to get file name!")
+                .to_str()
+                .expect("ERROR: Failed to get file name!")
+                .starts_with("iso_polya")
+            {
+                let dest = path.clone();
+                let _ = std::fs::rename(
+                    path,
+                    outpath.join(dest.file_name().expect("ERROR: Failed to get file name!")),
+                );
+            }
+        }
+    }
 }
 
 /// Write a BigWig file from a bedGraph file
@@ -506,7 +535,7 @@ pub fn simulate_polya_reads(args: AparentArgs) -> Result<(), Box<dyn std::error:
 
         // INFO: wait until all jobs are don and then merge the results
         let chrom_sizes = make_chrom_sizes();
-        merge_results(chrom_sizes);
+        merge_results(chrom_sizes, args.outdir);
     }
 
     Ok(())
