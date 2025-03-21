@@ -136,6 +136,20 @@ impl BedPackage for Vec<PolyAPred> {
     }
 }
 
+impl BedPackage for (Vec<PolyAPred>, Vec<GenePred>) {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any_owned(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PackMode {
     Default, // RefGenePred + Vec<GenePred>
@@ -389,7 +403,8 @@ pub fn buckerize(
                         return Some(Box::new((refs, queries)) as Box<dyn BedPackage>);
                     }
                     PackMode::PolyA => {
-                        // INFO: only will have refs, used in pas-caller [iso-polya caller]
+                        // INFO: queries are an optional TOGA projection file to determine polyA pos
+                        // INFO: used in pas-caller [iso-polya caller]
                         if refs.is_empty() {
                             return None;
                         }
@@ -400,7 +415,7 @@ pub fn buckerize(
                             .map(|read| PolyAPred::from(read))
                             .collect::<Vec<_>>();
 
-                        return Some(Box::new(reads) as Box<dyn BedPackage>);
+                        return Some(Box::new((reads, queries)) as Box<dyn BedPackage>);
                     }
                 }
             })
