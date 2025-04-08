@@ -376,14 +376,17 @@ where
 /// # Arguments
 ///
 /// * `contents` - the contents of the BED file
+/// * `key` - the column to be used as the key for the outer HashMap
 /// * `attribute` - the attribute to be stored in the inner HashMap
 ///
 /// # Returns
 ///
 /// * `DashMap<String, HashMap<String, BedColumnValue>>` - a DashMap where the key is the chromosome
-///   and the value is a HashMap mapping unique region names to the chosen `BedColumnValue`.
+/// * and the value is a HashMap of key-dependent values. User can specify which column should be used
+/// * as the key and which attribute should be stored.
 pub fn bed_to_nested_map<T>(
     contents: Arc<String>,
+    key: BedColumn,
     attribute: BedColumn,
 ) -> Result<DashMap<String, HashMap<String, BedColumnValue>>, anyhow::Error>
 where
@@ -402,7 +405,26 @@ where
         })
         .for_each(|record| {
             let chrom = record.chrom().to_owned();
-            let name = record.name().to_owned(); // INFO: name is unique (or should be)!
+
+            // INFO: we need to use the key column to create a unique key for each entry
+            // INFO: in case of duplicates, only BedColumn::Score stores multiple values!
+            let inner_key = match key {
+                BedColumn::Chrom => record.chrom().to_string(),
+                BedColumn::Start => record.start().to_string(),
+                BedColumn::End => record.end().to_string(),
+                BedColumn::Name => record.name().to_string(),
+                BedColumn::Score => record.score().to_string(),
+                BedColumn::Strand => record.strand().to_string(),
+                BedColumn::ThickStart => record.cds_start().to_string(),
+                BedColumn::ThickEnd => record.cds_end().to_string(),
+                _ => {
+                    warn!(
+                        "ERROR: Invalid key column for BED file. Is not possible
+                        to use as a key either because is redundant or is not meaningful!"
+                    );
+                    return;
+                }
+            };
 
             let value = match attribute {
                 BedColumn::Chrom => BedColumnValue::Chrom(record.chrom().to_string()),
@@ -423,7 +445,7 @@ where
 
             let mut entry = tracks.entry(chrom).or_insert_with(HashMap::new);
             entry
-                .entry(name)
+                .entry(inner_key)
                 .and_modify(|existing| match (existing, &value) {
                     // INFO: trick to handle duplicated rows with different scores!
                     (BedColumnValue::Score(scores), BedColumnValue::Score(new_scores)) => {
