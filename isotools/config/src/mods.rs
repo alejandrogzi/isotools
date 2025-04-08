@@ -1,20 +1,75 @@
 use serde_json::Value;
 use std::any::Any;
 
-// module descriptors
+/// Module descriptors
+///
+/// This module contains the definitions for
+/// various module descriptors used in isotools.
+/// Each descriptor represents a specific module
+/// and contains various fields that can be set
+/// and retrieved.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{ModuleDescriptor, ModuleType};
+///
+/// let module = ModuleDescriptor::with_schema(ModuleType::IntronRetention);
+/// assert_eq!(module.get_value(Box::new(IntronRetentionValue::IsIntronRetention)), Some(Value::Bool(false)));
+///
+/// let mut module = module;
+/// module.set_value(Box::new(IntronRetentionValue::IsIntronRetention), Value::Bool(true)).unwrap();
+/// assert_eq!(module.get_value(Box::new(IntronRetentionValue::IsIntronRetention)), Some(Value::Bool(true)));
+/// ```
 #[derive(Debug)]
 pub enum ModuleType {
     IntronRetention,
     StartTruncation,
     FusionDetection,
+    PolyAPrediction,
 }
 
+/// ModuleMap trait
+///
+/// This trait defines the interface for module descriptors.
+/// It allows for getting and setting values associated with
+/// the module, as well as downcasting to specific types.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{ModuleMap, IntronRetentionDescriptor, IntronRetentionValue};
+///
+/// let mut module = IntronRetentionDescriptor::new();
+/// module.set_value(Box::new(IntronRetentionValue::IsIntronRetention), Value::Bool(true)).unwrap();
+/// assert_eq!(module.get_value(Box::new(IntronRetentionValue::IsIntronRetention)), Some(Value::Bool(true)));
+///
+/// let value = module.get_value(Box::new(IntronRetentionValue::IsIntronRetention));
+/// assert_eq!(value, Some(Value::Bool(true)));
+///
+/// let value = module.get_value(Box::new(IntronRetentionValue::IsRetentionSupported));
+/// assert_eq!(value, Some(Value::Null));
+/// ```
 pub trait ModuleMap: Any {
     fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value>;
     fn set_value(&mut self, key: Box<dyn Any>, value: serde_json::Value) -> Result<(), String>;
     fn as_any(&self) -> &dyn Any;
 }
 
+/// Downcasting macro
+///
+/// This macro is used to downcast the module descriptor
+/// to a specific type and format it for debugging.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{ModuleMap, IntronRetentionDescriptor};
+///
+/// let module = IntronRetentionDescriptor::new();
+/// let result = downcast_dbg!(module, IntronRetentionDescriptor);
+/// assert_eq!(result, "IntronRetentionDescriptor { ... }");
+/// ```
 macro_rules! downcast_dbg {
     ($formatter:expr, $module:expr, $($type:ty),+) => {
         {
@@ -31,6 +86,20 @@ macro_rules! downcast_dbg {
     };
 }
 
+/// ModuleMap trait implementation for debugging
+///
+/// This implementation allows for formatting the module
+/// descriptor for debugging purposes.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{ModuleMap, IntronRetentionDescriptor};
+///
+/// let module = IntronRetentionDescriptor::new();
+/// let result = format!("{:?}", module);
+/// assert_eq!(result, "IntronRetentionDescriptor { ... }");
+/// ```
 impl std::fmt::Debug for dyn ModuleMap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         downcast_dbg!(
@@ -38,27 +107,68 @@ impl std::fmt::Debug for dyn ModuleMap {
             self,
             IntronRetentionDescriptor,
             StartTruncationDescriptor,
-            FusionDetectionDescriptor
+            FusionDetectionDescriptor,
+            PolyAPredictionDescriptor
         )
     }
 }
 
+/// ModuleDescriptor struct
+///
+/// This struct represents a module descriptor
+/// and contains a field for the module type.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{ModuleDescriptor, ModuleType};
+///
+/// let module = ModuleDescriptor::with_schema(ModuleType::IntronRetention);
+/// assert_eq!(module.get_value(Box::new(IntronRetentionValue::IsIntronRetention)), Some(Value::Bool(false)));
+/// ```
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct ModuleDescriptor {
     module: ModuleType,
 }
 
+/// ModuleDescriptor implementation
+///
+/// This implementation provides a method to create
+/// a new module descriptor with a specific schema.
 impl ModuleDescriptor {
+    /// Creates a new module descriptor with the specified schema.
+    ///
+    /// # Arguments
+    ///
+    /// * `module` - The module type to create a descriptor for.
+    ///
+    /// # Returns
+    ///
+    /// * A boxed module descriptor implementing the `ModuleMap` trait.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleDescriptor, ModuleType};
+    ///
+    /// let module = ModuleDescriptor::with_schema(ModuleType::IntronRetention);
+    /// assert_eq!(module.get_value(Box::new(IntronRetentionValue::IsIntronRetention)), Some(Value::Bool(false)));
+    /// ```
     pub fn with_schema(module: ModuleType) -> Box<dyn ModuleMap> {
         match module {
             ModuleType::IntronRetention => IntronRetentionDescriptor::new(),
             ModuleType::StartTruncation => StartTruncationDescriptor::new(),
             ModuleType::FusionDetection => FusionDetectionDescriptor::new(),
+            ModuleType::PolyAPrediction => PolyAPredictionDescriptor::new(),
         }
     }
 }
 
+/// IntronRetentionDescriptor struct
+///
+/// This struct represents the descriptor for
+/// intron retention detection.
 pub struct IntronRetentionDescriptor {
     pub intron_retention: Value,
     pub is_retention_supported: Value,
@@ -89,6 +199,20 @@ pub struct IntronRetentionDescriptor {
 }
 
 impl IntronRetentionDescriptor {
+    /// Creates a new instance of the IntronRetentionDescriptor.
+    ///
+    /// # Returns
+    ///
+    /// * A boxed instance of the IntronRetentionDescriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::IntronRetentionDescriptor;
+    ///
+    /// let descriptor = IntronRetentionDescriptor::new();
+    /// assert_eq!(descriptor.intron_retention, Value::Bool(false));
+    /// ```
     pub fn new() -> Box<Self> {
         Box::new(Self {
             intron_retention: Value::Bool(false),
@@ -121,6 +245,10 @@ impl IntronRetentionDescriptor {
     }
 }
 
+/// IntronRetentionValue enum
+///
+/// This enum defines the keys used to access
+/// the values in the IntronRetentionDescriptor.
 #[derive(Debug, Clone)]
 pub enum IntronRetentionValue {
     IsIntronRetention,
@@ -151,7 +279,30 @@ pub enum IntronRetentionValue {
     IsTogaIntron,
 }
 
+/// ModuleMap trait implementation for IntronRetentionDescriptor
+///
+/// This implementation provides methods to get and set
+/// values associated with the intron retention descriptor.
 impl ModuleMap for IntronRetentionDescriptor {
+    /// Gets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to retrieve the value for.
+    ///
+    /// # Returns
+    ///
+    /// * An `Option` containing the value associated with the key,
+    ///   or `None` if the key is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, IntronRetentionDescriptor, IntronRetentionValue};
+    ///
+    /// let module = IntronRetentionDescriptor::new();
+    /// assert_eq!(module.get_value(Box::new(IntronRetentionValue::IsIntronRetention)), Some(Value::Bool(false)));
+    /// ```
     fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value> {
         if let Ok(key) = key.downcast::<IntronRetentionValue>() {
             match *key {
@@ -211,6 +362,26 @@ impl ModuleMap for IntronRetentionDescriptor {
         }
     }
 
+    /// Sets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to set the value for.
+    /// * `value` - The value to set.
+    ///
+    /// # Returns
+    ///
+    /// * A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, IntronRetentionDescriptor, IntronRetentionValue};
+    ///
+    /// let mut module = IntronRetentionDescriptor::new();
+    /// module.set_value(Box::new(IntronRetentionValue::IsIntronRetention), Value::Bool(true)).unwrap();
+    /// assert_eq!(module.get_value(Box::new(IntronRetentionValue::IsIntronRetention)), Some(Value::Bool(true)));
+    /// ```
     #[inline(always)]
     fn set_value(&mut self, key: Box<dyn Any>, value: Value) -> Result<(), String> {
         if let Ok(key) = key.downcast::<IntronRetentionValue>() {
@@ -327,11 +498,29 @@ impl ModuleMap for IntronRetentionDescriptor {
         }
     }
 
+    /// Downcasts the module descriptor to a specific type.
+    ///
+    /// # Returns
+    ///
+    /// * A reference to the module descriptor as a trait object.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, IntronRetentionDescriptor};
+    ///
+    /// let module = IntronRetentionDescriptor::new();
+    /// assert_eq!(module.as_any().is::<IntronRetentionDescriptor>(), true);
+    /// ```
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
+/// Debug implementation for IntronRetentionDescriptor
+///
+/// This implementation provides a way to format the
+/// IntronRetentionDescriptor for debugging purposes.
 impl std::fmt::Debug for IntronRetentionDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -394,6 +583,19 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
     }
 }
 
+/// StartTruncationDescriptor struct
+///
+/// This struct represents the descriptor for
+/// start truncation detection.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{StartTruncationDescriptor, StartTruncationValue};
+///
+/// let descriptor = StartTruncationDescriptor::new();
+/// assert_eq!(descriptor.is_read_truncated, Value::Null);
+/// ```
 pub struct StartTruncationDescriptor {
     pub is_read_truncated: Value,
     pub is_novel_start: Value,
@@ -406,7 +608,25 @@ pub struct StartTruncationDescriptor {
     pub component_truncation_ratio: Value,
 }
 
+/// StartTruncationDescriptor implementation
+///
+/// This implementation provides methods to create
+/// a new instance of the StartTruncationDescriptor
 impl StartTruncationDescriptor {
+    /// Creates a new instance of the StartTruncationDescriptor.
+    ///
+    /// # Returns
+    ///
+    /// * A boxed instance of the StartTruncationDescriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::StartTruncationDescriptor;
+    ///
+    /// let descriptor = StartTruncationDescriptor::new();
+    /// assert_eq!(descriptor.is_read_truncated, Value::Null);
+    /// ```
     pub fn new() -> Box<Self> {
         Box::new(Self {
             is_read_truncated: Value::Null,
@@ -422,6 +642,19 @@ impl StartTruncationDescriptor {
     }
 }
 
+/// StartTruncationValue enum
+///
+/// This enum defines the keys used to access
+/// the values in the StartTruncationDescriptor.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{StartTruncationDescriptor, StartTruncationValue};
+///
+/// let descriptor = StartTruncationDescriptor::new();
+/// assert_eq!(descriptor.get_value(Box::new(StartTruncationValue::IsReadTruncated)), Some(Value::Null));
+/// ```
 #[derive(Debug, Clone)]
 pub enum StartTruncationValue {
     IsReadTruncated,
@@ -435,7 +668,30 @@ pub enum StartTruncationValue {
     IsDirtyComponent,
 }
 
+/// ModuleMap trait implementation for StartTruncationDescriptor
+///
+/// This implementation provides methods to get and set
+/// values associated with the start truncation descriptor.
 impl ModuleMap for StartTruncationDescriptor {
+    /// Gets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to retrieve the value for.
+    ///
+    /// # Returns
+    ///
+    /// * An `Option` containing the value associated with the key,
+    ///  or `None` if the key is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, StartTruncationDescriptor, StartTruncationValue};
+    ///
+    /// let module = StartTruncationDescriptor::new();
+    /// assert_eq!(module.get_value(Box::new(StartTruncationValue::IsReadTruncated)), Some(Value::Null));
+    /// ```
     fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value> {
         if let Ok(key) = key.downcast::<StartTruncationValue>() {
             match *key {
@@ -460,6 +716,26 @@ impl ModuleMap for StartTruncationDescriptor {
         }
     }
 
+    /// Sets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to set the value for.
+    /// * `value` - The value to set.
+    ///
+    /// # Returns
+    ///
+    /// * A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, StartTruncationDescriptor, StartTruncationValue};
+    ///
+    /// let mut module = StartTruncationDescriptor::new();
+    /// module.set_value(Box::new(StartTruncationValue::IsReadTruncated), Value::Bool(true)).unwrap();
+    /// assert_eq!(module.get_value(Box::new(StartTruncationValue::IsReadTruncated)), Some(Value::Bool(true)));
+    /// ```
     #[inline(always)]
     fn set_value(&mut self, key: Box<dyn Any>, value: Value) -> Result<(), String> {
         if let Ok(key) = key.downcast::<StartTruncationValue>() {
@@ -508,11 +784,29 @@ impl ModuleMap for StartTruncationDescriptor {
         }
     }
 
+    /// Downcasts the module descriptor to a specific type.
+    ///
+    /// # Returns
+    ///
+    /// * A reference to the module descriptor as a trait object.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, StartTruncationDescriptor};
+    ///
+    /// let module = StartTruncationDescriptor::new();
+    /// assert_eq!(module.as_any().is::<StartTruncationDescriptor>(), true);
+    /// ```
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
+/// Debug implementation for StartTruncationDescriptor
+///
+/// This implementation provides a way to format the
+/// StartTruncationDescriptor for debugging purposes.
 impl std::fmt::Debug for StartTruncationDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -541,6 +835,10 @@ impl std::fmt::Debug for StartTruncationDescriptor {
     }
 }
 
+/// FusionDetectionDescriptor struct
+///
+/// This struct represents the descriptor for
+/// fusion detection.
 pub struct FusionDetectionDescriptor {
     is_fused_read: Value,
     is_fusion_supported: Value,
@@ -555,7 +853,25 @@ pub struct FusionDetectionDescriptor {
     fusion_in_frame: Value,
 }
 
+/// FusionDetectionDescriptor implementation
+///
+/// This implementation provides methods to create
+/// a new instance of the FusionDetectionDescriptor
 impl FusionDetectionDescriptor {
+    /// Creates a new instance of the FusionDetectionDescriptor.
+    ///
+    /// # Returns
+    ///
+    /// * A boxed instance of the FusionDetectionDescriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::FusionDetectionDescriptor;
+    ///
+    /// let descriptor = FusionDetectionDescriptor::new();
+    /// assert_eq!(descriptor.is_fused_read, Value::Null);
+    /// ```
     pub fn new() -> Box<Self> {
         Box::new(Self {
             is_fused_read: Value::Null,
@@ -573,6 +889,10 @@ impl FusionDetectionDescriptor {
     }
 }
 
+/// FusionDetectionValue enum
+///
+/// This enum defines the keys used to access
+/// the values in the FusionDetectionDescriptor.
 pub enum FusionDetectionValue {
     IsFusedRead,
     IsFusionSupported,
@@ -587,7 +907,27 @@ pub enum FusionDetectionValue {
     FusionInFrame,
 }
 
+/// ModuleMap trait implementation for FusionDetectionDescriptor
 impl ModuleMap for FusionDetectionDescriptor {
+    /// Gets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to retrieve the value for.
+    ///
+    /// # Returns
+    ///
+    /// * An `Option` containing the value associated with the key,
+    ///  or `None` if the key is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, FusionDetectionDescriptor, FusionDetectionValue};
+    ///
+    /// let module = FusionDetectionDescriptor::new();
+    /// assert_eq!(module.get_value(Box::new(FusionDetectionValue::IsFusedRead)), Some(Value::Null));
+    /// ```
     fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value> {
         if let Ok(key) = key.downcast::<FusionDetectionValue>() {
             match *key {
@@ -614,6 +954,26 @@ impl ModuleMap for FusionDetectionDescriptor {
         }
     }
 
+    /// Sets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to set the value for.
+    /// * `value` - The value to set.
+    ///
+    /// # Returns
+    ///
+    /// * A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, FusionDetectionDescriptor, FusionDetectionValue};
+    ///
+    /// let mut module = FusionDetectionDescriptor::new();
+    /// module.set_value(Box::new(FusionDetectionValue::IsFusedRead), Value::Bool(true)).unwrap();
+    /// assert_eq!(module.get_value(Box::new(FusionDetectionValue::IsFusedRead)), Some(Value::Bool(true)));
+    /// ```
     #[inline(always)]
     fn set_value(&mut self, key: Box<dyn Any>, value: Value) -> Result<(), String> {
         if let Ok(key) = key.downcast::<FusionDetectionValue>() {
@@ -675,6 +1035,10 @@ impl ModuleMap for FusionDetectionDescriptor {
     }
 }
 
+/// Debug implementation for FusionDetectionDescriptor
+///
+/// This implementation provides a way to format the
+/// FusionDetectionDescriptor for debugging purposes.
 impl std::fmt::Debug for FusionDetectionDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -703,6 +1067,225 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             self.is_dirty_component,
             self.location_of_fusion,
             self.fusion_in_frame,
+        )
+    }
+}
+
+/// PolyAPredictionDescriptor struct
+///
+/// This struct represents the descriptor for
+/// poly A prediction detection.
+pub struct PolyAPredictionDescriptor {
+    pub is_poly_a_supported: Value,
+    pub poly_a_score: Value,
+    pub whole_poly_a_length: Value,
+    pub genomic_poly_a: Value,
+    pub is_intrapriming: Value,
+    pub poly_a_location: Value,
+    pub is_dirty_component: Value,
+    pub intrapriming_comp_ratio: Value,
+}
+
+/// PolyAPredictionDescriptor implementation
+///
+/// This implementation provides methods to create
+/// a new instance of the PolyAPredictionDescriptor
+impl PolyAPredictionDescriptor {
+    /// Creates a new instance of the PolyAPredictionDescriptor.
+    ///
+    /// # Returns
+    ///
+    /// * A boxed instance of the PolyAPredictionDescriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::PolyAPredictionDescriptor;
+    ///
+    /// let descriptor = PolyAPredictionDescriptor::new();
+    /// assert_eq!(descriptor.is_poly_a, Value::Null);
+    /// ```
+    pub fn new() -> Box<Self> {
+        Box::new(Self {
+            is_poly_a_supported: Value::Null,
+            poly_a_score: Value::Null,
+            whole_poly_a_length: Value::Null,
+            genomic_poly_a: Value::Null,
+            is_intrapriming: Value::Null,
+            poly_a_location: Value::Null,
+            is_dirty_component: Value::Null,
+            intrapriming_comp_ratio: Value::Null,
+        })
+    }
+}
+
+/// PolyAPredictionValue enum
+///
+/// This enum defines the keys used to access
+/// the values in the PolyAPredictionDescriptor.
+pub enum PolyAPredictionValue {
+    IsPolyASupported,
+    GenomicPolyA,
+    PolyAScore,
+    WholePolyALength,
+    IsIntrapriming,
+    PolyALocation,
+    IsDirtyComponent,
+    IntraprimingComponentRatio,
+}
+
+/// ModuleMap trait implementation for PolyAPredictionDescriptor
+///
+/// This implementation provides methods to get and set
+/// values associated with the poly A prediction descriptor.
+impl ModuleMap for PolyAPredictionDescriptor {
+    /// Gets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to retrieve the value for.
+    ///
+    /// # Returns
+    ///
+    /// * An `Option` containing the value associated with the key,
+    ///  or `None` if the key is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, PolyAPredictionDescriptor, PolyAPredictionValue};
+    ///
+    /// let module = PolyAPredictionDescriptor::new();
+    /// assert_eq!(module.get_value(Box::new(PolyAPredictionValue::IsPolyA)), Some(Value::Null));
+    /// ```
+    fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value> {
+        if let Ok(key) = key.downcast::<PolyAPredictionValue>() {
+            match *key {
+                PolyAPredictionValue::IsPolyASupported => Some(self.is_poly_a_supported.clone()),
+                PolyAPredictionValue::PolyAScore => Some(self.poly_a_score.clone()),
+                PolyAPredictionValue::WholePolyALength => Some(self.whole_poly_a_length.clone()),
+                PolyAPredictionValue::PolyALocation => Some(self.poly_a_location.clone()),
+                PolyAPredictionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+                PolyAPredictionValue::GenomicPolyA => Some(self.genomic_poly_a.clone()),
+                PolyAPredictionValue::IsIntrapriming => Some(self.is_intrapriming.clone()),
+                PolyAPredictionValue::IntraprimingComponentRatio => {
+                    Some(self.intrapriming_comp_ratio.clone())
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Sets the value associated with the specified key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to set the value for.
+    /// * `value` - The value to set.
+    ///
+    /// # Returns
+    ///
+    /// * A `Result` indicating success or failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, PolyAPredictionDescriptor, PolyAPredictionValue};
+    ///
+    /// let mut module = PolyAPredictionDescriptor::new();
+    /// module.set_value(Box::new(PolyAPredictionValue::IsPolyA), Value::Bool(true)).unwrap();
+    /// assert_eq!(module.get_value(Box::new(PolyAPredictionValue::IsPolyA)), Some(Value::Bool(true)));
+    /// ```
+    #[inline(always)]
+    fn set_value(&mut self, key: Box<dyn Any>, value: Value) -> Result<(), String> {
+        if let Ok(key) = key.downcast::<PolyAPredictionValue>() {
+            match *key {
+                PolyAPredictionValue::IsPolyASupported => {
+                    self.is_poly_a_supported = value;
+                    Ok(())
+                }
+                PolyAPredictionValue::PolyAScore => {
+                    self.poly_a_score = value;
+                    Ok(())
+                }
+                PolyAPredictionValue::PolyALocation => {
+                    self.poly_a_location = value;
+                    Ok(())
+                }
+                PolyAPredictionValue::IsDirtyComponent => {
+                    self.is_dirty_component = value;
+                    Ok(())
+                }
+                PolyAPredictionValue::WholePolyALength => {
+                    self.whole_poly_a_length = value;
+                    Ok(())
+                }
+                PolyAPredictionValue::GenomicPolyA => {
+                    self.genomic_poly_a = value;
+                    Ok(())
+                }
+                PolyAPredictionValue::IsIntrapriming => {
+                    self.is_intrapriming = value;
+                    Ok(())
+                }
+                PolyAPredictionValue::IntraprimingComponentRatio => {
+                    self.intrapriming_comp_ratio = value;
+                    Ok(())
+                }
+            }
+        } else {
+            let err = format!("ERROR: You have tried to set a value for an unknown key!");
+            log::error!("{}", err);
+            Err(err)
+        }
+    }
+
+    /// Downcasts the module descriptor to a specific type.
+    ///
+    /// # Returns
+    ///
+    /// * A reference to the module descriptor as a trait object.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, PolyAPredictionDescriptor};
+    ///
+    /// let module = PolyAPredictionDescriptor::new();
+    /// assert_eq!(module.as_any().is::<PolyAPredictionDescriptor>(), true);
+    /// ```
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Debug implementation for PolyAPredictionDescriptor
+///
+/// This implementation provides a way to format the
+/// PolyAPredictionDescriptor for debugging purposes.
+impl std::fmt::Debug for PolyAPredictionDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{
+            is_poly_a_supported: {:?},
+            poly_a_score: {:?},
+            whole_poly_a_length: {:?},
+            genomic_poly_a: {:?},
+            is_intrapriming: {:?},
+            poly_a_location: {:?},
+            is_dirty_component: {:?},
+            intrapriming_comp_ratio: {:?}
+            }}",
+            self.is_poly_a_supported,
+            self.poly_a_score,
+            self.whole_poly_a_length,
+            self.genomic_poly_a,
+            self.is_intrapriming,
+            self.poly_a_location,
+            self.is_dirty_component,
+            self.intrapriming_comp_ratio
         )
     }
 }
