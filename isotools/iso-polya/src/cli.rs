@@ -362,6 +362,17 @@ pub struct FilterArgs {
         requires("para")
     )]
     pub mem: Option<usize>,
+
+    #[arg(
+        long = "outdir",
+        short = 'o',
+        required = false,
+        value_name = "PATH",
+        num_args = 1,
+        help = "Path to output directory",
+        default_value = "."
+    )]
+    pub outdir: PathBuf,
 }
 
 impl ArgCheck for FilterArgs {
@@ -400,6 +411,14 @@ pub struct CallerArgs {
         help = "Path to output filterMinimapQuality.perl output .bed file"
     )]
     pub bed: PathBuf,
+
+    #[arg(
+        long = "toga",
+        required = true,
+        value_name = "PATH",
+        help = "Path to output TOGA projections to localize polyA tails in the genome [CDS, UTR, CDS/UTR]"
+    )]
+    pub toga: Option<Vec<PathBuf>>,
 
     #[arg(
         short = 'w',
@@ -471,4 +490,15 @@ pub struct CallerArgs {
         default_value("above")
     )]
     pub filter_side: config::FilterSide,
+
+    #[arg(
+        long = "outdir",
+        short = 'o',
+        required = false,
+        value_name = "PATH",
+        num_args = 1,
+        help = "Path to output directory",
+        default_value = "."
+    )]
+    pub outdir: PathBuf,
 }
