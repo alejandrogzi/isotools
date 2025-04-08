@@ -1,15 +1,17 @@
 use config::{
-    bed_to_nested_map, get_progress_bar, write_objs, BedColumn, BedColumnValue,
-    INTRAPRIMING_RATIO_THRESHOLD, INTRAPRIMING_REVIEW, POLYA_INTRAPRIMING, POLYA_PASS,
+    bed_to_nested_map, get_progress_bar, write_objs, BedColumn, BedColumnValue, ModuleDescriptor,
+    ModuleMap, ModuleType, PolyAPredictionValue, INTRAPRIMING_RATIO_THRESHOLD, INTRAPRIMING_REVIEW,
+    POLYA_INTRAPRIMING, POLYA_PASS,
 };
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
 use packbed::{
     packbed, reader,
     record::{Bed6, PolyAPred},
-    BedPackage, PackMode,
+    BedPackage, GenePred, PackMode,
 };
 use rayon::prelude::*;
+
 lazy_static::lazy_static! {
     static ref _HASH: HashMap<String, BedColumnValue> = HashMap::new();
 }
@@ -26,8 +28,8 @@ use crate::cli::CallerArgs;
 
 pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
     let isoseqs = packbed(
-        vec![args.bed],
-        None,
+        vec![args.bed.clone()],
+        args.toga,
         config::OverlapType::Exon,
         PackMode::PolyA,
     )?;
@@ -86,7 +88,19 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     [&accumulator.pass, &accumulator.intrapriming]
         .par_iter()
-        .zip([POLYA_PASS, POLYA_INTRAPRIMING].par_iter())
+        .zip(
+            [
+                args.outdir
+                    .join(POLYA_PASS)
+                    .to_str()
+                    .expect("ERROR: Could not convert path!"),
+                args.outdir
+                    .join(POLYA_INTRAPRIMING)
+                    .to_str()
+                    .expect("ERROR: Could not convert path!"),
+            ]
+            .par_iter(),
+        )
         .for_each(|(rx, path)| write_objs(&rx, path));
 
     Ok(())
@@ -113,8 +127,9 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
 /// ```
 fn get_aparent_scores(file: PathBuf) -> DashMap<String, HashMap<String, BedColumnValue>> {
     let content = reader(file).expect("ERROR: Could not read aparent file!");
-    let aparent_scores = bed_to_nested_map::<Bed6>(Arc::new(content), BedColumn::Score)
-        .expect("ERROR: Could not build mapper from aparent file!");
+    let aparent_scores =
+        bed_to_nested_map::<Bed6>(Arc::new(content), BedColumn::End, BedColumn::Score)
+            .expect("ERROR: Could not build mapper from aparent file!");
 
     aparent_scores
 }
@@ -157,11 +172,11 @@ fn distribute(
     components.into_par_iter().for_each(|mut comp| {
         let comp = comp
             .as_any_mut()
-            .downcast_mut::<Vec<PolyAPred>>()
+            .downcast_mut::<(Vec<PolyAPred>, Vec<GenePred>)>()
             .expect("ERROR: Could not downcast to PolyAPred!");
 
         if !filter {
-            let rs = process_component(
+            let (passes, intrapriming, review, descriptor) = process_component(
                 comp,
                 scores,
                 recover,
@@ -171,11 +186,11 @@ fn distribute(
                 aparent_threshold,
             );
 
-            if rs.2.is_some() {
+            if review.is_some() {
                 counter.inc_review(1);
             }
 
-            accumulator.add(rs);
+            accumulator.add((passes, intrapriming, review));
         } else {
             let rs = filter_component(
                 comp,
@@ -374,27 +389,42 @@ macro_rules! any_true {
 /// * `Vec<&String>` - Vector of intrapriming reads
 /// * `Option<Vec<&String>>` - Vector of review reads
 fn process_component(
-    component: &mut Vec<PolyAPred>,
+    component: &mut (Vec<PolyAPred>, Vec<GenePred>),
     scores: &HashMap<String, BedColumnValue>,
     recover: bool,
     wiggle: usize,
     max_gpa_length: usize,
     min_polya_length: usize,
     aparent_threshold: f32,
-) -> (Vec<String>, Vec<String>, Option<Vec<String>>) {
+) -> (
+    Vec<String>,
+    Vec<String>,
+    Option<Vec<String>>,
+    HashMap<String, Box<dyn ModuleMap>>,
+) {
+    let mut descriptor = HashMap::new();
+
+    let reads = &mut component.0;
+    let toga = &mut component.1;
+
     let mut seen_positions = HashSet::new();
-    component.sort_by(|a, b| a.end.cmp(&b.end));
+    let mut seen_reads = HashSet::new();
 
     let mut passes = Vec::new();
     let mut intrapraming = Vec::new();
     let mut review = Vec::new();
 
-    let (mut intrapriming_count, totals) = (0_f32, component.len() as f32);
+    let (mut intrapriming_count, totals) = (0_f32, reads.len() as f32);
 
     // dbg!(&component);
 
-    component.iter().for_each(|read| {
-        let aparent_score = if let Some(score) = scores.get(&read.name) {
+    reads.iter().for_each(|read| {
+        let end_of_read = match read.strand {
+            config::Strand::Forward => (read.end).to_string(),
+            config::Strand::Reverse => (read.end + 1).to_string(),
+        };
+
+        let aparent_score = if let Some(score) = scores.get(&end_of_read) {
             let score = score
                 .max_score()
                 .expect("ERROR: Could not get aparent score as float!");
@@ -403,6 +433,32 @@ fn process_component(
         } else {
             0.0 // WARN: default to 0.0 if no score is found
         };
+
+        // INFO: filling up descriptor for each read
+        descriptor.insert(
+            read.name.clone(),
+            ModuleDescriptor::with_schema(ModuleType::PolyAPrediction),
+        );
+        let handle = descriptor.get_mut(&read.name).unwrap();
+
+        handle
+            .set_value(
+                Box::new(PolyAPredictionValue::PolyAScore),
+                serde_json::json!(aparent_score),
+            )
+            .ok();
+        handle
+            .set_value(
+                Box::new(PolyAPredictionValue::GenomicPolyA),
+                serde_json::json!(read.gpa),
+            )
+            .ok();
+        handle
+            .set_value(
+                Box::new(PolyAPredictionValue::WholePolyALength),
+                serde_json::json!(read.poly_a),
+            )
+            .ok();
 
         if any_true!(
             read.gpa < max_gpa_length as u32,
@@ -413,10 +469,66 @@ fn process_component(
             aparent_score > aparent_threshold
         ) {
             passes.push(read.line.clone());
+
             seen_positions.insert(read.end); // INFO: only considering 'good' reads
+            seen_positions.insert(read.end - wiggle as u64); // INFO: inserting wiggle room!
+            seen_positions.insert(read.end + wiggle as u64);
+
+            seen_reads.insert(&read.name); // INFO: storing 'good' reads for later escape
+        }
+
+        _ = get_read_toga_location(read.end, toga, handle);
+    });
+
+    // INFO: necessary second iteration to check for intrapriming events
+    // INFO: since the only filter to doble check is the wiggle + genomic pos
+    // INFO: we can iterate over the component again and avoid the rest of steps
+    reads.iter().for_each(|read| {
+        if seen_reads.contains(&&read.name) {
+            return;
+        }
+
+        let handle = descriptor.get_mut(&read.name).unwrap();
+
+        if any_true!(
+            seen_positions.contains(&read.end),
+            seen_positions.contains(&(read.end - wiggle as u64)),
+            seen_positions.contains(&(read.end + wiggle as u64))
+        ) {
+            passes.push(read.line.clone());
+
+            seen_positions.insert(read.end); // INFO: only considering 'good' reads
+            seen_positions.insert(read.end - wiggle as u64); // INFO: inserting wiggle room!
+            seen_positions.insert(read.end + wiggle as u64);
+
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::IsIntrapriming),
+                    serde_json::json!(false),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::IsPolyASupported),
+                    serde_json::json!(true),
+                )
+                .ok();
         } else {
             intrapriming_count += 1.0;
             intrapraming.push(read.line.clone());
+
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::IsIntrapriming),
+                    serde_json::json!(true),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::IsPolyASupported),
+                    serde_json::json!(false),
+                )
+                .ok();
         }
     });
 
@@ -430,11 +542,71 @@ fn process_component(
             review.extend(p);
             review.extend(i);
 
-            return (passes, intrapraming, Some(review));
+            reads.iter().for_each(|read| {
+                let handle = descriptor.get_mut(&read.name).unwrap();
+
+                handle
+                    .set_value(
+                        Box::new(PolyAPredictionValue::IsDirtyComponent),
+                        serde_json::json!(true),
+                    )
+                    .ok();
+                handle
+                    .set_value(
+                        Box::new(PolyAPredictionValue::IntraprimingComponentRatio),
+                        serde_json::json!(ratio),
+                    )
+                    .ok();
+            });
+
+            return (passes, intrapraming, Some(review), descriptor);
         }
     }
 
-    return (passes, intrapraming, None);
+    return (passes, intrapraming, None, descriptor);
+}
+
+/// Get the read location using TOGA
+///
+/// # Arguments
+///
+/// * `read_end` - End position of the read
+/// * `toga` - Vector of GenePred to process
+/// * `handle` - ModuleMap to set the value
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let read_end = 100;
+/// let mut toga = vec![GenePred::default()];
+/// let mut handle = ModuleMap::default();
+///
+/// get_read_toga_location(read_end, &mut toga, &mut handle);
+/// ```
+fn get_read_toga_location(
+    read_end: u64,
+    toga: &mut Vec<GenePred>,
+    handle: &mut Box<dyn ModuleMap>,
+) {
+    for projection in toga.iter() {
+        if projection.start < read_end && read_end < projection.end {
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::PolyALocation),
+                    serde_json::json!("CDS"),
+                )
+                .ok();
+            return;
+        }
+    }
+
+    // INFO: only if we didn’t return early
+    handle
+        .set_value(
+            Box::new(PolyAPredictionValue::PolyALocation),
+            serde_json::json!("UTR"),
+        )
+        .ok();
 }
 
 /// Filter components based on polyA tail length and APARENT score
@@ -464,18 +636,21 @@ fn process_component(
 /// assert_eq!(filtered.len(), 0);
 /// ```
 fn filter_component(
-    component: &mut Vec<PolyAPred>,
+    component: &mut (Vec<PolyAPred>, Vec<GenePred>),
     scores: &HashMap<String, BedColumnValue>,
     min_polya_length: usize,
     aparent_threshold: f32,
     side: config::FilterSide,
 ) -> Vec<String> {
-    component.sort_by(|a, b| a.end.cmp(&b.end));
+    let reads = &mut component.0;
+    let _ = &component.1;
+
+    reads.sort_by(|a, b| a.end.cmp(&b.end));
 
     let mut above = Vec::new();
     let mut below = Vec::new();
 
-    component.iter().for_each(|read| {
+    reads.iter().for_each(|read| {
         let aparent_score = if let Some(score) = scores.get(&read.name) {
             let score = score
                 .max_score()
