@@ -70,7 +70,7 @@ def process_chunk(
     graph_lines = []
     bed_lines = []
 
-    for row in open(args.path, "r"):
+    for row in open(args.path):
         fields = row.strip().split("\t")
 
         chrom = fields[0]
@@ -86,16 +86,41 @@ def process_chunk(
             for i, peak in enumerate(polya_profile):
                 if peak < PEAK_THRESHOLD:
                     # peak = 0
-                    continue
+                    continue  # WARN: ignoring peaks below threshold
 
-                graph_lines.append(f"{chrom}\t{end - i - 1}\t{end - i}\t{peak}\t{strand}\n")
+                graph_lines.append(
+                    f"{chrom}\t{end - i - 1}\t{end - i}\t{peak}\t{strand}\n"
+                )
+
+                line = [
+                    chrom,
+                    end - i - 1,
+                    end - i,
+                    f"{name}_{i}",
+                    peak,
+                    strand,
+                ]
+                bed_lines.append("\t".join(map(str, line)) + "\n")
+
         else:
             for i, peak in enumerate(polya_profile):
                 if peak < PEAK_THRESHOLD:
                     # peak = 0
                     continue
 
-                graph_lines.append(f"{chrom}\t{start + i - 1}\t{start + i}\t{peak}\t{strand}\n")
+                graph_lines.append(
+                    f"{chrom}\t{start + i - 1}\t{start + i}\t{peak}\t{strand}\n"
+                )
+
+                line = [
+                    chrom,
+                    start + i - 1,
+                    start + i,
+                    f"{name}_{i}",
+                    peak,
+                    strand,
+                ]
+                bed_lines.append("\t".join(map(str, line)) + "\n")
 
         if args.use_max_peak:
             all_peak_ixs = peak_ixs
@@ -107,33 +132,6 @@ def process_chunk(
                 print(
                     f"{name} has divergent peaks / max peaks:\t{all_peak_ixs}\t{peak_ixs}"
                 )
-
-        for i, peak in enumerate(peak_ixs):
-            score = polya_profile[peak]
-
-            if score < PEAK_THRESHOLD:
-                score = 0
-
-            if strand == "-":
-                line = [
-                    chrom,
-                    end - peak - 1,
-                    end - peak,
-                    name,
-                    score,
-                    strand,
-                ]
-                bed_lines.append("\t".join(map(str, line)) + "\n")
-            else:
-                line = [
-                    chrom,
-                    start + peak - 1,
-                    start + peak,
-                    name,
-                    score,
-                    strand,
-                ]
-                bed_lines.append("\t".join(map(str, line)) + "\n")
 
     return (graph_lines, bed_lines)
 
@@ -176,7 +174,9 @@ def write_results(bedgraph: List[str], bed_lines: List[str], path: str) -> None:
     return None
 
 
-def run_apparent(model: str, encoder: EncoderType, seq: str) -> Tuple[List[int], List[float]]:
+def run_apparent(
+    model: str, encoder: EncoderType, seq: str
+) -> Tuple[List[int], List[float]]:
     """
     Run APPARENT to estimate poly(A) tail length from a chunked file
 
