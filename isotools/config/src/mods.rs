@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::any::Any;
 
 /// Module descriptors
@@ -50,10 +50,11 @@ pub enum ModuleType {
 /// let value = module.get_value(Box::new(IntronRetentionValue::IsRetentionSupported));
 /// assert_eq!(value, Some(Value::Null));
 /// ```
-pub trait ModuleMap: Any {
+pub trait ModuleMap: Any + Send + Sync {
     fn get_value(&self, key: Box<dyn Any>) -> Option<serde_json::Value>;
     fn set_value(&mut self, key: Box<dyn Any>, value: serde_json::Value) -> Result<(), String>;
     fn as_any(&self) -> &dyn Any;
+    fn to_json(&self) -> Value;
 }
 
 /// Downcasting macro
@@ -515,6 +516,60 @@ impl ModuleMap for IntronRetentionDescriptor {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    /// Converts the module descriptor to JSON format.
+    ///
+    /// # Returns
+    ///
+    /// * A JSON object representing the module descriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, IntronRetentionDescriptor};
+    ///
+    /// let module = IntronRetentionDescriptor::new();
+    /// let json = module.to_json();
+    /// assert_eq!(json["is_intron_retention"], Value::Bool(false));
+    /// ```
+    fn to_json(&self) -> Value {
+        let mut map = Map::new();
+
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(intron_retention);
+        insert!(is_retention_supported);
+        insert!(is_retention_supported_map);
+        insert!(component_size);
+        insert!(ref_component_size);
+        insert!(query_component_size);
+        insert!(component_retention_ratio);
+        insert!(is_dirty_component);
+        insert!(intron_support_ratio);
+        insert!(exon_support_ratio);
+        insert!(number_of_retentions);
+        insert!(number_of_true_retentions);
+        insert!(number_of_partial_retentions);
+        insert!(number_of_false_retentions);
+        insert!(number_of_recovers);
+        insert!(number_of_unrecovers);
+        insert!(number_of_true_retentions_supported);
+        insert!(number_of_partial_retentions_supported);
+        insert!(number_of_false_retentions_supported);
+        insert!(location_of_retention);
+        insert!(retention_acceptor_score);
+        insert!(retention_donor_score);
+        insert!(retention_in_cds);
+        insert!(retention_in_utr);
+        insert!(is_intron_retained_in_frame);
+        insert!(is_toga_intron);
+
+        Value::Object(map)
+    }
 }
 
 /// Debug implementation for IntronRetentionDescriptor
@@ -801,6 +856,42 @@ impl ModuleMap for StartTruncationDescriptor {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    /// Converts the module descriptor to JSON format.
+    ///
+    /// # Returns
+    ///
+    /// * A JSON object representing the module descriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, StartTruncationDescriptor};
+    ///
+    /// let module = StartTruncationDescriptor::new();
+    /// assert_eq!(module.to_json(), serde_json::json!({}));
+    /// ```
+    fn to_json(&self) -> Value {
+        let mut map = Map::new();
+
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(is_read_truncated);
+        insert!(is_novel_start);
+        insert!(is_dirty_component);
+        insert!(component_size);
+        insert!(ref_component_size);
+        insert!(query_component_size);
+        insert!(truncation_support_ratio);
+        insert!(is_truncation_supported);
+        insert!(component_truncation_ratio);
+
+        Value::Object(map)
+    }
 }
 
 /// Debug implementation for StartTruncationDescriptor
@@ -1030,8 +1121,61 @@ impl ModuleMap for FusionDetectionDescriptor {
         }
     }
 
+    /// Downcasts the module descriptor to a specific type.
+    ///
+    /// # Returns
+    ///
+    /// * A reference to the module descriptor as a trait object.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{ModuleMap, FusionDetectionDescriptor};
+    ///
+    /// let module = FusionDetectionDescriptor::new();
+    /// assert_eq!(module.as_any().is::<FusionDetectionDescriptor>(), true);
+    /// ```
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    /// Converts the FusionDetectionDescriptor to a JSON object.
+    ///
+    /// # Returns
+    ///
+    /// * A JSON object representing the FusionDetectionDescriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::FusionDetectionDescriptor;
+    ///
+    /// let descriptor = FusionDetectionDescriptor::new();
+    /// let json = descriptor.to_json();
+    /// assert_eq!(json["is_fused_read"], Value::Null);
+    /// ```
+    fn to_json(&self) -> Value {
+        let mut map = Map::new();
+
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(is_fused_read);
+        insert!(is_fusion_supported);
+        insert!(component_size);
+        insert!(ref_component_size);
+        insert!(query_component_size);
+        insert!(whole_component_fusion_ratio);
+        insert!(real_component_fusion_ratio);
+        insert!(fake_component_fusion_ratio);
+        insert!(is_dirty_component);
+        insert!(location_of_fusion);
+        insert!(fusion_in_frame);
+
+        Value::Object(map)
     }
 }
 
@@ -1084,6 +1228,7 @@ pub struct PolyAPredictionDescriptor {
     pub poly_a_location: Value,
     pub is_dirty_component: Value,
     pub intrapriming_comp_ratio: Value,
+    pub forced_poly_a: Value,
 }
 
 /// PolyAPredictionDescriptor implementation
@@ -1115,6 +1260,7 @@ impl PolyAPredictionDescriptor {
             poly_a_location: Value::Null,
             is_dirty_component: Value::Null,
             intrapriming_comp_ratio: Value::Null,
+            forced_poly_a: Value::Null,
         })
     }
 }
@@ -1132,6 +1278,7 @@ pub enum PolyAPredictionValue {
     PolyALocation,
     IsDirtyComponent,
     IntraprimingComponentRatio,
+    ForcedPolyAPass,
 }
 
 /// ModuleMap trait implementation for PolyAPredictionDescriptor
@@ -1171,6 +1318,7 @@ impl ModuleMap for PolyAPredictionDescriptor {
                 PolyAPredictionValue::IntraprimingComponentRatio => {
                     Some(self.intrapriming_comp_ratio.clone())
                 }
+                PolyAPredictionValue::ForcedPolyAPass => Some(Value::Null),
             }
         } else {
             None
@@ -1233,6 +1381,10 @@ impl ModuleMap for PolyAPredictionDescriptor {
                     self.intrapriming_comp_ratio = value;
                     Ok(())
                 }
+                PolyAPredictionValue::ForcedPolyAPass => {
+                    self.forced_poly_a = value;
+                    Ok(())
+                }
             }
         } else {
             let err = format!("ERROR: You have tried to set a value for an unknown key!");
@@ -1258,6 +1410,43 @@ impl ModuleMap for PolyAPredictionDescriptor {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    /// Converts the PolyAPredictionDescriptor to a JSON object.
+    ///
+    /// # Returns
+    ///
+    /// * A JSON object representing the PolyAPredictionDescriptor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::PolyAPredictionDescriptor;
+    ///
+    /// let descriptor = PolyAPredictionDescriptor::new();
+    /// let json = descriptor.to_json();
+    /// assert_eq!(json["is_poly_a_supported"], Value::Null);
+    /// ```
+    fn to_json(&self) -> Value {
+        let mut map = Map::new();
+
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(is_poly_a_supported);
+        insert!(poly_a_score);
+        insert!(whole_poly_a_length);
+        insert!(genomic_poly_a);
+        insert!(is_intrapriming);
+        insert!(poly_a_location);
+        insert!(is_dirty_component);
+        insert!(intrapriming_comp_ratio);
+        insert!(forced_poly_a);
+
+        Value::Object(map)
+    }
 }
 
 /// Debug implementation for PolyAPredictionDescriptor
@@ -1277,6 +1466,7 @@ impl std::fmt::Debug for PolyAPredictionDescriptor {
             poly_a_location: {:?},
             is_dirty_component: {:?},
             intrapriming_comp_ratio: {:?}
+            forced_poly_a: {:?}
             }}",
             self.is_poly_a_supported,
             self.poly_a_score,
@@ -1285,7 +1475,8 @@ impl std::fmt::Debug for PolyAPredictionDescriptor {
             self.is_intrapriming,
             self.poly_a_location,
             self.is_dirty_component,
-            self.intrapriming_comp_ratio
+            self.intrapriming_comp_ratio,
+            self.forced_poly_a
         )
     }
 }

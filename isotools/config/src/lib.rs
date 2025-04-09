@@ -56,6 +56,7 @@ pub const ORF_ASSIGNED_READS: &str = "orf_reads.bed";
 pub const INTRAPRIMING_REVIEW: &str = "intrapriming_review.bed";
 pub const POLYA_PASS: &str = "polya_pass.bed";
 pub const POLYA_INTRAPRIMING: &str = "polya_intrapriming.bed";
+pub const POLYA_DESCRIPTOR: &str = "polya.json";
 
 // spliceai-related names
 pub const ACCEPTOR_MINUS: &str = "spliceAiAcceptorMinus.bw";

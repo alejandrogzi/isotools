@@ -1,7 +1,7 @@
 use config::{
-    bed_to_nested_map, get_progress_bar, write_objs, BedColumn, BedColumnValue, ModuleDescriptor,
-    ModuleMap, ModuleType, PolyAPredictionValue, INTRAPRIMING_RATIO_THRESHOLD, INTRAPRIMING_REVIEW,
-    POLYA_INTRAPRIMING, POLYA_PASS,
+    bed_to_nested_map, get_progress_bar, write_descriptor, write_objs, BedColumn, BedColumnValue,
+    ModuleDescriptor, ModuleMap, ModuleType, PolyAPredictionValue, INTRAPRIMING_RATIO_THRESHOLD,
+    INTRAPRIMING_REVIEW, POLYA_DESCRIPTOR, POLYA_INTRAPRIMING, POLYA_PASS,
 };
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
@@ -38,7 +38,7 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
     let aparent_scores = get_aparent_scores(args.aparent);
 
     let pb = get_progress_bar(isoseqs.len() as u64, "Processing reads...");
-    let accumulator = ParallelAccumulator::default();
+    let accumulator = Arc::new(ParallelAccumulator::default());
     let counter = ParallelCounter::default();
 
     isoseqs.into_par_iter().for_each(|(chr, components)| {
@@ -53,7 +53,7 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
         distribute(
             components,
             scores,
-            &accumulator,
+            accumulator.clone(),
             &counter,
             args.recover,
             args.wiggle,
@@ -102,6 +102,8 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
             .par_iter(),
         )
         .for_each(|(rx, path)| write_objs(&rx, path));
+
+    write_descriptor(&accumulator.descriptor, POLYA_DESCRIPTOR);
 
     Ok(())
 }
@@ -159,7 +161,7 @@ fn get_aparent_scores(file: PathBuf) -> DashMap<String, HashMap<String, BedColum
 fn distribute(
     components: Vec<Box<dyn BedPackage>>,
     scores: &HashMap<String, BedColumnValue>,
-    accumulator: &ParallelAccumulator,
+    accumulator: Arc<ParallelAccumulator>,
     counter: &ParallelCounter,
     recover: bool,
     wiggle: usize,
@@ -176,7 +178,7 @@ fn distribute(
             .expect("ERROR: Could not downcast to PolyAPred!");
 
         if !filter {
-            let (passes, intrapriming, review, descriptor) = process_component(
+            let result = process_component(
                 comp,
                 scores,
                 recover,
@@ -186,11 +188,11 @@ fn distribute(
                 aparent_threshold,
             );
 
-            if review.is_some() {
+            if result.2.is_some() {
                 counter.inc_review(1);
             }
 
-            accumulator.add((passes, intrapriming, review));
+            accumulator.add(result);
         } else {
             let rs = filter_component(
                 comp,
@@ -224,6 +226,7 @@ struct ParallelAccumulator {
     pass: DashSet<String>,
     intrapriming: DashSet<String>,
     review: DashSet<String>,
+    descriptor: DashMap<String, Box<dyn ModuleMap>>,
 }
 
 impl Default for ParallelAccumulator {
@@ -232,6 +235,7 @@ impl Default for ParallelAccumulator {
             pass: DashSet::new(),
             intrapriming: DashSet::new(),
             review: DashSet::new(),
+            descriptor: DashMap::new(),
         }
     }
 }
@@ -251,8 +255,16 @@ impl ParallelAccumulator {
     ///
     /// assert_eq!(accumulator.pass.len(), 2);
     /// ```
-    fn add(&self, result: (Vec<String>, Vec<String>, Option<Vec<String>>)) {
-        let (passes, intrapriming, review) = result;
+    fn add(
+        &self,
+        result: (
+            Vec<String>,
+            Vec<String>,
+            Option<Vec<String>>,
+            HashMap<String, Box<dyn ModuleMap>>,
+        ),
+    ) {
+        let (passes, intrapriming, review, descriptor) = result;
 
         intrapriming.into_iter().for_each(|ipm| {
             self.intrapriming.insert(ipm);
@@ -265,6 +277,10 @@ impl ParallelAccumulator {
                 self.review.insert(r);
             });
         }
+
+        descriptor.into_iter().for_each(|(k, v)| {
+            self.descriptor.insert(k, v);
+        });
     }
 
     fn add_filter(&self, result: Vec<String>) {
@@ -460,13 +476,16 @@ fn process_component(
             )
             .ok();
 
+        let location = get_read_toga_location(read.end, toga, handle);
+
         if any_true!(
             read.gpa < max_gpa_length as u32,
             read.poly_a >= min_polya_length as u32,
             seen_positions.contains(&read.end),
             seen_positions.contains(&(read.end - wiggle as u64)),
             seen_positions.contains(&(read.end + wiggle as u64)),
-            aparent_score > aparent_threshold
+            aparent_score > aparent_threshold,
+            location == PolyATogaLocation::UTR
         ) {
             passes.push(read.line.clone());
 
@@ -476,19 +495,36 @@ fn process_component(
 
             seen_reads.insert(&read.name); // INFO: storing 'good' reads for later escape
         }
-
-        _ = get_read_toga_location(read.end, toga, handle);
     });
 
     // INFO: necessary second iteration to check for intrapriming events
     // INFO: since the only filter to doble check is the wiggle + genomic pos
     // INFO: we can iterate over the component again and avoid the rest of steps
     reads.iter().for_each(|read| {
+        let handle = descriptor.get_mut(&read.name).unwrap();
+
         if seen_reads.contains(&&read.name) {
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::IsIntrapriming),
+                    serde_json::json!(false),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::IsPolyASupported),
+                    serde_json::json!(true),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::ForcedPolyAPass),
+                    serde_json::json!(false),
+                )
+                .ok();
+
             return;
         }
-
-        let handle = descriptor.get_mut(&read.name).unwrap();
 
         if any_true!(
             seen_positions.contains(&read.end),
@@ -507,9 +543,17 @@ fn process_component(
                     serde_json::json!(false),
                 )
                 .ok();
+
+            // INFO: set to false because the evidence is based on other reads!
             handle
                 .set_value(
                     Box::new(PolyAPredictionValue::IsPolyASupported),
+                    serde_json::json!(false),
+                )
+                .ok();
+            handle
+                .set_value(
+                    Box::new(PolyAPredictionValue::ForcedPolyAPass),
                     serde_json::json!(true),
                 )
                 .ok();
@@ -587,7 +631,9 @@ fn get_read_toga_location(
     read_end: u64,
     toga: &mut Vec<GenePred>,
     handle: &mut Box<dyn ModuleMap>,
-) {
+) -> PolyATogaLocation {
+    let location = PolyATogaLocation::CDS;
+
     for projection in toga.iter() {
         if projection.start < read_end && read_end < projection.end {
             handle
@@ -596,7 +642,8 @@ fn get_read_toga_location(
                     serde_json::json!("CDS"),
                 )
                 .ok();
-            return;
+
+            return location;
         }
     }
 
@@ -607,6 +654,23 @@ fn get_read_toga_location(
             serde_json::json!("UTR"),
         )
         .ok();
+
+    PolyATogaLocation::UTR
+}
+
+/// Enum to represent the location of the polyA tail
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let location = PolyATogaLocation::CDS;
+///
+/// assert_eq!(location, PolyATogaLocation::CDS);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PolyATogaLocation {
+    CDS,
+    UTR,
 }
 
 /// Filter components based on polyA tail length and APARENT score
