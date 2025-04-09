@@ -5,6 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
 use num_traits::{Num, NumCast};
 use rayon::prelude::*;
+use serde_json::{Map, Value};
 use thiserror::Error;
 
 use std::borrow::Borrow;
@@ -15,7 +16,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{BedColumn, BedColumnValue, BedParser, CoordType, MatchType, OverlapType, TsvParser};
+use crate::{
+    BedColumn, BedColumnValue, BedParser, CoordType, MatchType, ModuleMap, OverlapType, TsvParser,
+};
 
 // os
 #[cfg(not(windows))]
@@ -587,4 +590,42 @@ where
     );
 
     Ok(tracks)
+}
+
+/// Writes the descriptor to a JSON file
+///
+/// # Arguments
+///
+/// * `descriptor` - Descriptor to write
+/// * `path` - Path to the JSON file
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let descriptor = DashMap::new();
+/// write_descriptor(&descriptor, "path/to/descriptor.json");
+/// ```
+pub fn write_descriptor(descriptor: &DashMap<String, Box<dyn ModuleMap>>, path: &str) {
+    let mut json_map = Map::with_capacity(descriptor.len());
+
+    descriptor.iter().for_each(|entry| {
+        let (key, value) = entry.pair();
+        json_map.insert(key.clone(), value.to_json());
+    });
+
+    // let json_map: Map<String, Value> = descriptor
+    //     .iter()
+    //     .par_bridge()
+    //     .map(|entry| {
+    //         let (key, value) = entry.pair();
+    //         (key.clone(), value.to_json())
+    //     })
+    //     .collect::<HashMap<_, _>>() // INFO: intermediate parallel-friendly structure
+    //     .into_iter()
+    //     .collect(); // INFO: convert to serde_json::Map
+
+    let file = File::create(path).expect("Unable to create file");
+    let writer = BufWriter::new(file);
+
+    serde_json::to_writer(writer, &Value::Object(json_map)).expect("Failed to write JSON");
 }
