@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
-    BedColumn, BedColumnValue, BedParser, CoordType, MatchType, ModuleMap, OverlapType, TsvParser,
+    BedColumn, BedColumnValue, BedParser, CoordType, MatchType, ModuleMap, OverlapType,
+    ParallelCollector, TsvParser,
 };
 
 // os
@@ -26,7 +27,30 @@ const TICK_SETTINGS: (&str, u64) = ("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ", 80);
 #[cfg(windows)]
 const TICK_SETTINGS: (&str, u64) = (r"+-x| ", 200);
 
-/// return a pre-configured progress bar
+/// Return a pre-configured progress bar
+///
+/// # Arguments
+///
+/// * `length` - The length of the progress bar
+/// * `msg` - The message to display
+///
+/// # Returns
+///
+/// * `ProgressBar` - A pre-configured progress bar
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::get_progress_bar;
+///
+/// let length = 100;
+/// let msg = "Processing...";
+///
+/// let progress_bar = get_progress_bar(length, msg);
+///
+/// assert_eq!(progress_bar.length(), length);
+/// assert_eq!(progress_bar.message(), msg);
+/// ```
 pub fn get_progress_bar(length: u64, msg: &str) -> ProgressBar {
     let progressbar_style = ProgressStyle::default_spinner()
         .tick_chars(TICK_SETTINGS.0)
@@ -42,7 +66,26 @@ pub fn get_progress_bar(length: u64, msg: &str) -> ProgressBar {
     progress_bar
 }
 
-/// write a DashSet to a file
+/// Write a DashSet to a file
+///
+/// # Arguments
+///
+/// * `data` - The DashSet to write
+/// * `fname` - The name of the file to write to
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::write_objs;
+///
+/// let data = DashSet::new();
+/// data.insert("line1".to_string());
+/// data.insert("line2".to_string());
+///
+/// let fname = "output.txt";
+///
+/// write_objs(&data, fname);
+/// ```
 pub fn write_objs<T>(data: &DashSet<T>, fname: &str)
 where
     T: AsRef<str> + Sync + Send + Eq + std::hash::Hash,
@@ -61,7 +104,23 @@ where
     }
 }
 
-/// write any collection to a file
+/// Write any collection to a file
+///
+/// # Arguments
+///
+/// * `data` - The collection to write
+/// * `fname` - The name of the file to write to
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::write_collection;
+///
+/// let data = vec!["line1".to_string(), "line2".to_string()];
+/// let fname = "output.txt";
+///
+/// write_collection(&data, fname);
+/// ```
 pub fn write_collection(data: &Vec<String>, fname: &str) {
     log::info!("Reads in {}: {:?}. Writing...", fname, data.len());
     let f = match File::create(fname) {
@@ -77,12 +136,44 @@ pub fn write_collection(data: &Vec<String>, fname: &str) {
     }
 }
 
-/// argument checker for all subcommands
+/// Argument checker for all subcommands
 pub trait ArgCheck {
+    /// Check the arguments
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), CliError>` - Ok if the arguments are valid, Err if not
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use isotools::config::fns::ArgCheck;
+    ///
+    /// let args = MyArgs::new();
+    /// let result = args.check();
+    ///
+    /// assert!(result.is_ok());
+    /// ```
     fn check(&self) -> Result<(), CliError> {
         self.validate_args()
     }
 
+    /// Inner function to validate the arguments
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), CliError>` - Ok if the arguments are valid, Err if not
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use isotools::config::fns::ArgCheck;
+    ///
+    /// let args = MyArgs::new();
+    /// let result = args.validate_args();
+    ///
+    /// assert!(result.is_ok());
+    /// ```
     fn validate_args(&self) -> Result<(), CliError> {
         self.check_dbs()?;
 
@@ -95,6 +186,22 @@ pub trait ArgCheck {
         Ok(())
     }
 
+    /// Check input files for validity
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), CliError>` - Ok if the files are valid, Err if not
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use isotools::config::fns::ArgCheck;
+    ///
+    /// let args = MyArgs::new();
+    /// let result = args.check_dbs();
+    ///
+    /// assert!(result.is_ok());
+    /// ```
     fn check_dbs(&self) -> Result<(), CliError> {
         if self.get_ref().is_empty() {
             let err = "No reference files provided".to_string();
@@ -115,6 +222,22 @@ pub trait ArgCheck {
         Ok(())
     }
 
+    /// Check the blacklist files for validity
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), CliError>` - Ok if the files are valid, Err if not
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use isotools::config::fns::ArgCheck;
+    ///
+    /// let args = MyArgs::new();
+    /// let result = args.check_blacklist();
+    ///
+    /// assert!(result.is_ok());
+    /// ```
     fn check_blacklist(&self) -> Result<(), CliError> {
         for bl in self.get_blacklist() {
             validate(bl)?;
@@ -122,12 +245,66 @@ pub trait ArgCheck {
         Ok(())
     }
 
+    /// Get the blacklist files
+    ///
+    /// # Returns
+    ///
+    /// * `&Vec<PathBuf>` - A reference to the vector of PathBufs representing the blacklist files
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use isotools::config::fns::ArgCheck;
+    ///
+    /// let args = MyArgs::new();
+    /// let blacklist = args.get_blacklist();
+    ///
+    /// assert!(!blacklist.is_empty());
+    /// ```
     fn get_blacklist(&self) -> &Vec<PathBuf>;
+
+    /// Get the reference files
+    ///
+    /// # Returns
+    ///
+    /// * `&Vec<PathBuf>` - A reference to the vector of PathBufs representing the reference files
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use isotools::config::fns::ArgCheck;
+    ///
+    /// let args = MyArgs::new();
+    /// let reference = args.get_ref();
+    ///
+    /// assert!(!reference.is_empty());
+    /// ```
     fn get_ref(&self) -> &Vec<PathBuf>;
+
+    /// Get the query files
+    ///
+    /// # Returns
+    ///
+    /// * `&Vec<PathBuf>` - A reference to the vector of PathBufs representing the query files
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use isotools::config::fns::ArgCheck;
+    ///
+    /// let args = MyArgs::new();
+    /// let query = args.get_query();
+    ///
+    /// assert!(!query.is_empty());
+    /// ```
     fn get_query(&self) -> &Vec<PathBuf>;
 }
 
-/// error handling for CLI
+/// Rrror handling for CLI
+///
+/// This enum is used to handle
+/// errors that may occur during
+/// CLI operations.
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("Invalid input: {0}")]
@@ -136,7 +313,30 @@ pub enum CliError {
     IoError(#[from] std::io::Error),
 }
 
-/// argument validation
+/// Argument validation
+///
+/// # Arguments
+///
+/// * `arg` - Path to the file to be validated
+///
+/// # Returns
+///
+/// * `Result<(), CliError>` - Ok if the file is valid, Err if not
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::validate;
+///
+/// let path = PathBuf::from("path/to/file.bed");
+/// let result = validate(&path);
+///
+/// if result.is_ok() {
+///    println!("File is valid");
+/// } else {
+///   println!("File is invalid: {:?}", result.err());
+/// }
+/// ```
 pub fn validate(arg: &PathBuf) -> Result<(), CliError> {
     if !arg.exists() {
         return Err(CliError::InvalidInput(format!(
@@ -628,4 +828,78 @@ pub fn write_descriptor(descriptor: &DashMap<String, Box<dyn ModuleMap>>, path: 
     let writer = BufWriter::new(file);
 
     serde_json::to_writer(writer, &Value::Object(json_map)).expect("Failed to write JSON");
+}
+
+/// Write results from a ParallelAccumulator to files in parallel
+///
+/// # Arguments
+///
+/// * `accumulator` - The accumulator containing the results
+/// * `filenames` - A vector of PathBufs representing the filenames
+/// * `outdir` - An optional PathBuf representing the output directory
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::par_write_results;
+///
+/// let accumulator = ParallelAccumulator::default();
+/// let filenames = vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")];
+/// let outdir = Some(PathBuf::from("output"));
+///
+/// par_write_results(accumulator, filenames, outdir);
+/// ```
+pub fn par_write_results<K: ParallelCollector>(
+    accumulator: K,
+    filenames: Vec<PathBuf>,
+    outdir: Option<PathBuf>,
+) {
+    if accumulator.len() != filenames.len() {
+        log::error!("ERROR: Number of filenames does not match the number of results!");
+        std::process::exit(1);
+    }
+
+    let collections = accumulator
+        .get_collections()
+        .expect("ERROR: Could not get collections!");
+
+    if let Some(outdir) = outdir {
+        let files = filenames
+            .iter()
+            .map(|filename| outdir.join(filename))
+            .collect::<Vec<_>>();
+
+        write_pairs(collections, files);
+    } else {
+        write_pairs(collections, filenames);
+    }
+}
+
+/// Inner function to write pairs of collections to files
+///
+/// # Arguments
+///
+/// * `collections` - A vector of DashSet<String> representing the collections
+/// * `filenames` - A vector of PathBufs representing the filenames
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::write_pairs;
+///
+/// let collections = vec![DashSet::new(), DashSet::new()];
+/// let filenames = vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")];
+///
+/// write_pairs(collections, filenames);
+/// ```
+fn write_pairs(collections: Vec<DashSet<String>>, filenames: Vec<PathBuf>) {
+    collections
+        .par_iter()
+        .zip(filenames.par_iter())
+        .for_each(|(collection, path)| {
+            write_objs(
+                collection,
+                path.to_str().expect("ERROR: Invalid path to write!"),
+            );
+        });
 }
