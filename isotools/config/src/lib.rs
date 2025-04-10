@@ -1,9 +1,10 @@
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
 
 use std::borrow::Borrow;
 use std::env;
+use std::error::Error;
 use std::str::from_utf8_unchecked;
 use std::str::FromStr;
 
@@ -41,14 +42,17 @@ pub const INTRAPRIMING_RATIO_THRESHOLD: f32 = 0.5;
 // file names
 pub const INTRON_RETENTIONS: &str = "intron.retentions.bed";
 pub const INTRON_RETENTION_FREE: &str = "intron.retentions.free.bed";
+pub const INTRON_RETENTION_DESCRIPTOR: &str = "retentions.json";
 pub const TRUNCATIONS: &str = "truncations.bed";
 pub const TRUNCATION_FREE: &str = "truncations.free.bed";
+pub const TRUNCATION_DESCRIPTOR: &str = "truncations.json";
 pub const BED3: &str = "ir.bed";
 pub const INTERGENIC_REGIONS: &str = "intergenic.bed";
 pub const FUSIONS: &str = "fusions.bed";
 pub const FUSION_FREE: &str = "fusions.free.bed";
 pub const FUSION_REVIEW: &str = "fusions.review.bed";
 pub const FUSION_FAKES: &str = "fusions.fakes.bed";
+pub const FUSION_DESCRIPTOR: &str = "fusions.json";
 pub const INTRON_CLASSIFICATION: &str = "reference_introns.tsv";
 pub const MAXENTSCAN_ACCEPTOR_DB: &str = "db.tsv";
 pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
@@ -217,6 +221,63 @@ pub trait TsvParser {
         Self: Sized;
     fn key(&self, index: usize) -> &str;
     fn value<V: FromStr>(&self, index: usize) -> Result<V, V::Err>; // INFO:value column can be any type that implements FromStr
+}
+
+/// Trait bound for ParallelAccumulators
+///
+/// This trait groups all the parallel accumulators
+/// that are used in the program.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::ParallelCollector;
+///
+/// #[derive(Debug)]
+/// struct ParallelAccumulator {
+///   retentions: Vec<String>,
+///   non_retentions: Vec<String>,
+///   miscellaneous: Vec<String>,
+///   descriptor: Vec<String>,
+/// }
+///
+/// impl ParallelCollector for ParallelAccumulator {
+///   fn len(&self) -> usize {
+///     todo!()
+///   }
+/// }
+///
+/// fn main() {
+///   let accumulator = ParallelAccumulator {
+///     retentions: vec!["item1".to_string()],
+///     non_retentions: vec!["item2".to_string()],
+///     miscellaneous: vec!["item3".to_string()],
+///     descriptor: vec!["item4".to_string()],
+/// };
+///
+/// assert_eq!(accumulator.len(), 4);
+/// }
+/// ```
+pub trait ParallelCollector {
+    /// Get the number of fields in the accumulator
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let accumulator = ParallelAccumulator::default();
+    /// assert_eq!(accumulator.len(), 4);
+    /// ```
+    fn len(&self) -> usize; // WARN: each ParallelAccumulator has a different number of fields!
+
+    /// Get the a collection of items from the accumulator
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let accumulator = ParallelAccumulator::default();
+    /// assert_eq!(accumulator.get_collections().len(), 4);
+    /// ```
+    fn get_collections(self) -> Result<Vec<DashSet<String>>, Box<dyn Error>>;
 }
 
 // public enums
