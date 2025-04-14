@@ -1216,7 +1216,12 @@ impl IntronBucket {
                         toga_introns.remove(ref_intron);
                     }
 
-                    let position = if is_toga_supported {
+                    // WARN: an edge case for TOGA vs Iso comprise an unseen intron
+                    // WARN: that falls inside the CDS region but does not match any
+                    // WARN: TOGA splice sites
+                    let position = if is_toga_supported
+                        || (cds_start < ref_intron.0 && ref_intron.1 < cds_end)
+                    {
                         IntronPosition::CDS
                     } else if (ref_intron.0 > cds_end || ref_intron.1 < cds_start) && cds_end > 0 {
                         IntronPosition::UTR
@@ -1276,13 +1281,14 @@ impl IntronBucket {
                     acceptor_sequence: String::new(),
                     donor_context: Sequence::new(&[]),
                     acceptor_context: Sequence::new(&[]),
-                    intron_position: IntronPosition::Unknown,
-                    is_toga_supported: true, // INFO: flag to identify TOGA introns
+                    intron_position: IntronPosition::CDS, // INFO: is always CDS -> flag
+                    is_toga_supported: true,              // INFO: flag to identify TOGA introns
                     is_in_frame: false,
                     donor_rt_context: String::new(),
                     acceptor_rt_context: String::new(),
                     is_rt_intron: false,
                     is_nag_intron: false,
+                    // WARN: inside iso-intron this will be interpreted as SPLICED because of TOGA
                     support: SupportType::Unclear, // INFO: flag to identify TOGA introns
                 };
 
