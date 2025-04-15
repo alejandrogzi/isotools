@@ -805,7 +805,7 @@ where
 /// let descriptor = DashMap::new();
 /// write_descriptor(&descriptor, "path/to/descriptor.json");
 /// ```
-pub fn write_descriptor(descriptor: &DashMap<String, Box<dyn ModuleMap>>, path: &str) {
+pub fn write_descriptor_as_json(descriptor: &DashMap<String, Box<dyn ModuleMap>>, path: &str) {
     let mut json_map = Map::with_capacity(descriptor.len());
 
     descriptor.iter().for_each(|entry| {
@@ -897,9 +897,102 @@ fn write_pairs(collections: Vec<DashSet<String>>, filenames: Vec<PathBuf>) {
         .par_iter()
         .zip(filenames.par_iter())
         .for_each(|(collection, path)| {
+            if collection.is_empty() {
+                log::warn!("WARN: A collection from the accumulator is empty! Skipping...");
+                return;
+            }
+
             write_objs(
                 collection,
                 path.to_str().expect("ERROR: Invalid path to write!"),
             );
         });
+}
+
+/// Write a descriptor to a .tsv file
+///
+/// # Arguments
+///
+/// * `descriptor` - Descriptor to write
+/// * `path` - Path to the .tsv file
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let descriptor = DashMap::new();
+/// write_descriptor(&descriptor, "path/to/descriptor.tsv");
+/// ```
+pub fn write_descriptor(descriptor: &DashMap<String, Box<dyn ModuleMap>>, path: &str) {
+    // Get all keys and column names (assume all descriptors share same schema)
+    let mut rows = Vec::with_capacity(descriptor.len());
+    let mut all_columns: Vec<String> = Vec::new();
+
+    for entry in descriptor.iter() {
+        let (id, value) = entry.pair();
+        let json = value.to_json();
+
+        if let Value::Object(obj) = json {
+            // INFO: cache the first object's keys as columns
+            if all_columns.is_empty() {
+                all_columns = obj.keys().cloned().collect();
+            }
+
+            let row = all_columns
+                .iter()
+                .map(|k| json_get_field(&obj, k))
+                .collect::<Vec<String>>();
+
+            rows.push((id.clone(), row));
+        } else {
+            panic!("Expected object in descriptor JSON");
+        }
+    }
+
+    let file = File::create(path).expect("Unable to create file");
+    let mut writer = BufWriter::new(file);
+
+    writeln!(writer, "id\t{}", all_columns.join("\t")).expect("Write failed");
+
+    for (id, values) in rows {
+        writeln!(writer, "{}\t{}", id, values.join("\t")).expect("Write failed");
+    }
+}
+
+/// Convert a JSON value to string, escaping tabs and newlines
+///
+/// # Arguments
+///
+/// * `obj` - The JSON object
+/// * `key` - The key to retrieve the value
+///
+/// # Returns
+///
+/// * `String` - The string representation of the value
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::json_get_field;
+///
+/// let obj = serde_json::json!({
+///    "key1": "value1",
+///    "key2": 42,
+///    "key3": true,
+///    "key4": null,
+///    "key5": ["array", "of", "values"],
+///    "key6": {"nested": "object"}
+/// });
+///
+/// json_get_field(&obj.as_object().unwrap(), "key1");
+/// ```
+fn json_get_field(obj: &Map<String, Value>, key: &str) -> String {
+    let value = obj.get(key).unwrap_or(&Value::Null);
+    let s = match value {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        _ => serde_json::to_string(value).unwrap_or_default(), // INFO: for arrays or objects
+    };
+    s.replace('\t', "   ").replace('\n', " ")
 }
