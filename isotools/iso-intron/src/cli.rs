@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use config::ArgCheck;
 use std::path::PathBuf;
 
@@ -45,6 +45,18 @@ pub struct Args {
         default_value_t = num_cpus::get()
     )]
     pub threads: usize,
+
+    #[arg(
+        long = "recover",
+        help = "Flag to recover from disputed retentions",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub recover: bool,
 }
 
 impl ArgCheck for Args {
