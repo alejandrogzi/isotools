@@ -42,7 +42,8 @@ pub const INTRAPRIMING_RATIO_THRESHOLD: f32 = 0.5;
 // file names
 pub const INTRON_RETENTIONS: &str = "intron.retentions.bed";
 pub const INTRON_RETENTION_FREE: &str = "intron.retentions.free.bed";
-pub const INTRON_RETENTION_DESCRIPTOR: &str = "retentions.json";
+pub const INTRON_RETENTION_REVIEW: &str = "intron.retentions.review.bed";
+pub const INTRON_RETENTION_DESCRIPTOR: &str = "retentions.tsv";
 pub const TRUNCATIONS: &str = "truncations.bed";
 pub const TRUNCATION_FREE: &str = "truncations.free.bed";
 pub const TRUNCATION_DESCRIPTOR: &str = "truncations.json";
