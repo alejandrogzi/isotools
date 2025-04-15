@@ -172,31 +172,22 @@ impl ModuleDescriptor {
 /// intron retention detection.
 pub struct IntronRetentionDescriptor {
     pub intron_retention: Value,
-    pub is_retention_supported: Value,
-    pub is_retention_supported_map: Value,
-    pub component_size: Value,
-    pub ref_component_size: Value,
+    pub retention_support_type: Value,
+    pub number_of_retentions: Value,
+    pub coords_of_retention: Value,
+    pub location_of_retention: Value,
+    pub is_intron_retained_in_frame: Value,
+    pub retains_rt_intron: Value,
+    pub has_rt_intron: Value,
+    pub has_rt_intron_map: Value,
+    pub retention_acceptor_score: Value,
+    pub retention_donor_score: Value,
+    pub ref_introns_component_size: Value,
     pub query_component_size: Value,
     pub component_retention_ratio: Value,
     pub is_dirty_component: Value,
-    pub intron_support_ratio: Value,
-    pub exon_support_ratio: Value,
-    pub number_of_retentions: Value,
-    pub number_of_true_retentions: Value,
-    pub number_of_partial_retentions: Value,
-    pub number_of_false_retentions: Value,
-    pub number_of_recovers: Value,
-    pub number_of_unrecovers: Value,
-    pub number_of_true_retentions_supported: Value,
-    pub number_of_partial_retentions_supported: Value,
-    pub number_of_false_retentions_supported: Value,
-    pub location_of_retention: Value,
-    pub retention_acceptor_score: Value,
-    pub retention_donor_score: Value,
-    pub retention_in_cds: Value,
-    pub retention_in_utr: Value,
-    pub is_intron_retained_in_frame: Value,
-    pub is_toga_intron: Value,
+    pub exonic_status: Value,
+    pub intronic_status: Value,
 }
 
 impl IntronRetentionDescriptor {
@@ -217,31 +208,22 @@ impl IntronRetentionDescriptor {
     pub fn new() -> Box<Self> {
         Box::new(Self {
             intron_retention: Value::Bool(false),
-            is_retention_supported: Value::Null,
-            is_retention_supported_map: Value::Null,
-            component_size: Value::Null,
-            ref_component_size: Value::Null,
+            retention_support_type: Value::Null,
+            number_of_retentions: Value::Number(0.into()),
+            coords_of_retention: Value::Null,
+            location_of_retention: Value::Null,
+            is_intron_retained_in_frame: Value::Null,
+            retains_rt_intron: Value::Null,
+            has_rt_intron: Value::Null,
+            has_rt_intron_map: Value::Null,
+            retention_acceptor_score: Value::Null,
+            retention_donor_score: Value::Null,
+            ref_introns_component_size: Value::Null,
             query_component_size: Value::Null,
             component_retention_ratio: Value::Null,
             is_dirty_component: Value::Bool(false),
-            intron_support_ratio: Value::Null,
-            exon_support_ratio: Value::Null,
-            number_of_retentions: Value::Number(0.into()),
-            number_of_true_retentions: Value::Null,
-            number_of_partial_retentions: Value::Null,
-            number_of_false_retentions: Value::Null,
-            number_of_recovers: Value::Number(0.into()),
-            number_of_unrecovers: Value::Number(0.into()),
-            number_of_true_retentions_supported: Value::Null,
-            number_of_partial_retentions_supported: Value::Null,
-            number_of_false_retentions_supported: Value::Null,
-            location_of_retention: Value::Null,
-            retention_acceptor_score: Value::Null,
-            retention_donor_score: Value::Null,
-            retention_in_cds: Value::Null,
-            retention_in_utr: Value::Null,
-            is_intron_retained_in_frame: Value::Null,
-            is_toga_intron: Value::Null,
+            exonic_status: Value::Null,
+            intronic_status: Value::Null,
         })
     }
 }
@@ -253,31 +235,22 @@ impl IntronRetentionDescriptor {
 #[derive(Debug, Clone)]
 pub enum IntronRetentionValue {
     IsIntronRetention,
-    IsRetentionSupported,
-    IsRetentionSupportedMap,
-    ComponentSize,
-    RefComponentSize,
+    RetentionSupportType,
+    NumberOfRetentions,
+    RetentionCoords,
+    RetentionLocation,
+    IsIntronRetainedInFrame,
+    RetainsRtIntron,
+    HasRTIntron,
+    HasRTIntronMap,
+    RetentionAcceptorScore,
+    RetentionDonorScore,
+    RefIntronsComponentSize,
     QueryComponentSize,
     ComponentRetentionRatio,
     IsDirtyComponent,
-    IntronSupportRatio,
-    ExonSupportRatio,
-    NumberOfRetentions,
-    NumberOfTrueRetentions,
-    NumberOfPartialRetentions,
-    NumberOfFalseRetentions,
-    NumberOfRecovers,
-    NumberOfUnrecovers,
-    NumberOfTrueRententionsSupported,
-    NumberOfPartialRententionsSupported,
-    NumberOfFalseRententionsSupported,
-    RetentionLocation,
-    RetentionAcceptorScore,
-    RetentionDonorScore,
-    IsRetentionInCds,
-    IsRetentionInUtr,
-    IsIntronRetainedInFrame,
-    IsTogaIntron,
+    ExonicStatus,
+    IntronicStatus,
 }
 
 /// ModuleMap trait implementation for IntronRetentionDescriptor
@@ -308,55 +281,34 @@ impl ModuleMap for IntronRetentionDescriptor {
         if let Ok(key) = key.downcast::<IntronRetentionValue>() {
             match *key {
                 IntronRetentionValue::IsIntronRetention => Some(self.intron_retention.clone()),
-                IntronRetentionValue::IsRetentionSupported => {
-                    Some(self.is_retention_supported.clone())
+                IntronRetentionValue::RetentionSupportType => {
+                    Some(self.retention_support_type.clone())
                 }
-                IntronRetentionValue::IsRetentionSupportedMap => {
-                    Some(self.is_retention_supported_map.clone())
-                }
-                IntronRetentionValue::ComponentSize => Some(self.component_size.clone()),
-                IntronRetentionValue::RefComponentSize => Some(self.ref_component_size.clone()),
-                IntronRetentionValue::QueryComponentSize => Some(self.query_component_size.clone()),
-                IntronRetentionValue::ComponentRetentionRatio => {
-                    Some(self.intron_support_ratio.clone())
-                }
-                IntronRetentionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
-                IntronRetentionValue::IntronSupportRatio => Some(self.intron_support_ratio.clone()),
-                IntronRetentionValue::ExonSupportRatio => Some(self.exon_support_ratio.clone()),
                 IntronRetentionValue::NumberOfRetentions => Some(self.number_of_retentions.clone()),
-                IntronRetentionValue::NumberOfTrueRetentions => {
-                    Some(self.number_of_true_retentions.clone())
-                }
-                IntronRetentionValue::NumberOfPartialRetentions => {
-                    Some(self.number_of_partial_retentions.clone())
-                }
-                IntronRetentionValue::NumberOfFalseRetentions => {
-                    Some(self.number_of_false_retentions.clone())
-                }
-                IntronRetentionValue::NumberOfRecovers => Some(self.number_of_recovers.clone()),
-                IntronRetentionValue::NumberOfUnrecovers => Some(self.number_of_unrecovers.clone()),
-                IntronRetentionValue::NumberOfTrueRententionsSupported => {
-                    Some(self.number_of_true_retentions_supported.clone())
-                }
-                IntronRetentionValue::NumberOfPartialRententionsSupported => {
-                    Some(self.number_of_partial_retentions_supported.clone())
-                }
-                IntronRetentionValue::NumberOfFalseRententionsSupported => {
-                    Some(self.number_of_false_retentions_supported.clone())
-                }
+                IntronRetentionValue::RetentionCoords => Some(self.coords_of_retention.clone()),
                 IntronRetentionValue::RetentionLocation => Some(self.location_of_retention.clone()),
+                IntronRetentionValue::IsIntronRetainedInFrame => {
+                    Some(self.is_intron_retained_in_frame.clone())
+                }
+                IntronRetentionValue::RetainsRtIntron => Some(self.retains_rt_intron.clone()),
+                IntronRetentionValue::HasRTIntron => Some(self.has_rt_intron.clone()),
+                IntronRetentionValue::HasRTIntronMap => Some(self.has_rt_intron_map.clone()),
                 IntronRetentionValue::RetentionAcceptorScore => {
                     Some(self.retention_acceptor_score.clone())
                 }
                 IntronRetentionValue::RetentionDonorScore => {
                     Some(self.retention_donor_score.clone())
                 }
-                IntronRetentionValue::IsRetentionInCds => Some(self.retention_in_cds.clone()),
-                IntronRetentionValue::IsRetentionInUtr => Some(self.retention_in_utr.clone()),
-                IntronRetentionValue::IsIntronRetainedInFrame => {
-                    Some(self.retention_in_utr.clone())
+                IntronRetentionValue::RefIntronsComponentSize => {
+                    Some(self.ref_introns_component_size.clone())
                 }
-                IntronRetentionValue::IsTogaIntron => Some(self.is_toga_intron.clone()),
+                IntronRetentionValue::QueryComponentSize => Some(self.query_component_size.clone()),
+                IntronRetentionValue::ComponentRetentionRatio => {
+                    Some(self.component_retention_ratio.clone())
+                }
+                IntronRetentionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+                IntronRetentionValue::ExonicStatus => Some(self.exonic_status.clone()),
+                IntronRetentionValue::IntronicStatus => Some(self.intronic_status.clone()),
             }
         } else {
             None
@@ -391,20 +343,48 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.intron_retention = value;
                     Ok(())
                 }
-                IntronRetentionValue::IsRetentionSupported => {
-                    self.is_retention_supported = value;
+                IntronRetentionValue::RetentionSupportType => {
+                    self.retention_support_type = value;
                     Ok(())
                 }
-                IntronRetentionValue::IsRetentionSupportedMap => {
-                    self.is_retention_supported_map = value;
+                IntronRetentionValue::NumberOfRetentions => {
+                    self.number_of_retentions = value;
                     Ok(())
                 }
-                IntronRetentionValue::ComponentSize => {
-                    self.component_size = value;
+                IntronRetentionValue::RetentionCoords => {
+                    self.coords_of_retention = value;
                     Ok(())
                 }
-                IntronRetentionValue::RefComponentSize => {
-                    self.ref_component_size = value;
+                IntronRetentionValue::RetentionLocation => {
+                    self.location_of_retention = value;
+                    Ok(())
+                }
+                IntronRetentionValue::IsIntronRetainedInFrame => {
+                    self.is_intron_retained_in_frame = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetainsRtIntron => {
+                    self.retains_rt_intron = value;
+                    Ok(())
+                }
+                IntronRetentionValue::HasRTIntron => {
+                    self.has_rt_intron = value;
+                    Ok(())
+                }
+                IntronRetentionValue::HasRTIntronMap => {
+                    self.has_rt_intron_map = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetentionAcceptorScore => {
+                    self.retention_acceptor_score = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetentionDonorScore => {
+                    self.retention_donor_score = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RefIntronsComponentSize => {
+                    self.ref_introns_component_size = value;
                     Ok(())
                 }
                 IntronRetentionValue::QueryComponentSize => {
@@ -419,76 +399,12 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.is_dirty_component = value;
                     Ok(())
                 }
-                IntronRetentionValue::IntronSupportRatio => {
-                    self.intron_support_ratio = value;
+                IntronRetentionValue::ExonicStatus => {
+                    self.exonic_status = value;
                     Ok(())
                 }
-                IntronRetentionValue::ExonSupportRatio => {
-                    self.exon_support_ratio = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfRetentions => {
-                    self.number_of_retentions = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfTrueRetentions => {
-                    self.number_of_true_retentions = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfPartialRetentions => {
-                    self.number_of_partial_retentions = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfFalseRetentions => {
-                    self.number_of_false_retentions = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfRecovers => {
-                    self.number_of_recovers = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfUnrecovers => {
-                    self.number_of_unrecovers = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfTrueRententionsSupported => {
-                    self.number_of_true_retentions_supported = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfPartialRententionsSupported => {
-                    self.number_of_partial_retentions_supported = value;
-                    Ok(())
-                }
-                IntronRetentionValue::NumberOfFalseRententionsSupported => {
-                    self.number_of_false_retentions_supported = value;
-                    Ok(())
-                }
-                IntronRetentionValue::RetentionLocation => {
-                    self.location_of_retention = value;
-                    Ok(())
-                }
-                IntronRetentionValue::RetentionAcceptorScore => {
-                    self.retention_acceptor_score = value;
-                    Ok(())
-                }
-                IntronRetentionValue::RetentionDonorScore => {
-                    self.retention_donor_score = value;
-                    Ok(())
-                }
-                IntronRetentionValue::IsRetentionInCds => {
-                    self.retention_in_cds = value;
-                    Ok(())
-                }
-                IntronRetentionValue::IsRetentionInUtr => {
-                    self.retention_in_utr = value;
-                    Ok(())
-                }
-                IntronRetentionValue::IsIntronRetainedInFrame => {
-                    self.is_intron_retained_in_frame = value;
-                    Ok(())
-                }
-                IntronRetentionValue::IsTogaIntron => {
-                    self.is_toga_intron = value;
+                IntronRetentionValue::IntronicStatus => {
+                    self.intronic_status = value;
                     Ok(())
                 }
             }
@@ -542,31 +458,22 @@ impl ModuleMap for IntronRetentionDescriptor {
         }
 
         insert!(intron_retention);
-        insert!(is_retention_supported);
-        insert!(is_retention_supported_map);
-        insert!(component_size);
-        insert!(ref_component_size);
+        insert!(retention_support_type);
+        insert!(number_of_retentions);
+        insert!(coords_of_retention);
+        insert!(location_of_retention);
+        insert!(retains_rt_intron);
+        insert!(has_rt_intron);
+        insert!(has_rt_intron_map);
+        insert!(is_intron_retained_in_frame);
+        insert!(retention_acceptor_score);
+        insert!(retention_donor_score);
+        insert!(ref_introns_component_size);
         insert!(query_component_size);
         insert!(component_retention_ratio);
         insert!(is_dirty_component);
-        insert!(intron_support_ratio);
-        insert!(exon_support_ratio);
-        insert!(number_of_retentions);
-        insert!(number_of_true_retentions);
-        insert!(number_of_partial_retentions);
-        insert!(number_of_false_retentions);
-        insert!(number_of_recovers);
-        insert!(number_of_unrecovers);
-        insert!(number_of_true_retentions_supported);
-        insert!(number_of_partial_retentions_supported);
-        insert!(number_of_false_retentions_supported);
-        insert!(location_of_retention);
-        insert!(retention_acceptor_score);
-        insert!(retention_donor_score);
-        insert!(retention_in_cds);
-        insert!(retention_in_utr);
-        insert!(is_intron_retained_in_frame);
-        insert!(is_toga_intron);
+        insert!(exonic_status);
+        insert!(intronic_status);
 
         Value::Object(map)
     }
@@ -582,58 +489,40 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             f,
             "{{
             is_intron_retention: {:?},
-            is_retention_supported: {:?},
-            is_retention_supported_map: {:?},
-            component_size: {:?},
-            ref_component_size: {:?},
+            retention_support_type: {:?},
+            number_of_retentions: {:?},
+            coords_of_retention: {:?},
+            location_of_retention: {:?},
+            is_intron_retained_in_frame: {:?},
+            retains_rt_intron: {:?},
+            has_rt_intron: {:?},
+            has_rt_intron_map: {:?},
+            retention_acceptor_score: {:?},
+            retention_donor_score: {:?},
+            ref_introns_component_size: {:?},
             query_component_size: {:?},
             component_retention_ratio: {:?},
             is_dirty_component: {:?},
-            intron_support_ratio: {:?},
-            exon_support_ratio: {:?},
-            number_of_retentions: {:?},
-            number_of_true_retentions: {:?},
-            number_of_partial_retentions: {:?},
-            number_of_false_retentions: {:?},
-            number_of_recovers: {:?},
-            number_of_unrecovers: {:?},
-            number_of_true_retentions_supported: {:?},
-            number_of_partial_retentions_supported: {:?},
-            number_of_false_retentions_supported: {:?},
-            retention_location: {:?},
-            retention_acceptor_score: {:?},
-            retention_donor_score: {:?},
-            is_retention_in_cds: {:?},
-            is_retention_in_utr: {:?},
-            is_intron_retained_in_frame: {:?},
-            is_toga_intron: {:?}
+            exonic_status: {:?},
+            intronic_status: {:?}
             }}",
             self.intron_retention,
-            self.is_retention_supported,
-            self.is_retention_supported_map,
-            self.component_size,
-            self.ref_component_size,
+            self.retention_support_type,
+            self.number_of_retentions,
+            self.coords_of_retention,
+            self.location_of_retention,
+            self.is_intron_retained_in_frame,
+            self.retains_rt_intron,
+            self.has_rt_intron,
+            self.has_rt_intron_map,
+            self.retention_acceptor_score,
+            self.retention_donor_score,
+            self.ref_introns_component_size,
             self.query_component_size,
             self.component_retention_ratio,
             self.is_dirty_component,
-            self.intron_support_ratio,
-            self.exon_support_ratio,
-            self.number_of_retentions,
-            self.number_of_true_retentions,
-            self.number_of_partial_retentions,
-            self.number_of_false_retentions,
-            self.number_of_recovers,
-            self.number_of_unrecovers,
-            self.number_of_true_retentions_supported,
-            self.number_of_partial_retentions_supported,
-            self.number_of_false_retentions_supported,
-            self.location_of_retention,
-            self.retention_acceptor_score,
-            self.retention_donor_score,
-            self.retention_in_cds,
-            self.retention_in_utr,
-            self.is_intron_retained_in_frame,
-            self.is_toga_intron
+            self.exonic_status,
+            self.intronic_status
         )
     }
 }
