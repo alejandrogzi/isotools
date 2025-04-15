@@ -170,24 +170,31 @@ fn process_component(
         };
 
         // INFO: not including NAG-derived introns bc they are already Splicing
-        if descriptor.is_toga_supported
-            || (descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
-                && descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
-            || (descriptor.max_ent_donor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD
-                && descriptor.max_ent_acceptor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD)
-        {
-            descriptor.support = SupportType::Splicing;
-        } else if (descriptor.seen as f64 / descriptor.spanned as f64)
-            >= INTRON_FREQUENCY_RECOVERY_THRESHOLD
-        {
-            if descriptor.is_rt_intron {
-                descriptor.support = SupportType::RT;
-            } else {
+        // WARN: strange TOGA supported RT introns -> s14	9965456	9968743
+        if descriptor.is_rt_intron {
+            if descriptor.is_toga_supported {
                 descriptor.support = SupportType::Splicing;
+            } else {
+                descriptor.support = SupportType::RT;
             }
         } else {
-            if descriptor.is_rt_intron {
-                descriptor.support = SupportType::RT;
+            if descriptor.is_toga_supported
+                || (descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
+                    && descriptor.splice_ai_acceptor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
+            {
+                descriptor.support = SupportType::Splicing;
+            } else if (descriptor.seen as f64 / descriptor.spanned as f64) // WARN: how do we deal with 1/2 (50%) cases?
+                >= INTRON_FREQUENCY_RECOVERY_THRESHOLD
+            {
+                descriptor.support = SupportType::Splicing;
+            } else if (descriptor.max_ent_donor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD
+                && descriptor.max_ent_acceptor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD)
+                && (descriptor.splice_ai_donor > 0.0 && descriptor.splice_ai_acceptor > 0.0)
+            {
+                // INFO: new branch for MaxEnt only -> not trusting it alone
+                // INFO: here we test if maxEnt is significant + if there is
+                // INFO: spliceAi signal [> 0.0]
+                descriptor.support = SupportType::Splicing;
             } else {
                 descriptor.support = SupportType::Unclear;
             }
