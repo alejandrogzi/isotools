@@ -1180,7 +1180,7 @@ impl IntronBucket {
         let mut chr = String::new();
         let mut strand = Strand::Forward;
 
-        let mut cds_start = 0;
+        let mut cds_start = u64::MAX;
         let mut cds_end = 0;
 
         if !toga.is_empty() {
@@ -1213,6 +1213,8 @@ impl IntronBucket {
                 } else {
                     let is_toga_supported = toga_introns.contains(ref_intron);
                     if is_toga_supported {
+                        // INFO: removing TOGA intron from the set
+                        // INFO: to allow later inserting of TOGA unique introns
                         toga_introns.remove(ref_intron);
                     }
 
@@ -1259,9 +1261,15 @@ impl IntronBucket {
                     introns.insert(ref_intron.clone(), stats);
                 }
             }
+        }
 
+        // INFO: counting spanned introns requires an additional loop,
+        // INFO: problem arises when an intron appears after k-reads
+        // INFO: without it have been seen already, leading to low and wrong
+        // INFO: counts
+        for read in &reads {
             for (intron, stats) in introns.iter_mut() {
-                if read.start <= intron.0 && read.end >= intron.1 {
+                if read.start <= intron.0 && intron.1 <= read.end {
                     stats.spanned += 1;
                 }
             }
@@ -1271,8 +1279,8 @@ impl IntronBucket {
         if !toga_introns.is_empty() {
             for toga_intron in toga_introns {
                 let stats = IntronPredStats {
-                    seen: 0,
-                    spanned: 0,
+                    seen: 0,    // INFO: is TOGA unique
+                    spanned: 0, // INFO: is TOGA unique
                     splice_ai_donor: 0.0,
                     splice_ai_acceptor: 0.0,
                     max_ent_donor: 0.0,
