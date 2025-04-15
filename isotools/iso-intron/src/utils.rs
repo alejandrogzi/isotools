@@ -113,14 +113,15 @@ impl ParallelCounter {
         (dirties, (dirties / components) * 100.0)
     }
 
-    /// Get the number of dirty items
+    /// Get the number of retentions
     ///
     /// # Example
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
+    /// counter.inc_retentions();
     ///
-    /// assert_eq!(counter.get_dirty(), 0);
+    /// assert_eq!(counter.get_retentions(), 1);
     /// ```
     pub fn inc_retentions(&self) {
         self.retentions.fetch_add(1, Ordering::Relaxed);
@@ -210,8 +211,8 @@ impl ParallelCollector for ParallelAccumulator {
 }
 
 impl ParallelAccumulator {
-    /// Number of fields in the accumulator
-    pub const NUM_FIELDS: usize = 4;
+    /// Number of fields in the accumulator of type DashSet<String>
+    pub const NUM_FIELDS: usize = 3;
 
     /// Get the number of retentions
     ///
@@ -245,16 +246,23 @@ impl ParallelAccumulator {
         &self,
         keep: Vec<String>,
         discard: Vec<String>,
+        review: Option<Vec<String>>,
         descriptor: HashMap<String, Box<dyn ModuleMap>>,
     ) {
         for item in keep {
-            self.retentions.insert(item);
+            self.non_retentions.insert(item);
         }
         for item in discard {
-            self.non_retentions.insert(item);
+            self.retentions.insert(item);
         }
         for (key, value) in descriptor {
             self.descriptor.insert(key, value);
+        }
+
+        if let Some(review) = review {
+            for item in review {
+                self.miscellaneous.insert(item);
+            }
         }
     }
 }
