@@ -1,3 +1,16 @@
+//! Core module for detecting intron retentions in a query set of reads
+//! Alejandro Gonzales-Irribarren, 2025
+//!
+//! This module contains the main function for detecting intron retentions
+//! and processing the components of reads and introns in parallel.
+//!
+//! In short, each read is checked for the presence of intron retentions
+//! or RT introns. If a read has a true intron retention, it is discarded.
+//! If a read has an RT intron, it is also discarded. The veracity of an
+//! 'intron' is determined by 'iso-classify', using machine-learning models,
+//! ab initio gene prediction, and other heuristics. The process is heavily
+//! parallelized to offer fast performance on large datasets.
+
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
 use packbed::{par_reader, record::Bed4};

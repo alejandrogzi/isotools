@@ -1,81 +1,51 @@
 //! Core module for detecting intron retentions in a query set of reads
+//! Alejandro Gonzales-Irribarren, 2025
 //!
+//! This module contains the main function for detecting intron retentions
+//! and processing the components of reads and introns in parallel.
 //!
-//! expected output type: HashMap/DashMap<ReadName, RetentionDescriptor>
-//! expected output structure: ReadName -> <T> where T: ModuleDescriptor
-//!     - ReadName is the name of the read
-//!     - <T> is a struct implementing ModuleDescriptor trait
-//!
-//! expected output example:
-//!     {
-//!        "read1": {
-//!           "intron_retention": true,
-//!           "retains_rt_intron": true,
-//!           "is_retention_supported": false,
-//!           "is_retention_supported_map": [false, false],
-//!           "intron_support_ratio": [0.23, 0.4],
-//!           "exon_support_ratio": [0.65, 0.43],
-//!           "number_of_retentions": 2,
-//!           "number_of_unsupported_retentions": 2,
-//!           "number_of_support_retentions": 0,
-//!           "location_of_retention": ["chr1:1000-2000", "chr1:3000-4000"],
-//!           "retention_in_cds": [false, true],
-//!           "retention_in_utr": [true, false],
-//!         }
-//!     }
+//! In short, each read is checked for the presence of intron retentions
+//! or RT introns. If a read has a true intron retention, it is discarded.
+//! If a read has an RT intron, it is also discarded. The veracity of an
+//! 'intron' is determined by 'iso-classify', using machine-learning models,
+//! ab initio gene prediction, and other heuristics. The process is heavily
+//! parallelized to offer fast performance on large datasets.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use hashbrown::{HashMap, HashSet};
-use log::{info, warn};
+use log::info;
 use packbed::record::IntronPosition;
-use packbed::{packbed, BedPackage, GenePred, IntronPred, RefGenePred};
+use packbed::{packbed, BedPackage, GenePred, IntronPred};
 use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::cli::Args;
-use crate::utils::{unpack_blacklist, write_results, ParallelAccumulator, ParallelCounter};
+use crate::utils::{unpack_blacklist, ParallelAccumulator, ParallelCounter};
 
 use config::{
-    get_progress_bar, IntronRetentionValue, ModuleDescriptor, ModuleMap, ModuleType, OverlapType,
-    INTRON_RETENTION_RECOVERY_THRESHOLD, RETENTION_RATIO_THRESHOLD, SCALE,
-    SPLICE_AI_SCORE_RECOVERY_THRESHOLD,
+    get_progress_bar, par_write_results, write_descriptor, IntronRetentionValue, ModuleDescriptor,
+    ModuleMap, ModuleType, OverlapType, INTRON_RETENTIONS, INTRON_RETENTION_DESCRIPTOR,
+    INTRON_RETENTION_FREE, INTRON_RETENTION_REVIEW, RETENTION_RATIO_THRESHOLD, SCALE,
 };
 
-/// Detects intron retentions in an query set of reads
-/// based on a provided reference set.
+/// Detects intron retentions in a query set of reads
+///
+/// # Arguments
+///
+/// * `args` - The command line arguments
+///
+/// # Returns
+///
+/// * `Result<()>` - The result of the operation
 ///
 /// # Example
-/// ```ignore
-/// use iso_intron::cli::Args;
-/// use iso_intron::core::detect_intron_retentions;
 ///
-/// let args = Args {
-///   refs: vec![],
-///   query: vec![],
-///   blacklist: vec![],
-///   plot: true,
-///   threads: 4,
-/// };
-///
-/// detect_intron_retentions(args);
-/// ```
-///
-/// # Description
-///
-/// Entry point for detecting intron retentions in a query set of reads.
-/// The function packs the reference and query transcripts into a collection
-/// and processes each bucket of overlapping transcripts to identify
-/// retained introns. Here we interpret intron retentions as the complete
-/// exon overlap with a reference intron:
-///
-/// ```text
-///     5'                          3'
-///     XXXXX-----XXXXXX--------XXXXXX
-///                     ^^^^^^^^
-///     XXXXX-----XXXXXXXXXXXXXXXXXXXX
+/// ```rust, no_run
+/// let args = Args::new();
+/// detect_intron_retentions(args).unwrap();
 /// ```
 pub fn detect_intron_retentions(args: Args) -> Result<()> {
     info!("Detecting intron retentions...");
@@ -102,7 +72,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
         let binding = HashSet::new();
         let banned = blacklist.get(&chr).unwrap_or(&binding);
 
-        process_components(components, banned, &accumulator, &counter);
+        process_components(components, banned, &accumulator, &counter, args.recover);
 
         pb.inc(1);
     });
@@ -113,23 +83,60 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
         accumulator.num_retentions()
     );
 
-    write_results(&accumulator);
+    write_descriptor(&accumulator.descriptor, INTRON_RETENTION_DESCRIPTOR);
+    par_write_results(
+        accumulator,
+        vec![
+            PathBuf::from(INTRON_RETENTIONS),
+            PathBuf::from(INTRON_RETENTION_FREE),
+            PathBuf::from(INTRON_RETENTION_REVIEW),
+        ],
+        None,
+    );
 
     Ok(())
 }
 
+/// Processes the components of reads and introns in parallel
+///
+/// # Arguments
+///
+/// * `components` - The components to process per chromosome
+/// * `banned` - the set of banned introns for the chromosome
+/// * `accumulator` - the accumulator to use
+/// * `counter` - The counter to use
+/// * `recover` - Indicates if the component should be recovered
+///
+/// # Returns
+///
+/// * None
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let components = vec![];
+/// let banned = HashSet::new();
+/// let accumulator = ParallelAccumulator::default();
+/// let counter = ParallelCounter::default();
+///
+/// process_components(components, &banned, &accumulator, &counter, false);
+///
+/// assert_eq!(accumulator.num_retentions(), 0);
+/// assert_eq!(counter.num_components(), 0);
+/// ```
 #[inline(always)]
 fn process_components(
     components: Vec<Box<dyn BedPackage>>,
     banned: &HashSet<(u64, u64)>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
+    recover: bool,
 ) {
     components.into_par_iter().for_each(|mut comp| {
         let comp = comp
             .as_any_mut()
             .downcast_mut::<(Vec<IntronPred>, Vec<GenePred>)>()
-            .expect("ERROR: Could not downcast to IntronPred!");
+            .expect("ERROR: Could not downcast to IntronPred and GenePred!");
 
         // if comp is len 1 OR comp is len <=5 and no TOGA, continue
         // if comp.1.len() <= 5 {
@@ -137,117 +144,134 @@ fn process_components(
         //     return;
         // }
 
-        let (keep, discard) = process_component(comp, banned, counter);
-
-        discard.into_iter().for_each(|r| {
-            accumulator.retentions.insert(r);
-        });
-
-        keep.into_iter().for_each(|nr| {
-            accumulator.non_retentions.insert(nr);
-        });
+        let (keep, discard, review, descriptor) = process_component(comp, banned, counter, recover);
+        accumulator.add(keep, discard, review, descriptor);
     });
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum IntronModuleReadCategory {
-    RT,      // RT-intron
-    Unclear, // Artifact
-    Clean,   // None
-    IR,      // Retention
-}
-
+/// IntronModuleReadAction enum
+///
+/// This enum is used to determine the action to take for a read
+///
+/// * Discard: The read has an RT intron and should be discarded
+/// * Keep: The read does not have an RT intron or retains anything and should be kept
+/// * Unclear: The read has an unclear status and should be reviewed
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let action = IntronModuleReadAction::Discard;
+///
+/// match action {
+///     IntronModuleReadAction::Discard => println!("Discarding read"),
+///     IntronModuleReadAction::Keep => println!("Keeping read"),
+///     IntronModuleReadAction::Unclear => println!("Unclear read"),
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IntronModuleReadAction {
     // Review,  // Unclear
     Discard, // RT-intron
     Keep,
+    Unclear, // Artifact
 }
 
+/// Display trait for IntronModuleReadAction
+///
+/// This trait is used to display the action as a string
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let action = IntronModuleReadAction::Discard;
+///
+/// println!("{}", action);
+/// ```
+impl std::fmt::Display for IntronModuleReadAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntronModuleReadAction::Discard => write!(f, "DISCARD"),
+            IntronModuleReadAction::Keep => write!(f, "KEEP"),
+            IntronModuleReadAction::Unclear => write!(f, "UNCLEAR"),
+        }
+    }
+}
+
+/// Processes a component of reads and introns
+///
+/// # Arguments
+///
+/// * `comp` - The component to process
+/// * `ban` - The set of banned introns
+/// * `counter` - The counter to use
+/// * `recover` - Indicates if the component should be recovered
+///
+/// # Returns
+///
+/// * `Vec<String>` - The vector of reads to keep
+/// * `Vec<String>` - The vector of reads to discard
+/// * `Option<Vec<String>>` - The vector of reads to review
+/// * `HashMap<String, Box<dyn ModuleMap>>` - The descriptor to fill up
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let mut comp = (vec![], vec![]);
+/// let ban = HashSet::new();
+/// let counter = ParallelCounter::default();
+/// let recover = false;
+///
+/// let (keep, discard, review, descriptor) = process_component(&mut comp, &ban, &counter, recover);
+///
+/// assert_eq!(keep.len(), 0);
+/// assert_eq!(discard.len(), 0);
+/// assert_eq!(review, None);
+/// assert_eq!(descriptor.len(), 0);
+/// ```
 #[inline(always)]
 pub fn process_component(
     comp: &mut (Vec<IntronPred>, Vec<GenePred>),
     ban: &HashSet<(u64, u64)>,
     counter: &ParallelCounter,
+    recover: bool,
 ) -> (
     Vec<String>,
     Vec<String>,
-    // HashMap<String, Box<dyn ModuleMap>>,
+    Option<Vec<String>>,
+    HashMap<String, Box<dyn ModuleMap>>,
 ) {
+    let mut descriptor = HashMap::new();
+
     let mut keep = Vec::new();
     let mut discard = Vec::new();
 
     let introns = &comp.0;
     let reads = &comp.1;
 
-    // INFO: convert Vec<IntronPred> into HashMap<(u64, u64), IntronPred>
-    let intron_map = introns
+    let (mut count, totals) = (0_f32, reads.len() as f32);
+
+    // INFO: convert Vec<IntronPred> into BTreeMap<(u64, u64), IntronPred>
+    // WARN: conserving order is important to avoid early false breaks!
+    let ref_introns = introns
         .iter()
         .map(|intron| ((intron.start, intron.end), intron))
-        .collect::<HashMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
 
     // INFO: for every read -> see which introns are retained and which the read has!
     for read in reads {
-        // INFO: Determine if read has RT introns
-        let read_introns = read.get_introns();
-        let mut intronic_status = IntronModuleReadAction::Keep;
-        for intron in read_introns {
-            let hit = intron_map
-                .get(&intron)
-                .expect("ERROR: Intron not found, this is likely a bug!");
+        let mut schema = RetentionSchema::default();
 
-            match hit.stats.support {
-                config::SupportType::RT => {
-                    // INFO: if read is RT, discard
-                    intronic_status = IntronModuleReadAction::Discard;
-                }
-                config::SupportType::Splicing | config::SupportType::Unclear => {} // INFO: Do nothing
-            };
+        schema.ref_introns_component_size = Value::Number(introns.len().into());
+        schema.query_component_size = Value::Number(reads.len().into());
 
-            if intronic_status == IntronModuleReadAction::Discard {
-                break;
-            }
+        detect_rt_intron(read, ban, &ref_introns, &mut schema);
+        detect_retention(read, &ref_introns, &mut schema);
+
+        if schema.intron_retention {
+            count += 1.0;
         }
 
-        let read_exons = read.get_exons();
-        let mut exonic_status = IntronModuleReadAction::Keep;
-        for exon in read_exons {
-            let exon_start = exon.0;
-            let exon_end = exon.1;
-
-            for (intron, stats) in intron_map.iter() {
-                let intron_start = intron.0;
-                let intron_end = intron.1;
-
-                // INFO: early exit to avoid unnecessary checks
-                if intron_end < exon_start {
-                    break;
-                }
-
-                if exon_start < intron_start && intron_end < exon_end {
-                    match stats.stats.support {
-                        config::SupportType::RT => {} // INFO: retaining a false intron is not an IR, do nothing
-                        config::SupportType::Unclear | config::SupportType::Splicing => {
-                            match stats.stats.intron_position {
-                                IntronPosition::CDS => {
-                                    // INFO: if intron in frame keep read --> splice variant producing a longer protein
-                                    // INFO: else do not annotate read (exon structure is flawed)
-                                    if !stats.stats.is_in_frame {
-                                        exonic_status = IntronModuleReadAction::Discard;
-                                    }
-                                }
-                                // INFO: keep read --> variant would not affect CDS
-                                IntronPosition::UTR
-                                | IntronPosition::Unknown
-                                | IntronPosition::Mixed => {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        match (intronic_status, exonic_status) {
+        match (schema.intronic_status, schema.exonic_status) {
             (IntronModuleReadAction::Discard, _) | (_, IntronModuleReadAction::Discard) => {
                 counter.inc_retentions();
                 discard.push(read.line().to_owned());
@@ -256,623 +280,519 @@ pub fn process_component(
                 keep.push(read.line().to_owned());
             }
         };
+
+        schema.difuse(&mut descriptor, read);
     }
 
-    (keep, discard)
+    let ratio = count / totals;
+
+    // INFO: second pass to fill up the descriptor with comp ratio
+    descriptor.iter_mut().for_each(|(_, handle)| {
+        handle
+            .set_value(
+                Box::new(IntronRetentionValue::ComponentRetentionRatio),
+                serde_json::json!(ratio),
+            )
+            .ok();
+    });
+
+    if recover {
+        if ratio > RETENTION_RATIO_THRESHOLD {
+            let review = recover_component(&mut keep, &mut discard, reads, &mut descriptor);
+            return (keep, discard, Some(review), descriptor);
+        }
+    }
+
+    (keep, discard, None, descriptor)
 }
 
-// #[inline(always)]
-// pub fn process_component(
-//     comp: &mut Vec<GenePred>,
-//     ban: &HashSet<(u64, u64)>,
-//     plot: bool,
-//     recover: bool,
-//     counter: &ParallelCounter,
-// ) -> (
-//     Vec<String>,
-//     Vec<String>,
-//     Option<String>,
-//     HashMap<String, Box<dyn ModuleMap>>,
-//     bool,
-// ) {
-//     let mut hits = Vec::new();
-//     let mut pass = Vec::new();
-//     let mut blocks = if plot { Some(String::new()) } else { None };
-
-//     let mut tmp_dirt = Vec::new();
-//     let mut exon_owners = BTreeSet::new();
-//     let mut introns_owned = BTreeMap::new();
-
-//     let mut descriptor = HashMap::new();
-
-//     let refs = comp.0;
-//     let queries = comp.1;
-
-//     let ref_size = refs.reads.len();
-//     let query_size = queries.len();
-//     let comp_size = ref_size + query_size;
-//     let (mut count, totals) = (0_f32, queries.len() as f32);
-
-//     for query in queries.iter() {
-//         descriptor.insert(
-//             query.name.clone(),
-//             ModuleDescriptor::with_schema(ModuleType::IntronRetention),
-//         );
-
-//         let query = Arc::new(query);
-//         let mut hit: bool = false;
-
-//         let five_utr = query.get_five_utr();
-//         let three_utr = query.get_three_utr();
-
-//         let mut number_of_retentions = 0_u32;
-//         let mut number_of_true_retentions = 0_u32;
-//         let mut number_of_partial_retentions = 0_u32;
-//         let mut number_of_false_retentions = 0_u32;
-
-//         let mut location_of_retentions = Vec::new();
-//         let mut retention_in_cds = Vec::new();
-//         let mut retention_in_utr = Vec::new();
-//         let mut retention_in_frame = Vec::new();
-//         let mut donor_scores = Vec::new();
-//         let mut acceptor_scores = Vec::new();
-
-//         for exon in &query.exons {
-//             for intron in &refs.introns {
-//                 if exon.1 < intron.0 {
-//                     break;
-//                 }
-
-//                 if ban.contains(intron) || ban.contains(&(SCALE - intron.1, SCALE - intron.0)) {
-//                     continue;
-//                 }
-
-//                 if exon.0 < intron.0 && exon.1 > intron.1 {
-//                     if !hit {
-//                         count += 1.0;
-//                         tmp_dirt.push(query.clone());
-//                     }
-
-//                     hit = true;
-//                     exon_owners.insert((exon.0, exon.1));
-//                     introns_owned
-//                         .entry((intron.0, intron.1))
-//                         .or_insert((0.0, 0.0));
-
-//                     number_of_retentions += 1;
-
-//                     if (five_utr.0 <= intron.0 && intron.0 <= five_utr.1)
-//                         || (three_utr.0 <= intron.1 && intron.1 <= three_utr.1)
-//                     {
-//                         retention_in_cds.push(false);
-//                         retention_in_utr.push(true);
-//                     } else {
-//                         retention_in_cds.push(true);
-//                         retention_in_utr.push(false);
-//                     }
-
-//                     if (intron.1 - intron.0) % 3 == 0 {
-//                         retention_in_frame.push(true);
-//                     } else {
-//                         retention_in_frame.push(false);
-//                     }
-
-//                     match query.strand {
-//                         '+' => {
-//                             location_of_retentions
-//                                 .push(format!("{}:{}-{}", query.chrom, intron.0, intron.1,));
-
-//                             if plot {
-//                                 Bed4::from(
-//                                     query.chrom.clone(),
-//                                     intron.0 - 1,
-//                                     intron.1 + 1,
-//                                     query.name.clone(),
-//                                 )
-//                                 .send(&mut blocks.as_mut().unwrap())
-//                             }
-//                         }
-//                         '-' => {
-//                             location_of_retentions.push(format!(
-//                                 "{}:{}-{}",
-//                                 query.chrom,
-//                                 SCALE - intron.1,
-//                                 SCALE - intron.0,
-//                             ));
-
-//                             if plot {
-//                                 Bed4::from(
-//                                     query.chrom.clone(),
-//                                     SCALE - intron.1 - 1,
-//                                     SCALE - intron.0 + 1,
-//                                     query.name.clone(),
-//                                 )
-//                                 .send(&mut blocks.as_mut().unwrap())
-//                             }
-//                         }
-//                         _ => panic!("Invalid strand"),
-//                     }
-
-//                     if let Some(scores) = splice_scores {
-//                         if let Some(donor_score_map) = scores.0.as_ref() {
-//                             let acceptor_score_map = scores.1.as_ref().unwrap();
-
-//                             let (intron_donor, intron_acceptor) = match query.strand {
-//                                 // donor [-1 to match bigtools coords]
-//                                 '+' => (intron.0 as usize - 1, intron.1 as usize),
-//                                 // acceptor [-1 to match bigtools coords]
-//                                 '-' => {
-//                                     ((SCALE - intron.0) as usize, (SCALE - intron.1) as usize - 1)
-//                                 }
-//                                 _ => panic!("ERROR: Invalid strand in query component!"),
-//                             };
-
-//                             let (donor_score, acceptor_score) = (
-//                                 donor_score_map
-//                                     .get(&intron_donor)
-//                                     .map(|r| *r)
-//                                     .unwrap_or(0.0),
-//                                 acceptor_score_map
-//                                     .get(&intron_acceptor)
-//                                     .map(|r| *r)
-//                                     .unwrap_or(0.0),
-//                             );
-
-//                             donor_scores.push(donor_score);
-//                             acceptor_scores.push(acceptor_score);
-
-//                             if donor_score >= 0.02 && acceptor_score >= 0.02 {
-//                                 number_of_true_retentions += 1;
-//                             } else if donor_score >= 0.01 && donor_score >= 0.01 {
-//                                 number_of_partial_retentions += 1;
-//                             } else {
-//                                 number_of_false_retentions += 1;
-//                             }
-
-//                             introns_owned.entry((intron.0, intron.1)).and_modify(|e| {
-//                                 *e = (donor_score, acceptor_score);
-//                             });
-//                         }
-//                     }
-
-//                     continue;
-//                 } else {
-//                     continue;
-//                 }
-//             }
-//         }
-
-//         let handle = descriptor.get_mut(&query.name).unwrap();
-
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::ComponentSize),
-//                 Value::Number(comp_size.into()),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::RefComponentSize),
-//                 Value::Number(ref_size.into()),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::QueryComponentSize),
-//                 Value::Number(query_size.into()),
-//             )
-//             .ok();
-
-//         if hit {
-//             let line = query.line().to_owned();
-//             hits.push(line);
-
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::IsIntronRetention),
-//                     Value::Bool(true),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::NumberOfRetentions),
-//                     Value::Number(number_of_retentions.into()),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::RetentionLocation),
-//                     Value::Array(
-//                         location_of_retentions
-//                             .into_iter()
-//                             .map(Value::String)
-//                             .collect(),
-//                     ),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::IsRetentionInCds),
-//                     Value::Array(retention_in_cds.into_iter().map(Value::Bool).collect()),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::IsRetentionInUtr),
-//                     Value::Array(retention_in_utr.into_iter().map(Value::Bool).collect()),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::IsIntronRetainedInFrame),
-//                     Value::Array(retention_in_frame.into_iter().map(Value::Bool).collect()),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::RetentionDonorScore),
-//                     serde_json::json!(donor_scores),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::RetentionAcceptorScore),
-//                     serde_json::json!(acceptor_scores),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::NumberOfTrueRetentions),
-//                     Value::Number(number_of_true_retentions.into()),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::NumberOfPartialRetentions),
-//                     Value::Number(number_of_partial_retentions.into()),
-//                 )
-//                 .ok();
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::NumberOfFalseRetentions),
-//                     Value::Number(number_of_false_retentions.into()),
-//                 )
-//                 .ok();
-//         } else {
-//             let line = query.line().to_owned();
-//             pass.push(line);
-//         }
-//     }
-
-//     // after classying reads, we check bucket frequencies
-//     // of the total reads in the bucket, we consider the bucket
-//     // to be dirty and return the reads for recovery if args.recover
-//     let ratio = count / totals;
-//     let mut is_dirty = false;
-//     if recover {
-//         if ratio >= RETENTION_RATIO_THRESHOLD {
-//             // log::warn!("Bucket {:?} is dirty -> {}", refs.reads, ratio);
-//             let dirt = tmp_dirt;
-//             is_dirty = true;
-
-//             let new_passes = recover_from_dirt(
-//                 dirt,
-//                 exon_owners,
-//                 &introns_owned,
-//                 &refs,
-//                 &mut descriptor,
-//                 ratio,
-//                 toga_introns,
-//                 counter,
-//             );
-//             new_passes.iter().for_each(|p| {
-//                 hits.retain(|x| x != p);
-//                 pass.push(p.to_owned());
-//             });
-//         } else {
-//             for query in queries.iter() {
-//                 let handle = descriptor.get_mut(&query.name).unwrap();
-
-//                 handle
-//                     .set_value(
-//                         Box::new(IntronRetentionValue::ComponentRetentionRatio),
-//                         serde_json::json!(ratio),
-//                     )
-//                     .ok();
-//             }
-//         }
-//     }
-
-//     // dbg!(&descriptor);
-
-//     (hits, pass, blocks, descriptor, is_dirty)
-// }
-
-// pub fn recover_from_dirt(
-//     dirt: Vec<Arc<&GenePred>>,
-//     exon_owners: BTreeSet<(u64, u64)>,
-//     introns_owned: &BTreeMap<(u64, u64), (f32, f32)>,
-//     refs: &RefGenePred,
-//     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
-//     ratio: f32,
-//     toga_introns: &Option<&HashSet<(u64, u64)>>,
-//     counter: &ParallelCounter,
-// ) -> Vec<String> {
-//     let mut local_passes = vec![];
-//     let mut owner_ratios = HashMap::new();
-//     let mut owned_ratios = HashMap::new();
-
-//     let mut is_toga_contained = false;
-
-//     // exons: 1) build ratios
-//     for owner in exon_owners.iter() {
-//         let mut background = 0_f32;
-//         let mut count = 0_f32;
-//         for read in refs.reads.iter() {
-//             let ref_exons = &read.exons;
-//             let (owner_start, owner_end) = owner;
-
-//             if ref_exons.contains(&(*owner_start, *owner_end)) {
-//                 count += 1.0;
-//             }
-
-//             // any read that spans the owner is considered background
-//             if (read.start < *owner_start) && (*owner_end < read.end) {
-//                 background += 1.0;
-//             }
-//         }
-
-//         let ratio = count / background;
-//         owner_ratios.insert(owner, ratio);
-//     }
-
-//     // introns: 1) build ratios and 2) remove introns with low ratios
-//     let mut supported_introns = vec![];
-//     for (owned, score) in introns_owned.iter() {
-//         let mut background = 0.0;
-//         let mut count = 0.0;
-//         for read in refs.reads.iter() {
-//             let ref_introns = read.get_introns();
-//             let (owned_start, owned_end) = owned;
-
-//             if ref_introns.contains(&(*owned_start, *owned_end)) {
-//                 count += 1.0;
-//             }
-
-//             // any read that spans the owned intron is considered background
-//             if (read.start < *owned_start) && (*owned_end < read.end) {
-//                 background += 1.0;
-//             }
-//         }
-
-//         let ratio = count / background;
-//         owned_ratios.insert(owned, ratio);
-
-//         let donor_score = score.0;
-//         let acceptor_score = score.1;
-
-//         is_toga_contained = toga_introns.map(|t| t.contains(owned)).unwrap_or(false);
-
-//         // if the intron is supported by the majority of reads (>=50%) or
-//         // the splice scores are high enough, we consider the intron to be
-//         // supported and consider it a true intron
-//         if (ratio >= INTRON_RETENTION_RECOVERY_THRESHOLD)
-//             || (donor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
-//                 && acceptor_score >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
-//             || is_toga_contained
-//         {
-//             if donor_score >= 0.02 && acceptor_score >= 0.02 {
-//                 counter.inc_true_retentions();
-//             } else if donor_score >= 0.01 && donor_score >= 0.01 {
-//                 counter.inc_partial_retentions();
-//             } else {
-//                 // if refs.strand == '+' {
-//                 //     dbg!(
-//                 //         &dirt[0].chrom,
-//                 //         owned.0,
-//                 //         owned.1,
-//                 //         donor_score,
-//                 //         acceptor_score,
-//                 //         ratio
-//                 //     )
-//                 // } else {
-//                 //     dbg!(
-//                 //         &dirt[0].chrom,
-//                 //         SCALE - owned.1,
-//                 //         SCALE - owned.0,
-//                 //         donor_score,
-//                 //         acceptor_score,
-//                 //         ratio
-//                 //     )
-//                 // };
-//                 counter.inc_false_retentions();
-//             }
-
-//             supported_introns.push(owned);
-//         }
-//     }
-
-//     for read in dirt.clone().iter_mut() {
-//         let handle = descriptor.get_mut(&read.name).unwrap();
-
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::IsDirtyComponent),
-//                 Value::Bool(true),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::ComponentRetentionRatio),
-//                 serde_json::json!(ratio),
-//             )
-//             .ok();
-
-//         let mut number_of_unsupported_retentions = 0;
-//         let mut number_of_supported_retentions = 0;
-//         let mut number_of_read_false_supported_retentions = 0;
-//         let mut number_of_read_partial_supported_retentions = 0;
-//         let mut number_of_read_true_supported_retentions = 0;
-
-//         let mut intron_support_ratio = vec![];
-//         let mut exon_support_ratio = vec![];
-//         let mut is_retention_supported_map = vec![];
-
-//         for exon in &read.exons {
-//             for (intron, score) in introns_owned.iter() {
-//                 if exon.1 < intron.0 {
-//                     break;
-//                 }
-
-//                 if exon.0 < intron.0 && intron.1 < exon.1 {
-//                     intron_support_ratio.push(
-//                         owned_ratios
-//                             .get(intron)
-//                             .expect("ERROR: Intron not found in intron_owned_ratios"),
-//                     );
-//                     exon_support_ratio.push(
-//                         owner_ratios
-//                             .get(exon)
-//                             .expect("ERROR: Exon not found in exon_owner_ratios"),
-//                     );
-
-//                     if supported_introns.contains(&intron) {
-//                         // exon eats a 'likely' real intron, fill up the following descriptors:
-//                         // unrecover,
-//                         // is_retention_supported_map
-//                         number_of_supported_retentions += 1;
-//                         is_retention_supported_map.push(true);
-
-//                         let donor_score = score.0;
-//                         let acceptor_score = score.1;
-
-//                         if donor_score >= 0.02 && acceptor_score >= 0.02 {
-//                             number_of_read_true_supported_retentions += 1;
-//                         } else if donor_score >= 0.01 && donor_score >= 0.01 {
-//                             number_of_read_partial_supported_retentions += 1;
-//                         } else {
-//                             number_of_read_false_supported_retentions += 1;
-//                         }
-//                     } else {
-//                         // exon eats a 'likely' false intron, fill up the following descriptors:
-//                         // is_retention_supported_map
-//                         number_of_unsupported_retentions += 1;
-//                         is_retention_supported_map.push(false);
-//                     }
-//                 }
-//             }
-//         }
-
-//         if number_of_supported_retentions < 1
-//             && number_of_unsupported_retentions + number_of_supported_retentions > 0
-//         {
-//             local_passes.push(read.line().to_owned());
-
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::IsRetentionSupported),
-//                     serde_json::json!(false),
-//                 )
-//                 .ok();
-//         } else {
-//             handle
-//                 .set_value(
-//                     Box::new(IntronRetentionValue::IsRetentionSupported),
-//                     serde_json::json!(true),
-//                 )
-//                 .ok();
-//         }
-
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::NumberOfUnrecovers),
-//                 serde_json::json!(number_of_supported_retentions),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::NumberOfRecovers),
-//                 serde_json::json!(number_of_unsupported_retentions),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::IntronSupportRatio),
-//                 serde_json::json!(intron_support_ratio),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::ExonSupportRatio),
-//                 serde_json::json!(exon_support_ratio),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::IsRetentionSupportedMap),
-//                 serde_json::json!(is_retention_supported_map),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::NumberOfFalseRententionsSupported),
-//                 serde_json::json!(number_of_read_false_supported_retentions),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::NumberOfTrueRententionsSupported),
-//                 serde_json::json!(number_of_read_true_supported_retentions),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::NumberOfPartialRententionsSupported),
-//                 serde_json::json!(number_of_read_partial_supported_retentions),
-//             )
-//             .ok();
-//         handle
-//             .set_value(
-//                 Box::new(IntronRetentionValue::IsTogaIntron),
-//                 serde_json::json!(is_toga_contained),
-//             )
-//             .ok();
-//     }
-
-//     local_passes
-// }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use std::io::Write;
-//     use tempfile;
-
-//     #[test]
-//     fn test_detection_fn_with_tempfile() {
-//         let mut file = tempfile::NamedTempFile::new().unwrap();
-//         let path = file.path().to_path_buf();
-//         write!(
-//             file,
-//             "s1/t778845/t804002/tm54164U_210309_085211/65275776/ccs_PerID0.996_5Clip0_3Clip0_PolyA274_PolyARead275/t60/t-/t778845/t804002/t255,0,0/t14/t1268,142,88,200,253,203,254,167,120,142,218,197,132,302/t0,14396,14736,14943,16461,16846,17598,18073,18511,18890,20330,21290,22627,24855"
-//         ).unwrap();
-
-//         write!(
-//             file,
-//             "s1/t778870/t803968/tm54164U_210309_085211/92276372/ccs_PerID1.000_5Clip0_3Clip0_PolyA71_PolyARead72/t60/t-/t778870/t803968/t255,0,0/t11/t1243,142,88,200,253,1006,167,218,197,132,268/t0,14371,14711,14918,16436,16821,18048,20305,21265,22602,24830"
-//         ).unwrap();
-
-//         let args = Args {
-//             refs: [path.clone()].to_vec(),
-//             query: [path].to_vec(),
-//             threads: 1,
-//             blacklist: Vec::new(),
-//             plot: false,
-//             recover: false,
-//             splice_scores: Some(std::path::PathBuf::new()),
-//             toga: None,
-//         };
-
-//         assert!(detect_intron_retentions(args).is_ok());
-//     }
-// }
+/// Recovers the component by moving reads from discard to review
+/// if the retention ratio is above the threshold
+///
+/// # Arguments
+///
+/// * `keep` - The vector of reads to keep
+/// * `discard` - The vector of reads to discard
+/// * `reads` - The vector of reads to process
+/// * `descriptor` - The descriptor to fill up
+///
+/// # Returns
+///
+/// * `Vec<String>` - The vector of reads to review
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let mut keep = vec![];
+/// let mut discard = vec![];
+/// let reads = vec![];
+/// let mut descriptor = HashMap::new();
+///
+/// let review = recover_component(&mut keep, &mut discard, &reads, &mut descriptor);
+///
+/// assert_eq!(review.len(), 0);
+/// ```
+fn recover_component(
+    keep: &mut Vec<String>,
+    discard: &mut Vec<String>,
+    reads: &Vec<GenePred>,
+    descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
+) -> Vec<String> {
+    let mut review = vec![];
+
+    let k = keep.drain(..);
+    let d = discard.drain(..);
+
+    review.extend(k);
+    review.extend(d);
+
+    reads.iter().for_each(|read| {
+        let handle = descriptor.get_mut(&read.name).unwrap();
+
+        handle
+            .set_value(
+                Box::new(IntronRetentionValue::IsDirtyComponent),
+                serde_json::json!(true),
+            )
+            .ok();
+    });
+
+    return review;
+}
+
+/// RetentionSchema struct
+///
+/// This struct is used to store the retention schema for a read.
+/// Mimics IntronRetentionValue enum and fields of IntronModuleDescriptor
+///
+/// # Fields
+///
+/// * `intron_retention`: bool - Indicates if the read has an intron retention
+/// * `retention_support_type`: Vec<Value> - The support type of the retention
+/// * `number_of_retentions`: Value - The number of retentions
+/// * `coords_of_retention`: Vec<Value> - The coordinates of the retention
+/// * `location_of_retention`: Vec<Value> - The location of the retention
+/// * `is_intron_retained_in_frame`: Vec<Value> - Indicates if the retention is in frame
+/// * `retains_rt_intron`: Value - Indicates if the retention retains an RT intron
+/// * `retains_rt_map`: Vec<Value> - The map of the retained RT intron
+/// * `has_rt_intron`: Value - Indicates if the read has an RT intron
+/// * `has_rt_intron_map`: Vec<Value> - The map of the RT intron
+/// * `retention_acceptor_score`: Vec<Value> - The acceptor score of the retention
+/// * `retention_donor_score`: Vec<Value> - The donor score of the retention
+/// * `ref_introns_component_size`: Value - The size of the reference introns component
+/// * `query_component_size`: Value - The size of the query component
+/// * `component_retention_ratio`: Value - The retention ratio of the component
+/// * `is_dirty_component`: Value - Indicates if the component is dirty
+/// * `exonic_status`: IntronModuleReadAction - The exonic status of the read
+/// * `intronic_status`: IntronModuleReadAction - The intronic status of the read
+struct RetentionSchema {
+    pub intron_retention: bool,
+    pub retention_support_type: Vec<Value>,
+    pub number_of_retentions: Value,
+    pub coords_of_retention: Vec<Value>,
+    pub location_of_retention: Vec<Value>,
+    pub is_intron_retained_in_frame: Vec<Value>,
+    pub retains_rt_intron: Value,
+    pub retains_rt_map: Vec<Value>,
+    pub has_rt_intron: Value,
+    pub has_rt_intron_map: Vec<Value>,
+    pub retention_acceptor_score: Vec<Value>,
+    pub retention_donor_score: Vec<Value>,
+    pub ref_introns_component_size: Value,
+    pub query_component_size: Value,
+    pub component_retention_ratio: Value,
+    pub is_dirty_component: Value,
+    pub exonic_status: IntronModuleReadAction,
+    pub intronic_status: IntronModuleReadAction,
+}
+
+impl RetentionSchema {
+    /// Fills up the descriptor with the values from the schema
+    ///
+    /// # Arguments
+    ///
+    /// * `descriptor` - The descriptor to fill up
+    /// * `read` - The read to fill up the descriptor with
+    ///
+    /// # Returns
+    ///
+    /// * None
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let mut descriptor = HashMap::new();
+    /// let read = GenePred::new();
+    ///
+    /// schema.difuse(&mut descriptor, &read);
+    /// ```
+    fn difuse(&self, descriptor: &mut HashMap<String, Box<dyn ModuleMap>>, read: &GenePred) {
+        descriptor.insert(
+            read.name.clone(),
+            ModuleDescriptor::with_schema(ModuleType::IntronRetention),
+        );
+        let handle = descriptor.get_mut(&read.name).unwrap();
+
+        for (field, value) in self.as_vals() {
+            handle.set_value(Box::new(field), value).ok();
+        }
+    }
+
+    /// Converts the schema into an iterable collection
+    ///
+    /// # Returns
+    ///
+    /// * Vec<(IntronRetentionValue, Value)> - The vector of tuples
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let schema = RetentionSchema::default();
+    ///
+    /// let vals = schema.as_vals();
+    ///
+    /// for (field, value) in vals {
+    ///     println!("{}: {}", field, value);
+    /// }
+    /// ```
+    pub fn as_vals(&self) -> Vec<(IntronRetentionValue, Value)> {
+        vec![
+            (
+                IntronRetentionValue::IsIntronRetention,
+                serde_json::json!(self.intron_retention),
+            ),
+            (
+                IntronRetentionValue::RetentionSupportType,
+                Value::Array(self.retention_support_type.clone()),
+            ),
+            (
+                IntronRetentionValue::NumberOfRetentions,
+                self.number_of_retentions.clone(),
+            ),
+            (
+                IntronRetentionValue::RetentionCoords,
+                Value::Array(self.coords_of_retention.clone()),
+            ),
+            (
+                IntronRetentionValue::RetentionLocation,
+                Value::Array(self.location_of_retention.clone()),
+            ),
+            (
+                IntronRetentionValue::IsIntronRetainedInFrame,
+                Value::Array(self.is_intron_retained_in_frame.clone()),
+            ),
+            (
+                IntronRetentionValue::RetainsRtIntron,
+                self.retains_rt_intron.clone(),
+            ),
+            (
+                IntronRetentionValue::RetainsRtIntronMap,
+                Value::Array(self.retains_rt_map.clone()),
+            ),
+            (
+                IntronRetentionValue::HasRTIntron,
+                self.has_rt_intron.clone(),
+            ),
+            (
+                IntronRetentionValue::HasRTIntronMap,
+                Value::Array(self.has_rt_intron_map.clone()),
+            ),
+            (
+                IntronRetentionValue::RetentionAcceptorScore,
+                Value::Array(self.retention_acceptor_score.clone()),
+            ),
+            (
+                IntronRetentionValue::RetentionDonorScore,
+                Value::Array(self.retention_donor_score.clone()),
+            ),
+            (
+                IntronRetentionValue::RefIntronsComponentSize,
+                self.ref_introns_component_size.clone(),
+            ),
+            (
+                IntronRetentionValue::QueryComponentSize,
+                self.query_component_size.clone(),
+            ),
+            (
+                IntronRetentionValue::ComponentRetentionRatio,
+                self.component_retention_ratio.clone(),
+            ),
+            (
+                IntronRetentionValue::IsDirtyComponent,
+                self.is_dirty_component.clone(),
+            ),
+            (
+                IntronRetentionValue::ExonicStatus,
+                Value::String(self.exonic_status.to_string()),
+            ),
+            (
+                IntronRetentionValue::IntronicStatus,
+                Value::String(self.intronic_status.to_string()),
+            ),
+        ]
+    }
+}
+
+/// Implements the Default trait for RetentionSchema
+///
+/// This trait is used to create a default instance of the RetentionSchema struct
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let schema = RetentionSchema::default();
+///
+/// assert_eq!(schema.intron_retention, false);
+/// assert_eq!(schema.retention_support_type.len(), 0);
+/// ```
+impl Default for RetentionSchema {
+    fn default() -> Self {
+        RetentionSchema {
+            intron_retention: false,
+            retention_support_type: vec![],
+            number_of_retentions: Value::Null,
+            coords_of_retention: vec![],
+            location_of_retention: vec![],
+            is_intron_retained_in_frame: vec![],
+            retains_rt_intron: Value::Null,
+            retains_rt_map: vec![],
+            has_rt_intron: Value::Null,
+            has_rt_intron_map: vec![],
+            retention_acceptor_score: vec![],
+            retention_donor_score: vec![],
+            ref_introns_component_size: Value::Null,
+            query_component_size: Value::Null,
+            component_retention_ratio: Value::Null,
+            is_dirty_component: Value::Bool(false),
+            exonic_status: IntronModuleReadAction::Keep,
+            intronic_status: IntronModuleReadAction::Keep,
+        }
+    }
+}
+
+/// Detects if a read has any RT introns
+///
+/// # Arguments
+///
+/// * `read` - The read to check for RT introns
+/// * `handle` - The handle to set the values in
+/// * `ban` - The set of banned introns
+/// * `ref_introns` - The reference introns
+///
+/// # Returns
+///
+/// * `IntronModuleReadAction` - The action to take for the read
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let status = detect_rt_intron(&read, &mut handle, &ban, &ref_introns);
+///
+/// match status {
+///   IntronModuleReadAction::Discard => println!("Discarding read"),
+///   IntronModuleReadAction::Keep => println!("Keeping read"),
+///   IntronModuleReadAction::Unclear => println!("Unclear read"),
+/// }
+/// ```
+fn detect_rt_intron(
+    read: &GenePred,
+    ban: &HashSet<(u64, u64)>,
+    ref_introns: &BTreeMap<(u64, u64), &IntronPred>,
+    schema: &mut RetentionSchema,
+) {
+    // INFO: Determine if read has RT introns -> limit to only first hit
+    // INFO: will not count ALL RT introns but just the first one!
+    let read_introns = read.get_introns();
+    let mut action = IntronModuleReadAction::Keep;
+
+    for intron in read_introns {
+        if ban.contains(&(intron.0, intron.1)) {
+            continue;
+        }
+
+        let hit = ref_introns
+            .get(&intron)
+            .expect("ERROR: Intron not found, this is likely a bug!");
+
+        match hit.stats.support {
+            config::SupportType::RT => {
+                // INFO: if read is RT, discard
+                action = IntronModuleReadAction::Discard;
+                schema.has_rt_intron = Value::Bool(true);
+
+                match read.strand {
+                    config::Strand::Forward => {
+                        let coord = format!("{}:{}-{}", read.chrom, intron.0, intron.1);
+                        schema.has_rt_intron_map.push(Value::String(coord));
+                    }
+                    config::Strand::Reverse => {
+                        let coord =
+                            format!("{}:{}-{}", read.chrom, SCALE - intron.1, SCALE - intron.0);
+                        schema.has_rt_intron_map.push(Value::String(coord));
+                    }
+                }
+            }
+            config::SupportType::Splicing | config::SupportType::Unclear => {} // INFO: Do nothing
+        };
+    }
+
+    if action == IntronModuleReadAction::Keep {
+        schema.has_rt_intron = Value::Bool(false);
+    }
+
+    schema.intronic_status = action;
+}
+
+/// Determine if any read exons retain any intron
+///
+/// # Arguments
+///
+/// * `read` - The read to check for intron retention
+/// * `ref_introns` - The reference introns
+/// * `schema` - The schema to set the values in
+///
+/// # Returns
+///
+/// * None -> the schema is modified in place
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let mut schema = RetentionSchema::default();
+/// detect_retention(&read, &ref_introns, &mut schema);
+///
+/// match schema.intron_retention {
+///     true => println!("Intron retention detected"),
+///     false => println!("No intron retention detected"),
+/// }
+/// ```
+fn detect_retention(
+    read: &GenePred,
+    ref_introns: &BTreeMap<(u64, u64), &IntronPred>,
+    schema: &mut RetentionSchema,
+) {
+    let mut action = IntronModuleReadAction::Keep;
+    let read_exons = read.get_exons();
+
+    for exon in read_exons {
+        let exon_start = exon.0;
+        let exon_end = exon.1;
+
+        for (intron, stats) in ref_introns.iter() {
+            let intron_start = intron.0;
+            let intron_end = intron.1;
+
+            // INFO: early exit to avoid unnecessary checks -> enforces BTreeMap instead of HashMap!
+            if intron_end < exon_start {
+                continue;
+            }
+
+            if exon_start < intron_start && intron_end < exon_end {
+                match stats.stats.support {
+                    config::SupportType::RT => {
+                        // INFO: retaining a false intron is not an IR, do nothing
+                        match read.strand {
+                            config::Strand::Forward => {
+                                let coord =
+                                    format!("{}:{}-{}", read.chrom, intron_start, intron_end);
+                                schema.retains_rt_map.push(Value::String(coord));
+                            }
+                            config::Strand::Reverse => {
+                                let coord = format!(
+                                    "{}:{}-{}",
+                                    read.chrom,
+                                    SCALE - intron_end,
+                                    SCALE - intron_start
+                                );
+                                schema.retains_rt_map.push(Value::String(coord));
+                            }
+                        }
+
+                        schema.retains_rt_intron = Value::Bool(true);
+                    }
+                    config::SupportType::Unclear | config::SupportType::Splicing => {
+                        // INFO: any other variant is considered an intron retention!
+                        if !schema.intron_retention {
+                            schema.intron_retention = true;
+                        }
+
+                        schema
+                            .retention_support_type
+                            .push(Value::String(stats.stats.support.to_string()));
+                        schema
+                            .is_intron_retained_in_frame
+                            .push(Value::Bool(stats.stats.is_in_frame));
+                        schema
+                            .retention_donor_score
+                            .push(serde_json::json!(stats.stats.splice_ai_donor));
+                        schema
+                            .retention_acceptor_score
+                            .push(serde_json::json!(stats.stats.splice_ai_acceptor));
+
+                        match read.strand {
+                            config::Strand::Forward => {
+                                let coord =
+                                    format!("{}:{}-{}", read.chrom, intron_start, intron_end);
+                                schema.coords_of_retention.push(Value::String(coord));
+                            }
+                            config::Strand::Reverse => {
+                                let coord = format!(
+                                    "{}:{}-{}",
+                                    read.chrom,
+                                    SCALE - intron_end,
+                                    SCALE - intron_start
+                                );
+                                schema.coords_of_retention.push(Value::String(coord));
+                            }
+                        }
+
+                        match stats.stats.intron_position {
+                            IntronPosition::CDS => {
+                                // INFO: if intron in frame keep read --> splice variant producing a longer protein
+                                // INFO: else do not annotate read (exon structure is flawed)
+                                if !stats.stats.is_in_frame {
+                                    if stats.stats.support == config::SupportType::Unclear {
+                                        // INFO: if support is unclear, keep read
+                                        // INFO: edge case where IR is in CDS + not in-frame
+                                        // INFO: but we do not know if intron is real or not
+                                        action = IntronModuleReadAction::Unclear;
+                                    } else {
+                                        // INFO: clear point where IR is in CDS + not in-frame + splicing
+                                        // INFO: if support is splicing, discard read
+                                        action = IntronModuleReadAction::Discard;
+                                    }
+                                }
+
+                                schema
+                                    .location_of_retention
+                                    .push(Value::String(stats.stats.intron_position.to_string()));
+                            }
+                            // INFO: keep read --> variant would not affect CDS
+                            IntronPosition::UTR | IntronPosition::Mixed => {
+                                schema
+                                    .location_of_retention
+                                    .push(Value::String(stats.stats.intron_position.to_string()));
+                            }
+                            IntronPosition::Unknown => {
+                                schema
+                                    .location_of_retention
+                                    .push(Value::String(stats.stats.intron_position.to_string()));
+
+                                // INFO: logic changed here -> if intron is not in frame, discard read
+                                // INFO: if intron is in frame, keep read -> flag it as UNCLEAR
+                                if !stats.stats.is_in_frame {
+                                    action = IntronModuleReadAction::Discard;
+                                } else {
+                                    action = IntronModuleReadAction::Unclear;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    schema.number_of_retentions = Value::Number(schema.coords_of_retention.len().into());
+    schema.exonic_status = action;
+}
