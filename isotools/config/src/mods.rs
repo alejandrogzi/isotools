@@ -178,6 +178,7 @@ pub struct IntronRetentionDescriptor {
     pub location_of_retention: Value,
     pub is_intron_retained_in_frame: Value,
     pub retains_rt_intron: Value,
+    pub retains_rt_intron_map: Value,
     pub has_rt_intron: Value,
     pub has_rt_intron_map: Value,
     pub retention_acceptor_score: Value,
@@ -214,6 +215,7 @@ impl IntronRetentionDescriptor {
             location_of_retention: Value::Null,
             is_intron_retained_in_frame: Value::Null,
             retains_rt_intron: Value::Null,
+            retains_rt_intron_map: Value::Null,
             has_rt_intron: Value::Null,
             has_rt_intron_map: Value::Null,
             retention_acceptor_score: Value::Null,
@@ -241,6 +243,7 @@ pub enum IntronRetentionValue {
     RetentionLocation,
     IsIntronRetainedInFrame,
     RetainsRtIntron,
+    RetainsRtIntronMap,
     HasRTIntron,
     HasRTIntronMap,
     RetentionAcceptorScore,
@@ -291,6 +294,9 @@ impl ModuleMap for IntronRetentionDescriptor {
                     Some(self.is_intron_retained_in_frame.clone())
                 }
                 IntronRetentionValue::RetainsRtIntron => Some(self.retains_rt_intron.clone()),
+                IntronRetentionValue::RetainsRtIntronMap => {
+                    Some(self.retains_rt_intron_map.clone())
+                }
                 IntronRetentionValue::HasRTIntron => Some(self.has_rt_intron.clone()),
                 IntronRetentionValue::HasRTIntronMap => Some(self.has_rt_intron_map.clone()),
                 IntronRetentionValue::RetentionAcceptorScore => {
@@ -365,6 +371,10 @@ impl ModuleMap for IntronRetentionDescriptor {
                 }
                 IntronRetentionValue::RetainsRtIntron => {
                     self.retains_rt_intron = value;
+                    Ok(())
+                }
+                IntronRetentionValue::RetainsRtIntronMap => {
+                    self.retains_rt_intron_map = value;
                     Ok(())
                 }
                 IntronRetentionValue::HasRTIntron => {
@@ -463,6 +473,7 @@ impl ModuleMap for IntronRetentionDescriptor {
         insert!(coords_of_retention);
         insert!(location_of_retention);
         insert!(retains_rt_intron);
+        insert!(retains_rt_intron_map);
         insert!(has_rt_intron);
         insert!(has_rt_intron_map);
         insert!(is_intron_retained_in_frame);
@@ -495,6 +506,7 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             location_of_retention: {:?},
             is_intron_retained_in_frame: {:?},
             retains_rt_intron: {:?},
+            retains_rt_intron_map: {:?},
             has_rt_intron: {:?},
             has_rt_intron_map: {:?},
             retention_acceptor_score: {:?},
@@ -513,6 +525,7 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             self.location_of_retention,
             self.is_intron_retained_in_frame,
             self.retains_rt_intron,
+            self.retains_rt_intron_map,
             self.has_rt_intron,
             self.has_rt_intron_map,
             self.retention_acceptor_score,
@@ -822,7 +835,6 @@ impl std::fmt::Debug for StartTruncationDescriptor {
 pub struct FusionDetectionDescriptor {
     is_fused_read: Value,
     is_fusion_supported: Value,
-    component_size: Value,
     ref_component_size: Value,
     query_component_size: Value,
     whole_component_fusion_ratio: Value,
@@ -856,7 +868,6 @@ impl FusionDetectionDescriptor {
         Box::new(Self {
             is_fused_read: Value::Null,
             is_fusion_supported: Value::Null,
-            component_size: Value::Null,
             ref_component_size: Value::Null,
             query_component_size: Value::Null,
             whole_component_fusion_ratio: Value::Null,
@@ -876,7 +887,6 @@ impl FusionDetectionDescriptor {
 pub enum FusionDetectionValue {
     IsFusedRead,
     IsFusionSupported,
-    ComponentSize,
     RefComponentSize,
     QueryComponentSize,
     WholeComponentFusionRatio,
@@ -913,7 +923,6 @@ impl ModuleMap for FusionDetectionDescriptor {
             match *key {
                 FusionDetectionValue::IsFusedRead => Some(self.is_fused_read.clone()),
                 FusionDetectionValue::IsFusionSupported => Some(self.is_fusion_supported.clone()),
-                FusionDetectionValue::ComponentSize => Some(self.component_size.clone()),
                 FusionDetectionValue::RefComponentSize => Some(self.ref_component_size.clone()),
                 FusionDetectionValue::QueryComponentSize => Some(self.query_component_size.clone()),
                 FusionDetectionValue::WholeComponentFusionRatio => {
@@ -964,10 +973,6 @@ impl ModuleMap for FusionDetectionDescriptor {
                 }
                 FusionDetectionValue::IsFusionSupported => {
                     self.is_fusion_supported = value;
-                    Ok(())
-                }
-                FusionDetectionValue::ComponentSize => {
-                    self.component_size = value;
                     Ok(())
                 }
                 FusionDetectionValue::RefComponentSize => {
@@ -1054,7 +1059,6 @@ impl ModuleMap for FusionDetectionDescriptor {
 
         insert!(is_fused_read);
         insert!(is_fusion_supported);
-        insert!(component_size);
         insert!(ref_component_size);
         insert!(query_component_size);
         insert!(whole_component_fusion_ratio);
@@ -1079,7 +1083,6 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             "{{
             is_fused_read: {:?},
             is_fusion_supported: {:?},
-            component_size: {:?},
             ref_component_size: {:?},
             query_component_size: {:?}
             whole_component_fusion_ratio: {:?},
@@ -1091,7 +1094,6 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             }}",
             self.is_fused_read,
             self.is_fusion_supported,
-            self.component_size,
             self.ref_component_size,
             self.query_component_size,
             self.whole_component_fusion_ratio,
