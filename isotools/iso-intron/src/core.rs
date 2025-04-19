@@ -281,7 +281,7 @@ pub fn process_component(
             }
         };
 
-        schema.difuse(&mut descriptor, read);
+        schema.diffuse(&mut descriptor, read);
     }
 
     let ratio = count / totals;
@@ -426,7 +426,7 @@ impl RetentionSchema {
     ///
     /// schema.difuse(&mut descriptor, &read);
     /// ```
-    fn difuse(&self, descriptor: &mut HashMap<String, Box<dyn ModuleMap>>, read: &GenePred) {
+    fn diffuse(&self, descriptor: &mut HashMap<String, Box<dyn ModuleMap>>, read: &GenePred) {
         descriptor.insert(
             read.name.clone(),
             ModuleDescriptor::with_schema(ModuleType::IntronRetention),
