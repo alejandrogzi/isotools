@@ -1,6 +1,7 @@
 use clap::{ArgAction, Parser};
 use config::{validate, ArgCheck, CliError, OverlapType};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Parser)]
 pub struct Args {
@@ -91,6 +92,19 @@ pub struct Args {
         help = "Path to BED12 file with blacklisted reads"
     )]
     pub blacklist: Vec<PathBuf>,
+
+    #[arg(
+        long = "im",
+        long = "in-memory",
+        help = "Flag to avoid writing output files",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub in_memory: bool,
 }
 
 impl ArgCheck for Args {
@@ -136,5 +150,34 @@ impl ArgCheck for Args {
 
     fn get_query(&self) -> &Vec<PathBuf> {
         &self.query
+    }
+}
+
+impl Args {
+    pub fn from(args: Arc<Vec<String>>) -> Self {
+        let drop = vec!["--introns", "--aparent", "--bigwig", "--twobit"];
+
+        let mut local_args = Vec::new();
+        let mut iter = args.iter().peekable();
+
+        while let Some(arg) = iter.next() {
+            // INFO: skipping useless args + value
+            if drop.contains(&arg.as_str()) {
+                iter.next();
+                continue;
+            }
+
+            if arg == "--toga" {
+                local_args.push("--ref".to_string());
+            } else {
+                local_args.push(arg.clone());
+            }
+        }
+
+        let mut full_args = vec![env!("CARGO_PKG_NAME").to_string()];
+        full_args.extend(local_args);
+        full_args.push("--recover".to_string());
+
+        Args::parse_from(full_args)
     }
 }

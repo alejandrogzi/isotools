@@ -15,4 +15,13 @@ pub mod cli;
 pub mod core;
 pub mod utils;
 
-pub fn lib_iso_fusion() {}
+use config::ModuleMap;
+use dashmap::DashMap;
+use std::sync::Arc;
+
+pub fn lib_iso_fusion(args: Arc<Vec<String>>) -> DashMap<String, Box<dyn ModuleMap>> {
+    let args = cli::Args::from(args);
+    let descriptor = crate::core::detect_fusions(args).expect("ERROR: Failed to detect fusions");
+
+    return descriptor;
+}

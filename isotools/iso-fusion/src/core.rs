@@ -53,7 +53,7 @@ use crate::utils::{
 /// let args = Args::new();
 /// detect_fusions(args).unwrap();
 /// ```
-pub fn detect_fusions(args: Args) -> Result<()> {
+pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>> {
     info!("Preparing files for fusion detection...");
 
     let buckets = make_buckets(args.refs, args.query).expect("ERROR: Failed to make buckets!");
@@ -100,19 +100,21 @@ pub fn detect_fusions(args: Args) -> Result<()> {
         );
     }
 
-    write_descriptor(&accumulator.descriptor, FUSION_DESCRIPTOR);
-    par_write_results(
-        accumulator,
-        vec![
-            PathBuf::from(FUSIONS),
-            PathBuf::from(FUSION_FREE),
-            PathBuf::from(FUSION_REVIEW),
-            PathBuf::from(FUSION_FAKES),
-        ],
-        None,
-    );
+    if !args.in_memory {
+        write_descriptor(&accumulator.descriptor, FUSION_DESCRIPTOR);
+        par_write_results(
+            &accumulator,
+            vec![
+                PathBuf::from(FUSIONS),
+                PathBuf::from(FUSION_FREE),
+                PathBuf::from(FUSION_REVIEW),
+                PathBuf::from(FUSION_FAKES),
+            ],
+            None,
+        );
+    }
 
-    Ok(())
+    Ok(accumulator.descriptor)
 }
 
 /// Create a per-chromosome bucket of tracks for fusion detection
