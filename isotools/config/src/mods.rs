@@ -1,3 +1,5 @@
+use dashmap::DashMap;
+use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::any::Any;
 
@@ -170,6 +172,7 @@ impl ModuleDescriptor {
 ///
 /// This struct represents the descriptor for
 /// intron retention detection.
+#[derive(Clone)]
 pub struct IntronRetentionDescriptor {
     pub intron_retention: Value,
     pub retention_support_type: Value,
@@ -227,6 +230,49 @@ impl IntronRetentionDescriptor {
             exonic_status: Value::Null,
             intronic_status: Value::Null,
         })
+    }
+
+    /// Unnests the descriptor into a map.
+    ///
+    /// # Arguments
+    ///
+    /// * `map` - A mutable reference to a map where the descriptor values will be inserted.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{IntronRetentionDescriptor, ModuleMap};
+    ///
+    /// let descriptor = IntronRetentionDescriptor::new();
+    /// let mut map = serde_json::Map::new();
+    /// descriptor.unnest(&mut map);
+    /// assert_eq!(map["is_intron_retention"], Value::Bool(false));
+    /// ```
+    pub fn unnest(&self, map: &mut Map<String, Value>) {
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(intron_retention);
+        insert!(retention_support_type);
+        insert!(number_of_retentions);
+        insert!(coords_of_retention);
+        insert!(location_of_retention);
+        insert!(retains_rt_intron);
+        insert!(retains_rt_intron_map);
+        insert!(has_rt_intron);
+        insert!(has_rt_intron_map);
+        insert!(is_intron_retained_in_frame);
+        insert!(retention_acceptor_score);
+        insert!(retention_donor_score);
+        insert!(ref_introns_component_size);
+        insert!(query_component_size);
+        insert!(component_retention_ratio);
+        insert!(is_dirty_component);
+        insert!(exonic_status);
+        insert!(intronic_status);
     }
 }
 
@@ -553,6 +599,7 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
 /// let descriptor = StartTruncationDescriptor::new();
 /// assert_eq!(descriptor.is_read_truncated, Value::Null);
 /// ```
+#[derive(Clone)]
 pub struct StartTruncationDescriptor {
     pub is_read_truncated: Value,
     pub is_novel_start: Value,
@@ -596,6 +643,40 @@ impl StartTruncationDescriptor {
             is_truncation_supported: Value::Null,
             component_truncation_ratio: Value::Null,
         })
+    }
+
+    /// Unnests the StartTruncationDescriptor into a map.
+    ///
+    /// # Arguments
+    ///
+    /// * `map` - A mutable reference to a map where the values will be inserted.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{StartTruncationDescriptor, StartTruncationValue};
+    ///
+    /// let descriptor = StartTruncationDescriptor::new();
+    /// let mut map = serde_json::Map::new();
+    /// descriptor.unnest(&mut map);
+    /// assert_eq!(map["is_read_truncated"], Value::Null);
+    /// ```
+    pub fn unnest(&self, map: &mut Map<String, Value>) {
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(is_read_truncated);
+        insert!(is_novel_start);
+        insert!(is_dirty_component);
+        insert!(component_size);
+        insert!(ref_component_size);
+        insert!(query_component_size);
+        insert!(truncation_support_ratio);
+        insert!(is_truncation_supported);
+        insert!(component_truncation_ratio);
     }
 }
 
@@ -832,6 +913,7 @@ impl std::fmt::Debug for StartTruncationDescriptor {
 ///
 /// This struct represents the descriptor for
 /// fusion detection.
+#[derive(Clone)]
 pub struct FusionDetectionDescriptor {
     is_fused_read: Value,
     is_fusion_supported: Value,
@@ -877,6 +959,41 @@ impl FusionDetectionDescriptor {
             location_of_fusion: Value::Null,
             fusion_in_frame: Value::Null,
         })
+    }
+
+    /// Unnests the FusionDetectionDescriptor into a map.
+    ///
+    /// # Arguments
+    ///
+    /// * `map` - A mutable reference to a map where the values will be inserted.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::{FusionDetectionDescriptor, ModuleMap};
+    ///
+    /// let descriptor = FusionDetectionDescriptor::new();
+    /// let mut map = serde_json::Map::new();
+    /// descriptor.unnest(&mut map);
+    /// assert_eq!(map["is_fused_read"], Value::Null);
+    /// ```
+    pub fn unnest(&self, map: &mut Map<String, Value>) {
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(is_fused_read);
+        insert!(is_fusion_supported);
+        insert!(ref_component_size);
+        insert!(query_component_size);
+        insert!(whole_component_fusion_ratio);
+        insert!(real_component_fusion_ratio);
+        insert!(fake_component_fusion_ratio);
+        insert!(is_dirty_component);
+        insert!(location_of_fusion);
+        insert!(fusion_in_frame);
     }
 }
 
@@ -1110,6 +1227,7 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
 ///
 /// This struct represents the descriptor for
 /// poly A prediction detection.
+#[derive(Clone)]
 pub struct PolyAPredictionDescriptor {
     pub is_poly_a_supported: Value,
     pub poly_a_score: Value,
@@ -1153,6 +1271,41 @@ impl PolyAPredictionDescriptor {
             intrapriming_comp_ratio: Value::Null,
             forced_poly_a: Value::Null,
         })
+    }
+
+    /// Unnest the PolyAPredictionDescriptor into a map.
+    ///
+    /// # Arguments
+    ///
+    /// * `map` - A mutable reference to a map where the values will be inserted.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// use isotools::modules::PolyAPredictionDescriptor;
+    ///
+    /// let descriptor = PolyAPredictionDescriptor::new();
+    /// let mut map = serde_json::Map::new();
+    ///
+    /// descriptor.unnest(&mut map);
+    /// assert_eq!(map["is_poly_a_supported"], Value::Null);
+    /// ```
+    pub fn unnest(&self, map: &mut Map<String, Value>) {
+        macro_rules! insert {
+            ($field:ident) => {
+                map.insert(stringify!($field).to_string(), self.$field.clone());
+            };
+        }
+
+        insert!(is_poly_a_supported);
+        insert!(poly_a_score);
+        insert!(whole_poly_a_length);
+        insert!(genomic_poly_a);
+        insert!(is_intrapriming);
+        insert!(poly_a_location);
+        insert!(is_dirty_component);
+        insert!(intrapriming_comp_ratio);
+        insert!(forced_poly_a);
     }
 }
 
@@ -1370,4 +1523,129 @@ impl std::fmt::Debug for PolyAPredictionDescriptor {
             self.forced_poly_a
         )
     }
+}
+
+/// GlobalDescriptor struct
+///
+/// This struct represents the descriptor for
+/// global information, allowing conversion and merging
+#[derive(Clone, Debug)]
+pub struct GlobalDescriptor {
+    pub retention: Option<IntronRetentionDescriptor>,
+    pub truncation: Option<StartTruncationDescriptor>,
+    pub fusion: Option<FusionDetectionDescriptor>,
+    pub intrapriming: Option<PolyAPredictionDescriptor>,
+}
+
+impl ModuleMap for GlobalDescriptor {
+    fn get_value(&self, _: Box<dyn Any>) -> Option<serde_json::Value> {
+        // Dispatch based on key type or use a unified key system
+        None
+    }
+
+    fn set_value(&mut self, _key: Box<dyn Any>, _value: Value) -> Result<(), String> {
+        Err("not implemented".into())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn to_json(&self) -> Value {
+        let mut map = Map::new();
+
+        if let Some(ref intron) = self.retention {
+            intron.unnest(&mut map)
+        }
+
+        if let Some(ref trunc) = self.truncation {
+            trunc.unnest(&mut map)
+        }
+
+        if let Some(ref f) = self.fusion {
+            f.unnest(&mut map)
+        }
+
+        if let Some(ref p) = self.intrapriming {
+            p.unnest(&mut map)
+        }
+
+        Value::Object(map)
+    }
+}
+
+/// Merge all descriptors into a GlobalDescriptor
+///
+/// This function takes a vector of DashMap instances
+/// and merges them into a single DashMap instance.
+///
+/// # Arguments
+///
+/// * `maps` - A vector of DashMap instances containing
+/// the descriptors to be merged.
+///
+/// # Returns
+///
+/// * A DashMap instance containing the merged descriptors.
+///
+/// # Examples
+///
+/// ```rust, no_run
+/// use isotools::modules::{merge, GlobalDescriptor};
+///
+/// let maps = vec![DashMap::new(), DashMap::new(), DashMap::new(), DashMap::new()];
+///
+/// let merged = merge(maps);
+/// assert_eq!(merged.len(), 0);
+/// ```
+pub fn merge(
+    maps: Vec<DashMap<String, Box<dyn ModuleMap>>>,
+) -> DashMap<String, Box<dyn ModuleMap>> {
+    let result = DashMap::new();
+
+    // WARN: assume: map order = [introns, truncations, fusions, polya]
+    let (retentions, truncations, fusions, intraprimings) =
+        (&maps[0], &maps[1], &maps[2], &maps[3]);
+
+    let keys: std::collections::HashSet<String> = maps
+        .iter()
+        .flat_map(|m| m.iter().map(|e| e.key().clone()))
+        .collect();
+
+    keys.into_par_iter().for_each(|key| {
+        let mut unified = GlobalDescriptor {
+            retention: None,
+            truncation: None,
+            intrapriming: None,
+            fusion: None,
+        };
+
+        if let Some(v) = retentions.get(&key) {
+            if let Some(c) = v.as_any().downcast_ref::<IntronRetentionDescriptor>() {
+                unified.retention = Some(c.clone());
+            }
+        }
+
+        if let Some(v) = truncations.get(&key) {
+            if let Some(c) = v.as_any().downcast_ref::<StartTruncationDescriptor>() {
+                unified.truncation = Some(c.clone());
+            }
+        }
+
+        if let Some(v) = intraprimings.get(&key) {
+            if let Some(c) = v.as_any().downcast_ref::<PolyAPredictionDescriptor>() {
+                unified.intrapriming = Some(c.clone());
+            }
+        }
+
+        if let Some(v) = fusions.get(&key) {
+            if let Some(c) = v.as_any().downcast_ref::<FusionDetectionDescriptor>() {
+                unified.fusion = Some(c.clone());
+            }
+        }
+
+        result.insert(key, Box::new(unified) as Box<dyn ModuleMap>);
+    });
+
+    result
 }
