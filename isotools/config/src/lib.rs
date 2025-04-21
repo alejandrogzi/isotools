@@ -278,7 +278,7 @@ pub trait ParallelCollector {
     /// let accumulator = ParallelAccumulator::default();
     /// assert_eq!(accumulator.get_collections().len(), 4);
     /// ```
-    fn get_collections(self) -> Result<Vec<DashSet<String>>, Box<dyn Error>>;
+    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn Error>>;
 }
 
 // public enums

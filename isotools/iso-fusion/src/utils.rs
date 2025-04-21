@@ -261,13 +261,13 @@ impl ParallelCollector for ParallelAccumulator {
     }
 
     /// Get the a collection of items from the accumulator
-    fn get_collections(self) -> Result<Vec<DashSet<String>>, Box<dyn std::error::Error>> {
+    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn std::error::Error>> {
         let mut collections = Vec::with_capacity(ParallelAccumulator::NUM_FIELDS);
 
-        collections.push(self.fusions);
-        collections.push(self.passes);
-        collections.push(self.review);
-        collections.push(self.fakes);
+        collections.push(&self.fusions);
+        collections.push(&self.passes);
+        collections.push(&self.review);
+        collections.push(&self.fakes);
 
         std::result::Result::Ok(collections)
     }

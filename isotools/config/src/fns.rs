@@ -850,7 +850,7 @@ pub fn write_descriptor_as_json(descriptor: &DashMap<String, Box<dyn ModuleMap>>
 /// par_write_results(accumulator, filenames, outdir);
 /// ```
 pub fn par_write_results<K: ParallelCollector>(
-    accumulator: K,
+    accumulator: &K,
     filenames: Vec<PathBuf>,
     outdir: Option<PathBuf>,
 ) {
@@ -892,7 +892,7 @@ pub fn par_write_results<K: ParallelCollector>(
 ///
 /// write_pairs(collections, filenames);
 /// ```
-fn write_pairs(collections: Vec<DashSet<String>>, filenames: Vec<PathBuf>) {
+fn write_pairs(collections: Vec<&DashSet<String>>, filenames: Vec<PathBuf>) {
     collections
         .par_iter()
         .zip(filenames.par_iter())
