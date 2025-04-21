@@ -30,6 +30,7 @@
 /// ```
 ///
 use clap::{Args, Parser, Subcommand};
+use isotools::lib;
 use log::{error, info, Level};
 use simple_logger::init_with_level;
 
@@ -37,6 +38,10 @@ use std::process::Command;
 
 const ENTRY: &str = env!("CARGO_MANIFEST_DIR");
 const RELEASES: &str = "target/release";
+
+const HELP: &str = r#"
+please refer to docs
+"#;
 
 #[derive(Parser)]
 #[command(name = "isotools")]
@@ -64,11 +69,13 @@ enum Commands {
     Classify(IsoArgs),
     #[command(name = "iso-orf")]
     Orf(IsoArgs),
+    #[command(name = "run")]
+    Run(IsoArgs),
 }
 
 #[derive(Args)]
 struct IsoArgs {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, help = HELP)]
     args: Vec<String>,
 }
 
@@ -86,28 +93,34 @@ fn main() {
         Commands::Coverage(args) => ("iso-cov", args.args),
         Commands::Classify(args) => ("iso-classify", args.args),
         Commands::Orf(args) => ("iso-orf", args.args),
+        Commands::Run(args) => ("run", args.args),
     };
 
-    let package = std::path::Path::new(ENTRY)
-        .parent()
-        .expect("ERROR: Could not get parent dir")
-        .join(RELEASES)
-        .join(cmd);
+    match cmd {
+        "run" => lib(args),
+        _ => {
+            let package = std::path::Path::new(ENTRY)
+                .parent()
+                .expect("ERROR: Could not get parent dir")
+                .join(RELEASES)
+                .join(cmd);
 
-    if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
-        let output = Command::new(package)
-            .arg("--help")
-            .output()
-            .expect("ERROR: Failed to execute process");
+            if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+                let output = Command::new(package)
+                    .arg("--help")
+                    .output()
+                    .expect("ERROR: Failed to execute process");
 
-        check_output(output);
-    } else {
-        let output = Command::new(package)
-            .args(args)
-            .output()
-            .expect("ERROR: Failed to execute process");
+                check_output(output);
+            } else {
+                let output = Command::new(package)
+                    .args(args)
+                    .output()
+                    .expect("ERROR: Failed to execute process");
 
-        check_output(output);
+                check_output(output);
+            }
+        }
     }
 }
 
