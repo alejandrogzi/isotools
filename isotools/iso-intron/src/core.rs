@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
 use log::info;
 use packbed::record::IntronPosition;
@@ -47,8 +48,8 @@ use config::{
 /// let args = Args::new();
 /// detect_intron_retentions(args).unwrap();
 /// ```
-pub fn detect_intron_retentions(args: Args) -> Result<()> {
-    info!("Detecting intron retentions...");
+pub fn detect_intron_retentions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>> {
+    info!("INFO: Detecting intron retentions...");
 
     let tracks = packbed(
         args.refs,
@@ -83,18 +84,22 @@ pub fn detect_intron_retentions(args: Args) -> Result<()> {
         accumulator.num_retentions()
     );
 
-    write_descriptor(&accumulator.descriptor, INTRON_RETENTION_DESCRIPTOR);
-    par_write_results(
-        accumulator,
-        vec![
-            PathBuf::from(INTRON_RETENTIONS),
-            PathBuf::from(INTRON_RETENTION_FREE),
-            PathBuf::from(INTRON_RETENTION_REVIEW),
-        ],
-        None,
-    );
+    if !args.in_memory {
+        info!("Writing results to disk...");
 
-    Ok(())
+        write_descriptor(&accumulator.descriptor, INTRON_RETENTION_DESCRIPTOR);
+        par_write_results(
+            &accumulator,
+            vec![
+                PathBuf::from(INTRON_RETENTIONS),
+                PathBuf::from(INTRON_RETENTION_FREE),
+                PathBuf::from(INTRON_RETENTION_REVIEW),
+            ],
+            None,
+        );
+    }
+
+    Ok(accumulator.descriptor)
 }
 
 /// Processes the components of reads and introns in parallel
