@@ -2,9 +2,11 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use config::{
-    get_progress_bar, ModuleDescriptor, ModuleMap, ModuleType, OverlapType, StartTruncationValue,
-    TRUNCATION_RECOVERY_THRESHOLD, TRUNCATION_THRESHOLD,
+    get_progress_bar, write_descriptor, ModuleDescriptor, ModuleMap, ModuleType, OverlapType,
+    StartTruncationValue, TRUNCATION_DESCRIPTOR, TRUNCATION_RECOVERY_THRESHOLD,
+    TRUNCATION_THRESHOLD,
 };
+use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
 use log::{info, warn};
 use packbed::{packbed, BedPackage, GenePred, RefGenePred};
@@ -14,7 +16,7 @@ use serde_json::Value;
 use crate::cli::Args;
 use crate::utils::*;
 
-pub fn detect_truncations(args: Args) -> Result<()> {
+pub fn detect_truncations(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>> {
     info!("Detecting 5'end truncations...");
 
     let tracks = packbed(
@@ -52,9 +54,14 @@ pub fn detect_truncations(args: Args) -> Result<()> {
         );
     }
 
-    write_results(&accumulator);
+    if !args.in_memory {
+        info!("INFO: Writing results...");
 
-    Ok(())
+        write_results(&accumulator);
+        write_descriptor(&accumulator.descriptor, TRUNCATION_DESCRIPTOR);
+    }
+
+    Ok(accumulator.descriptor)
 }
 
 pub fn process_components(
@@ -78,6 +85,10 @@ pub fn process_components(
         });
         no_truncations.into_iter().for_each(|pass| {
             accumulator.no_truncations.insert(pass);
+        });
+
+        descriptor.into_iter().for_each(|(name, desc)| {
+            accumulator.descriptor.insert(name, desc);
         });
 
         if is_dirty {
@@ -418,6 +429,7 @@ mod tests {
             blacklist: Vec::new(),
             recover: false,
             skip_exon: false,
+            in_memory: true,
         };
 
         assert!(detect_truncations(args).is_ok());

@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use hashbrown::HashSet;
 use packbed::par_reader;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::*;
 use rayon::str::ParallelString;
 
-use config::{write_objs, TRUNCATIONS, TRUNCATION_FREE};
+use config::{write_objs, ModuleMap, TRUNCATIONS, TRUNCATION_FREE};
 
 pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashSet<String>> {
     if paths.is_empty() {
@@ -74,6 +74,7 @@ pub struct ParallelAccumulator {
     pub truncations: DashSet<String>,
     pub no_truncations: DashSet<String>,
     pub miscellaneous: DashSet<String>,
+    pub descriptor: DashMap<String, Box<dyn ModuleMap>>,
 }
 
 impl Default for ParallelAccumulator {
@@ -82,6 +83,7 @@ impl Default for ParallelAccumulator {
             truncations: DashSet::new(),
             no_truncations: DashSet::new(),
             miscellaneous: DashSet::new(),
+            descriptor: DashMap::new(),
         }
     }
 }

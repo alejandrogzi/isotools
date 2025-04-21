@@ -1,6 +1,6 @@
 [package]
 name = "iso-utr"
-version = "0.0.6"
+version = "0.0.7"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "detect UTR truncations on iso-seq reads"
 keywords = ["utr", "truncation", "transcript", "isoseq"]
