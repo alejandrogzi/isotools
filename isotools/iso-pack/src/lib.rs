@@ -172,7 +172,10 @@ pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
 ) -> Result<String, anyhow::Error> {
     let contents: Vec<String> = files
         .par_iter()
-        .map(|path| reader(path).unwrap_or_else(|e| panic!("ERROR: Could not read file: {:?}", e)))
+        .map(|path| {
+            reader(path)
+                .unwrap_or_else(|e| panic!("ERROR: Could not read file: {:?} -> {:?}", e, path))
+        })
         .collect();
 
     Ok(contents.concat())
