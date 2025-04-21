@@ -26,7 +26,11 @@ use std::{
 
 use crate::cli::CallerArgs;
 
-pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn pas_caller(
+    args: CallerArgs,
+) -> Result<DashMap<String, Box<dyn ModuleMap>>, Box<dyn std::error::Error>> {
+    log::info!("INFO: Starting PAS caller...");
+
     let isoseqs = packbed(
         vec![args.bed.clone()],
         args.toga,
@@ -38,7 +42,7 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
     let aparent_scores = get_aparent_scores(args.aparent);
 
     let pb = get_progress_bar(isoseqs.len() as u64, "Processing reads...");
-    let accumulator = Arc::new(ParallelAccumulator::default());
+    let accumulator = ParallelAccumulator::default();
     let counter = ParallelCounter::default();
 
     isoseqs.into_par_iter().for_each(|(chr, components)| {
@@ -53,7 +57,7 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
         distribute(
             components,
             scores,
-            accumulator.clone(),
+            &accumulator,
             &counter,
             args.recover,
             args.wiggle,
@@ -81,31 +85,37 @@ pub fn pas_caller(args: CallerArgs) -> Result<(), Box<dyn std::error::Error>> {
             counter.load_ratio()
         );
 
-        if accumulator.review.len() > 0 {
-            write_objs(&accumulator.review, INTRAPRIMING_REVIEW);
+        if !args.in_memory {
+            if accumulator.review.len() > 0 {
+                write_objs(&accumulator.review, INTRAPRIMING_REVIEW);
+            }
         }
     }
 
-    [&accumulator.pass, &accumulator.intrapriming]
-        .par_iter()
-        .zip(
-            [
-                args.outdir
-                    .join(POLYA_PASS)
-                    .to_str()
-                    .expect("ERROR: Could not convert path!"),
-                args.outdir
-                    .join(POLYA_INTRAPRIMING)
-                    .to_str()
-                    .expect("ERROR: Could not convert path!"),
-            ]
-            .par_iter(),
-        )
-        .for_each(|(rx, path)| write_objs(&rx, path));
+    if !args.in_memory {
+        log::info!("INFO: Writing results to disk...");
 
-    write_descriptor(&accumulator.descriptor, POLYA_DESCRIPTOR);
+        [&accumulator.pass, &accumulator.intrapriming]
+            .par_iter()
+            .zip(
+                [
+                    args.outdir
+                        .join(POLYA_PASS)
+                        .to_str()
+                        .expect("ERROR: Could not convert path!"),
+                    args.outdir
+                        .join(POLYA_INTRAPRIMING)
+                        .to_str()
+                        .expect("ERROR: Could not convert path!"),
+                ]
+                .par_iter(),
+            )
+            .for_each(|(rx, path)| write_objs(&rx, path));
 
-    Ok(())
+        write_descriptor(&accumulator.descriptor, POLYA_DESCRIPTOR);
+    }
+
+    Ok(accumulator.descriptor)
 }
 
 /// Reads the APARENT file and returns a nested map
@@ -161,7 +171,7 @@ fn get_aparent_scores(file: PathBuf) -> DashMap<String, HashMap<String, BedColum
 fn distribute(
     components: Vec<Box<dyn BedPackage>>,
     scores: &HashMap<String, BedColumnValue>,
-    accumulator: Arc<ParallelAccumulator>,
+    accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     recover: bool,
     wiggle: usize,

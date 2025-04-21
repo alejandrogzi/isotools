@@ -1,6 +1,7 @@
 use clap::{ArgAction, Parser, Subcommand};
 use config::ArgCheck;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 // Aparent parameters
 pub const CHUNK_SIZE: usize = 500;
@@ -501,4 +502,46 @@ pub struct CallerArgs {
         default_value = "."
     )]
     pub outdir: PathBuf,
+
+    #[arg(
+        long = "im",
+        long = "in-memory",
+        help = "Flag to avoid writing output files",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub in_memory: bool,
+}
+
+impl CallerArgs {
+    pub fn from(args: Arc<Vec<String>>) -> Self {
+        let drop = vec!["--introns", "--bigwig", "--twobit"];
+
+        let mut local_args = Vec::new();
+        let mut iter = args.iter().peekable();
+
+        while let Some(arg) = iter.next() {
+            // INFO: skipping useless args + value
+            if drop.contains(&arg.as_str()) {
+                iter.next();
+                continue;
+            }
+
+            if arg == "--query" {
+                local_args.push("--bed".to_string());
+            } else {
+                local_args.push(arg.clone());
+            }
+        }
+
+        let mut full_args = vec![env!("CARGO_PKG_NAME").to_string()];
+        full_args.extend(local_args);
+        full_args.push("--recover".to_string());
+
+        CallerArgs::parse_from(full_args)
+    }
 }
