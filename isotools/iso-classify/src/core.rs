@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
@@ -26,7 +28,9 @@ const WIGGLE_SWITCH: [usize; 2] = [2, 4];
 type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
 pub type Genome = DashMap<String, Vec<u8>>;
 
-pub fn classify_introns(args: Args) -> Result<()> {
+pub fn classify_introns(args: Args) -> Result<PathBuf> {
+    log::info!("INFO: Classifying introns...");
+
     let isoseqs = packbed(
         args.iso,
         args.toga,
@@ -72,9 +76,18 @@ pub fn classify_introns(args: Args) -> Result<()> {
     });
 
     pb.finish_and_clear();
-    write_objs(&accumulator.introns, INTRON_CLASSIFICATION);
 
-    Ok(())
+    let output = args.outdir.join(INTRON_CLASSIFICATION);
+
+    write_objs(
+        &accumulator.introns,
+        output
+            .clone()
+            .to_str()
+            .expect("ERROR: Could not convert path to str!"),
+    );
+
+    Ok(output)
 }
 
 struct ParallelAccumulator {

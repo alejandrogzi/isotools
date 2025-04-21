@@ -116,6 +116,16 @@ pub struct IntronArgs {
         requires("toga")
     )]
     pub nag: bool,
+
+    #[arg(
+        long = "outdir",
+        required = false,
+        value_name = "PATH",
+        num_args = 1,
+        help = "Path to output directory",
+        default_value = env!("CARGO_MANIFEST_DIR"),
+    )]
+    pub outdir: PathBuf,
 }
 
 impl ArgCheck for IntronArgs {
@@ -130,6 +140,33 @@ impl ArgCheck for IntronArgs {
     // filled without validation
     fn get_query(&self) -> &Vec<PathBuf> {
         &self.iso
+    }
+}
+
+impl IntronArgs {
+    pub fn from(args: Vec<String>) -> Self {
+        let mut local_args = Vec::new();
+        let mut iter = args.iter().peekable();
+
+        while let Some(arg) = iter.next() {
+            // INFO: skipping --aparent + value
+            if arg == "--aparent" {
+                iter.next();
+                continue;
+            }
+
+            if arg == "--query" {
+                local_args.push("--iso".to_string());
+            } else {
+                local_args.push(arg.clone());
+            }
+        }
+
+        let mut full_args = vec![env!("CARGO_PKG_NAME").to_string()];
+        full_args.extend(local_args);
+        full_args.push("--scan".to_string());
+
+        IntronArgs::parse_from(full_args)
     }
 }
 
