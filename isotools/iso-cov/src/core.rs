@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use std::sync::atomic::AtomicUsize;
 
 use crate::cli::Args;
-use config::{exonic_overlap, get_progress_bar, write_objs, OVERLAP_CDS, OVERLAP_EXON};
+use config::{exonic_overlap, get_progress_bar, write_objs};
 
 type Component = (RefGenePred, Vec<GenePred>);
 type Components = Vec<Component>;
@@ -17,20 +17,20 @@ const COVERAGE: &str = "coverage.tsv";
 pub fn calculate_coverage(args: Args) -> Result<()> {
     info!("Calculating coverage of your Iso-Seqs...");
 
-    let tracks = packbed(args.refs, Some(args.query), OVERLAP_CDS, OVERLAP_EXON)?;
-    let pb = get_progress_bar(tracks.len() as u64, "Processing...");
+    // let tracks = packbed(args.refs, Some(args.query), , OVERLAP_EXON)?;
+    // let pb = get_progress_bar(tracks.len() as u64, "Processing...");
 
     let accumulator = ParallelAccumulator::default();
 
-    tracks.par_iter().for_each(|bucket| {
-        let components = bucket.value().to_owned();
+    // tracks.par_iter().for_each(|bucket| {
+    //     let components = bucket.value().to_owned();
 
-        process_components(components, &accumulator);
+    //     // process_components(components, &accumulator);
 
-        pb.inc(1);
-    });
+    //     pb.inc(1);
+    // });
 
-    pb.finish_and_clear();
+    // pb.finish_and_clear();
     info!(
         "Total number of unassigned queries: {}",
         accumulator
