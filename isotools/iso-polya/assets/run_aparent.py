@@ -9,6 +9,7 @@ import argparse
 import aparent.predictor
 import numpy as np
 from typing import List, Tuple, Callable
+from keras.models import load_model
 
 EncoderType = Callable[[List[str]], List[np.ndarray]]
 
@@ -34,9 +35,9 @@ def run() -> None:
     args = parse()
 
     if args.model:
-        model = aparent.predictor.load_model(args.model)
+        model = load_model(args.model)
     else:
-        model = aparent.predictor.load_model(INSTALL_DIR + MODEL)
+        model = load_model(INSTALL_DIR + MODEL)
 
     encoder = aparent.predictor.get_aparent_encoder(lib_bias=LIB_BIAS)
 
