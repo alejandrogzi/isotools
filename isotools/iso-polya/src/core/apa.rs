@@ -42,7 +42,7 @@ pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Erro
         let chr = bucket.0;
         let reads = bucket.1;
 
-        distribute(reads, &genome, chr, &accumulator);
+        distribute(reads, &genome, chr, &accumulator, &chrom_sizes);
 
         pb.inc(1);
     });
@@ -71,8 +71,15 @@ fn distribute(
     genome: &Genome,
     chr: String,
     accumulator: &ParallelAccumulator,
+    chrom_sizes: &HashMap<String, u32>,
 ) {
     reads.into_par_iter().for_each(|read| {
+        // INFO: check if read is within genomic boundaries [accounting for expansion]
+        if read.end > chrom_sizes[&chr] as u64 {
+            // log::warn!("WARNING: Read {} is out of bounds!", read.name);
+            return;
+        }
+
         // INFO: getting the sequence from the genome for each read
         let seq = match read.strand {
             Strand::Forward => Sequence::new(

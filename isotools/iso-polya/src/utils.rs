@@ -25,9 +25,9 @@ pub struct MiniPolyAPred {
 
 impl MiniPolyAPred {
     #[inline(always)]
-    pub fn read(line: &str, _: OverlapType, _: bool) -> Result<Self, &'static str> {
+    pub fn read(line: &str, _: OverlapType, _: bool) -> Result<Self, Box<dyn std::error::Error>> {
         if line.is_empty() {
-            return Err("Empty line");
+            return Err("ERROR: Empty line".into());
         }
 
         let mut fields = line.split('\t');
@@ -54,7 +54,7 @@ impl MiniPolyAPred {
         let strand = match strand {
             '+' => Strand::Forward,
             '-' => Strand::Reverse,
-            _ => return Err("ERROR: Strand is not + or -"),
+            _ => return Err("ERROR: Strand is not + or -".into()),
         };
 
         // WARN: not doing any coord conversion!
@@ -65,6 +65,11 @@ impl MiniPolyAPred {
                 get(tx_start)? + EXPANSION_SIZE,
             ),
         };
+
+        if start > end || start < 200 {
+            // log::error!("ERROR: Start is greater than end in {}!", name);
+            return Err("ERROR: Start is greater than end".into());
+        }
 
         Ok(MiniPolyAPred {
             name: name.into(),
@@ -82,8 +87,8 @@ impl BedParser for MiniPolyAPred {
         overlap: OverlapType,
         is_ref: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let data = MiniPolyAPred::read(line, overlap, is_ref).expect("ERROR: Cannot parse line");
-        Ok(data)
+        let data = MiniPolyAPred::read(line, overlap, is_ref);
+        data
     }
 
     fn chrom(&self) -> &str {
