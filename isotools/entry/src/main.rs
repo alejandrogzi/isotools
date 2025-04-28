@@ -40,7 +40,15 @@ const ENTRY: &str = env!("CARGO_MANIFEST_DIR");
 const RELEASES: &str = "target/release";
 
 const HELP: &str = r#"
-please refer to docs
+Usage: isotools run --query <PATHS> --toga <PATH> --aparent <PATH> --bigwig <DIR_PATH> --twobit <PATH>
+
+ Options:
+  --query <PATHS>...          Path to Iso-Seqs BED12 file to classify
+  --toga <PATH>               Path to TOGA BED12 file to classify
+  --aparent <PATH>            Path to APARENT BED12 file to classify [iso-polya aparent output]
+  --bigwig <DIR_PATH>         Path to BigWig file to classify
+  --twobit <PATH>             Path to TwoBit file to classify
+  -h, --help                  Print help
 "#;
 
 #[derive(Parser)]
