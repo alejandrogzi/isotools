@@ -5,7 +5,7 @@ authors.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "gene-structure classifier source-based"
+description = "long-read gene-structure classifier"
 keywords = ["intron", "exon", "classify", "isoseq"]
 homepage = "https://github.com/alejandrogzi/isotools"
 repository = "https://github.com/alejandrogzi/isotools"
@@ -24,3 +24,4 @@ iso-orf = { path = "../iso-orf" }
 config = { path = "../config" }
 log.workspace = true
 simple_logger.workspace = true
+dashmap.workspace = true
