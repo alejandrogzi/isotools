@@ -593,6 +593,25 @@ fn process_component(
     Some((fusions, no_fusions, fake_fusions, None, descriptor, false))
 }
 
+/// Recover reads from a fusion component
+///
+/// # Arguments
+///
+/// * `queries` - A vector of GenePred structs
+/// * `descriptor` - A mutable reference to a HashMap containing the descriptor
+///
+/// # Returns
+///
+/// A vector of strings containing the review
+///
+/// # Example
+///
+/// ```
+/// let queries = vec![GenePred { name: "query1".to_string(), line: "line1".to_string() }];
+/// let mut descriptor = HashMap::new();
+/// let review = recover_component(&queries, &mut descriptor);
+/// assert_eq!(review, vec!["line1"]);
+/// ```
 fn recover_component(
     queries: &Vec<GenePred>,
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
