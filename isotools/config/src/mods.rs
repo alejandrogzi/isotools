@@ -187,9 +187,9 @@ pub struct IntronRetentionDescriptor {
     pub retention_acceptor_score: Value,
     pub retention_donor_score: Value,
     pub ref_introns_component_size: Value,
-    pub query_component_size: Value,
+    pub query_intron_component_size: Value,
     pub component_retention_ratio: Value,
-    pub is_dirty_component: Value,
+    pub is_dirty_intron_component: Value,
     pub exonic_status: Value,
     pub intronic_status: Value,
 }
@@ -211,22 +211,22 @@ impl IntronRetentionDescriptor {
     /// ```
     pub fn new() -> Box<Self> {
         Box::new(Self {
-            intron_retention: Value::Bool(false),
+            intron_retention: Value::Null,
             retention_support_type: Value::Null,
             number_of_retentions: Value::Number(0.into()),
             coords_of_retention: Value::Null,
             location_of_retention: Value::Null,
             is_intron_retained_in_frame: Value::Null,
-            retains_rt_intron: Value::Null,
+            retains_rt_intron: Value::Bool(false),
             retains_rt_intron_map: Value::Null,
-            has_rt_intron: Value::Null,
+            has_rt_intron: Value::Bool(false),
             has_rt_intron_map: Value::Null,
             retention_acceptor_score: Value::Null,
             retention_donor_score: Value::Null,
-            ref_introns_component_size: Value::Null,
-            query_component_size: Value::Null,
-            component_retention_ratio: Value::Null,
-            is_dirty_component: Value::Bool(false),
+            ref_introns_component_size: Value::Number(0.into()),
+            query_intron_component_size: Value::Number(0.into()),
+            component_retention_ratio: Value::Number(0.into()),
+            is_dirty_intron_component: Value::Bool(false),
             exonic_status: Value::Null,
             intronic_status: Value::Null,
         })
@@ -268,9 +268,9 @@ impl IntronRetentionDescriptor {
         insert!(retention_acceptor_score);
         insert!(retention_donor_score);
         insert!(ref_introns_component_size);
-        insert!(query_component_size);
+        insert!(query_intron_component_size);
         insert!(component_retention_ratio);
-        insert!(is_dirty_component);
+        insert!(is_dirty_intron_component);
         insert!(exonic_status);
         insert!(intronic_status);
     }
@@ -295,9 +295,9 @@ pub enum IntronRetentionValue {
     RetentionAcceptorScore,
     RetentionDonorScore,
     RefIntronsComponentSize,
-    QueryComponentSize,
+    QueryIntronComponentSize,
     ComponentRetentionRatio,
-    IsDirtyComponent,
+    IsDirtyIntronComponent,
     ExonicStatus,
     IntronicStatus,
 }
@@ -354,11 +354,15 @@ impl ModuleMap for IntronRetentionDescriptor {
                 IntronRetentionValue::RefIntronsComponentSize => {
                     Some(self.ref_introns_component_size.clone())
                 }
-                IntronRetentionValue::QueryComponentSize => Some(self.query_component_size.clone()),
+                IntronRetentionValue::QueryIntronComponentSize => {
+                    Some(self.query_intron_component_size.clone())
+                }
                 IntronRetentionValue::ComponentRetentionRatio => {
                     Some(self.component_retention_ratio.clone())
                 }
-                IntronRetentionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+                IntronRetentionValue::IsDirtyIntronComponent => {
+                    Some(self.is_dirty_intron_component.clone())
+                }
                 IntronRetentionValue::ExonicStatus => Some(self.exonic_status.clone()),
                 IntronRetentionValue::IntronicStatus => Some(self.intronic_status.clone()),
             }
@@ -443,16 +447,16 @@ impl ModuleMap for IntronRetentionDescriptor {
                     self.ref_introns_component_size = value;
                     Ok(())
                 }
-                IntronRetentionValue::QueryComponentSize => {
-                    self.query_component_size = value;
+                IntronRetentionValue::QueryIntronComponentSize => {
+                    self.query_intron_component_size = value;
                     Ok(())
                 }
                 IntronRetentionValue::ComponentRetentionRatio => {
                     self.component_retention_ratio = value;
                     Ok(())
                 }
-                IntronRetentionValue::IsDirtyComponent => {
-                    self.is_dirty_component = value;
+                IntronRetentionValue::IsDirtyIntronComponent => {
+                    self.is_dirty_intron_component = value;
                     Ok(())
                 }
                 IntronRetentionValue::ExonicStatus => {
@@ -526,9 +530,9 @@ impl ModuleMap for IntronRetentionDescriptor {
         insert!(retention_acceptor_score);
         insert!(retention_donor_score);
         insert!(ref_introns_component_size);
-        insert!(query_component_size);
+        insert!(query_intron_component_size);
         insert!(component_retention_ratio);
-        insert!(is_dirty_component);
+        insert!(is_dirty_intron_component);
         insert!(exonic_status);
         insert!(intronic_status);
 
@@ -558,7 +562,7 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             retention_acceptor_score: {:?},
             retention_donor_score: {:?},
             ref_introns_component_size: {:?},
-            query_component_size: {:?},
+            query_intron_component_size: {:?},
             component_retention_ratio: {:?},
             is_dirty_component: {:?},
             exonic_status: {:?},
@@ -577,9 +581,9 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
             self.retention_acceptor_score,
             self.retention_donor_score,
             self.ref_introns_component_size,
-            self.query_component_size,
+            self.query_intron_component_size,
             self.component_retention_ratio,
-            self.is_dirty_component,
+            self.is_dirty_intron_component,
             self.exonic_status,
             self.intronic_status
         )
@@ -603,10 +607,10 @@ impl std::fmt::Debug for IntronRetentionDescriptor {
 pub struct StartTruncationDescriptor {
     pub is_read_truncated: Value,
     pub is_novel_start: Value,
-    pub is_dirty_component: Value,
+    pub is_dirty_utr_component: Value,
     pub component_size: Value,
-    pub ref_component_size: Value,
-    pub query_component_size: Value,
+    pub ref_utr_component_size: Value,
+    pub query_utr_component_size: Value,
     pub truncation_support_ratio: Value,
     pub is_truncation_supported: Value,
     pub component_truncation_ratio: Value,
@@ -634,14 +638,14 @@ impl StartTruncationDescriptor {
     pub fn new() -> Box<Self> {
         Box::new(Self {
             is_read_truncated: Value::Null,
-            is_novel_start: Value::Null,
-            is_dirty_component: Value::Null,
-            component_size: Value::Null,
-            ref_component_size: Value::Null,
-            query_component_size: Value::Null,
-            truncation_support_ratio: Value::Null,
-            is_truncation_supported: Value::Null,
-            component_truncation_ratio: Value::Null,
+            is_novel_start: Value::Bool(true),
+            is_dirty_utr_component: Value::Bool(false),
+            component_size: Value::Number(0.into()),
+            ref_utr_component_size: Value::Number(0.into()),
+            query_utr_component_size: Value::Number(0.into()),
+            truncation_support_ratio: Value::Number(0.into()),
+            is_truncation_supported: Value::Bool(false),
+            component_truncation_ratio: Value::Number(0.into()),
         })
     }
 
@@ -670,10 +674,10 @@ impl StartTruncationDescriptor {
 
         insert!(is_read_truncated);
         insert!(is_novel_start);
-        insert!(is_dirty_component);
+        insert!(is_dirty_utr_component);
         insert!(component_size);
-        insert!(ref_component_size);
-        insert!(query_component_size);
+        insert!(ref_utr_component_size);
+        insert!(query_utr_component_size);
         insert!(truncation_support_ratio);
         insert!(is_truncation_supported);
         insert!(component_truncation_ratio);
@@ -700,10 +704,10 @@ pub enum StartTruncationValue {
     TruncationSupportRatio,
     IsTruncationSupported,
     ComponentSize,
-    RefComponentSize,
-    QueryComponentSize,
+    RefUtrComponentSize,
+    QueryUtrComponentSize,
     ComponentTruncationRatio,
-    IsDirtyComponent,
+    IsDirtyUtrComponent,
 }
 
 /// ModuleMap trait implementation for StartTruncationDescriptor
@@ -742,12 +746,18 @@ impl ModuleMap for StartTruncationDescriptor {
                     Some(self.is_truncation_supported.clone())
                 }
                 StartTruncationValue::ComponentSize => Some(self.component_size.clone()),
-                StartTruncationValue::RefComponentSize => Some(self.ref_component_size.clone()),
-                StartTruncationValue::QueryComponentSize => Some(self.query_component_size.clone()),
+                StartTruncationValue::RefUtrComponentSize => {
+                    Some(self.ref_utr_component_size.clone())
+                }
+                StartTruncationValue::QueryUtrComponentSize => {
+                    Some(self.query_utr_component_size.clone())
+                }
                 StartTruncationValue::ComponentTruncationRatio => {
                     Some(self.component_truncation_ratio.clone())
                 }
-                StartTruncationValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+                StartTruncationValue::IsDirtyUtrComponent => {
+                    Some(self.is_dirty_utr_component.clone())
+                }
             }
         } else {
             None
@@ -798,20 +808,20 @@ impl ModuleMap for StartTruncationDescriptor {
                     self.component_size = value;
                     Ok(())
                 }
-                StartTruncationValue::RefComponentSize => {
-                    self.ref_component_size = value;
+                StartTruncationValue::RefUtrComponentSize => {
+                    self.ref_utr_component_size = value;
                     Ok(())
                 }
-                StartTruncationValue::QueryComponentSize => {
-                    self.query_component_size = value;
+                StartTruncationValue::QueryUtrComponentSize => {
+                    self.query_utr_component_size = value;
                     Ok(())
                 }
                 StartTruncationValue::ComponentTruncationRatio => {
                     self.component_truncation_ratio = value;
                     Ok(())
                 }
-                StartTruncationValue::IsDirtyComponent => {
-                    self.is_dirty_component = value;
+                StartTruncationValue::IsDirtyUtrComponent => {
+                    self.is_dirty_utr_component = value;
                     Ok(())
                 }
             }
@@ -865,10 +875,10 @@ impl ModuleMap for StartTruncationDescriptor {
 
         insert!(is_read_truncated);
         insert!(is_novel_start);
-        insert!(is_dirty_component);
+        insert!(is_dirty_utr_component);
         insert!(component_size);
-        insert!(ref_component_size);
-        insert!(query_component_size);
+        insert!(ref_utr_component_size);
+        insert!(query_utr_component_size);
         insert!(truncation_support_ratio);
         insert!(is_truncation_supported);
         insert!(component_truncation_ratio);
@@ -898,10 +908,10 @@ impl std::fmt::Debug for StartTruncationDescriptor {
             }}",
             self.is_read_truncated,
             self.is_novel_start,
-            self.is_dirty_component,
+            self.is_dirty_utr_component,
             self.component_size,
-            self.ref_component_size,
-            self.query_component_size,
+            self.ref_utr_component_size,
+            self.query_utr_component_size,
             self.truncation_support_ratio,
             self.is_truncation_supported,
             self.component_truncation_ratio
@@ -916,13 +926,12 @@ impl std::fmt::Debug for StartTruncationDescriptor {
 #[derive(Clone)]
 pub struct FusionDetectionDescriptor {
     is_fused_read: Value,
-    is_fusion_supported: Value,
-    ref_component_size: Value,
-    query_component_size: Value,
+    ref_fusion_component_size: Value,
+    query_fusion_component_size: Value,
     whole_component_fusion_ratio: Value,
     real_component_fusion_ratio: Value,
     fake_component_fusion_ratio: Value,
-    is_dirty_component: Value,
+    is_dirty_fusion_component: Value,
     location_of_fusion: Value,
     fusion_in_frame: Value,
 }
@@ -949,15 +958,14 @@ impl FusionDetectionDescriptor {
     pub fn new() -> Box<Self> {
         Box::new(Self {
             is_fused_read: Value::Null,
-            is_fusion_supported: Value::Null,
-            ref_component_size: Value::Null,
-            query_component_size: Value::Null,
-            whole_component_fusion_ratio: Value::Null,
-            real_component_fusion_ratio: Value::Null,
-            fake_component_fusion_ratio: Value::Null,
-            is_dirty_component: Value::Null,
+            ref_fusion_component_size: Value::Number(0.into()),
+            query_fusion_component_size: Value::Number(0.into()),
+            whole_component_fusion_ratio: serde_json::json!(0.0),
+            real_component_fusion_ratio: serde_json::json!(0.0),
+            fake_component_fusion_ratio: serde_json::json!(0.0),
+            is_dirty_fusion_component: Value::Bool(false),
             location_of_fusion: Value::Null,
-            fusion_in_frame: Value::Null,
+            fusion_in_frame: Value::Bool(false), // WARN: needs to be binary -> setting false as default
         })
     }
 
@@ -985,13 +993,12 @@ impl FusionDetectionDescriptor {
         }
 
         insert!(is_fused_read);
-        insert!(is_fusion_supported);
-        insert!(ref_component_size);
-        insert!(query_component_size);
+        insert!(ref_fusion_component_size);
+        insert!(query_fusion_component_size);
         insert!(whole_component_fusion_ratio);
         insert!(real_component_fusion_ratio);
         insert!(fake_component_fusion_ratio);
-        insert!(is_dirty_component);
+        insert!(is_dirty_fusion_component);
         insert!(location_of_fusion);
         insert!(fusion_in_frame);
     }
@@ -1003,13 +1010,12 @@ impl FusionDetectionDescriptor {
 /// the values in the FusionDetectionDescriptor.
 pub enum FusionDetectionValue {
     IsFusedRead,
-    IsFusionSupported,
-    RefComponentSize,
-    QueryComponentSize,
+    RefFusionComponentSize,
+    QueryFusionComponentSize,
     WholeComponentFusionRatio,
     RealComponentFusionRatio,
     FakeComponentFusionRatio,
-    IsDirtyComponent,
+    IsDirtyFusionComponent,
     LocationOfFusion,
     FusionInFrame,
 }
@@ -1039,9 +1045,12 @@ impl ModuleMap for FusionDetectionDescriptor {
         if let Ok(key) = key.downcast::<FusionDetectionValue>() {
             match *key {
                 FusionDetectionValue::IsFusedRead => Some(self.is_fused_read.clone()),
-                FusionDetectionValue::IsFusionSupported => Some(self.is_fusion_supported.clone()),
-                FusionDetectionValue::RefComponentSize => Some(self.ref_component_size.clone()),
-                FusionDetectionValue::QueryComponentSize => Some(self.query_component_size.clone()),
+                FusionDetectionValue::RefFusionComponentSize => {
+                    Some(self.ref_fusion_component_size.clone())
+                }
+                FusionDetectionValue::QueryFusionComponentSize => {
+                    Some(self.query_fusion_component_size.clone())
+                }
                 FusionDetectionValue::WholeComponentFusionRatio => {
                     Some(self.whole_component_fusion_ratio.clone())
                 }
@@ -1051,7 +1060,9 @@ impl ModuleMap for FusionDetectionDescriptor {
                 FusionDetectionValue::FakeComponentFusionRatio => {
                     Some(self.fake_component_fusion_ratio.clone())
                 }
-                FusionDetectionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+                FusionDetectionValue::IsDirtyFusionComponent => {
+                    Some(self.is_dirty_fusion_component.clone())
+                }
                 FusionDetectionValue::LocationOfFusion => Some(self.location_of_fusion.clone()),
                 FusionDetectionValue::FusionInFrame => Some(self.fusion_in_frame.clone()),
             }
@@ -1088,16 +1099,12 @@ impl ModuleMap for FusionDetectionDescriptor {
                     self.is_fused_read = value;
                     Ok(())
                 }
-                FusionDetectionValue::IsFusionSupported => {
-                    self.is_fusion_supported = value;
+                FusionDetectionValue::RefFusionComponentSize => {
+                    self.ref_fusion_component_size = value;
                     Ok(())
                 }
-                FusionDetectionValue::RefComponentSize => {
-                    self.ref_component_size = value;
-                    Ok(())
-                }
-                FusionDetectionValue::QueryComponentSize => {
-                    self.query_component_size = value;
+                FusionDetectionValue::QueryFusionComponentSize => {
+                    self.query_fusion_component_size = value;
                     Ok(())
                 }
                 FusionDetectionValue::WholeComponentFusionRatio => {
@@ -1112,8 +1119,8 @@ impl ModuleMap for FusionDetectionDescriptor {
                     self.fake_component_fusion_ratio = value;
                     Ok(())
                 }
-                FusionDetectionValue::IsDirtyComponent => {
-                    self.is_dirty_component = value;
+                FusionDetectionValue::IsDirtyFusionComponent => {
+                    self.is_dirty_fusion_component = value;
                     Ok(())
                 }
                 FusionDetectionValue::LocationOfFusion => {
@@ -1175,13 +1182,12 @@ impl ModuleMap for FusionDetectionDescriptor {
         }
 
         insert!(is_fused_read);
-        insert!(is_fusion_supported);
-        insert!(ref_component_size);
-        insert!(query_component_size);
+        insert!(ref_fusion_component_size);
+        insert!(query_fusion_component_size);
         insert!(whole_component_fusion_ratio);
         insert!(real_component_fusion_ratio);
         insert!(fake_component_fusion_ratio);
-        insert!(is_dirty_component);
+        insert!(is_dirty_fusion_component);
         insert!(location_of_fusion);
         insert!(fusion_in_frame);
 
@@ -1199,7 +1205,6 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             f,
             "{{
             is_fused_read: {:?},
-            is_fusion_supported: {:?},
             ref_component_size: {:?},
             query_component_size: {:?}
             whole_component_fusion_ratio: {:?},
@@ -1210,13 +1215,12 @@ impl std::fmt::Debug for FusionDetectionDescriptor {
             fusion_in_frame: {:?}
             }}",
             self.is_fused_read,
-            self.is_fusion_supported,
-            self.ref_component_size,
-            self.query_component_size,
+            self.ref_fusion_component_size,
+            self.query_fusion_component_size,
             self.whole_component_fusion_ratio,
             self.real_component_fusion_ratio,
             self.fake_component_fusion_ratio,
-            self.is_dirty_component,
+            self.is_dirty_fusion_component,
             self.location_of_fusion,
             self.fusion_in_frame,
         )
@@ -1235,7 +1239,7 @@ pub struct PolyAPredictionDescriptor {
     pub genomic_poly_a: Value,
     pub is_intrapriming: Value,
     pub poly_a_location: Value,
-    pub is_dirty_component: Value,
+    pub is_dirty_polya_component: Value,
     pub intrapriming_comp_ratio: Value,
     pub forced_poly_a: Value,
 }
@@ -1267,9 +1271,9 @@ impl PolyAPredictionDescriptor {
             genomic_poly_a: Value::Null,
             is_intrapriming: Value::Null,
             poly_a_location: Value::Null,
-            is_dirty_component: Value::Null,
-            intrapriming_comp_ratio: Value::Null,
-            forced_poly_a: Value::Null,
+            is_dirty_polya_component: Value::Bool(false),
+            intrapriming_comp_ratio: serde_json::json!(0.0),
+            forced_poly_a: Value::Bool(false),
         })
     }
 
@@ -1303,7 +1307,7 @@ impl PolyAPredictionDescriptor {
         insert!(genomic_poly_a);
         insert!(is_intrapriming);
         insert!(poly_a_location);
-        insert!(is_dirty_component);
+        insert!(is_dirty_polya_component);
         insert!(intrapriming_comp_ratio);
         insert!(forced_poly_a);
     }
@@ -1320,7 +1324,7 @@ pub enum PolyAPredictionValue {
     WholePolyALength,
     IsIntrapriming,
     PolyALocation,
-    IsDirtyComponent,
+    IsDirtyPolyAComponent,
     IntraprimingComponentRatio,
     ForcedPolyAPass,
 }
@@ -1356,7 +1360,9 @@ impl ModuleMap for PolyAPredictionDescriptor {
                 PolyAPredictionValue::PolyAScore => Some(self.poly_a_score.clone()),
                 PolyAPredictionValue::WholePolyALength => Some(self.whole_poly_a_length.clone()),
                 PolyAPredictionValue::PolyALocation => Some(self.poly_a_location.clone()),
-                PolyAPredictionValue::IsDirtyComponent => Some(self.is_dirty_component.clone()),
+                PolyAPredictionValue::IsDirtyPolyAComponent => {
+                    Some(self.is_dirty_polya_component.clone())
+                }
                 PolyAPredictionValue::GenomicPolyA => Some(self.genomic_poly_a.clone()),
                 PolyAPredictionValue::IsIntrapriming => Some(self.is_intrapriming.clone()),
                 PolyAPredictionValue::IntraprimingComponentRatio => {
@@ -1405,8 +1411,8 @@ impl ModuleMap for PolyAPredictionDescriptor {
                     self.poly_a_location = value;
                     Ok(())
                 }
-                PolyAPredictionValue::IsDirtyComponent => {
-                    self.is_dirty_component = value;
+                PolyAPredictionValue::IsDirtyPolyAComponent => {
+                    self.is_dirty_polya_component = value;
                     Ok(())
                 }
                 PolyAPredictionValue::WholePolyALength => {
@@ -1485,7 +1491,7 @@ impl ModuleMap for PolyAPredictionDescriptor {
         insert!(genomic_poly_a);
         insert!(is_intrapriming);
         insert!(poly_a_location);
-        insert!(is_dirty_component);
+        insert!(is_dirty_polya_component);
         insert!(intrapriming_comp_ratio);
         insert!(forced_poly_a);
 
@@ -1518,7 +1524,7 @@ impl std::fmt::Debug for PolyAPredictionDescriptor {
             self.genomic_poly_a,
             self.is_intrapriming,
             self.poly_a_location,
-            self.is_dirty_component,
+            self.is_dirty_polya_component,
             self.intrapriming_comp_ratio,
             self.forced_poly_a
         )

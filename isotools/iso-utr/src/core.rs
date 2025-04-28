@@ -144,13 +144,13 @@ pub fn process_component(
             .ok();
         handle
             .set_value(
-                Box::new(StartTruncationValue::RefComponentSize),
+                Box::new(StartTruncationValue::RefUtrComponentSize),
                 serde_json::json!(refs.reads.len()),
             )
             .ok();
         handle
             .set_value(
-                Box::new(StartTruncationValue::QueryComponentSize),
+                Box::new(StartTruncationValue::QueryUtrComponentSize),
                 serde_json::json!(queries.len()),
             )
             .ok();
@@ -321,7 +321,7 @@ pub fn recover_from_dirt(
 
                 handle
                     .set_value(
-                        Box::new(StartTruncationValue::IsDirtyComponent),
+                        Box::new(StartTruncationValue::IsDirtyUtrComponent),
                         Value::Bool(true),
                     )
                     .ok();
@@ -364,7 +364,7 @@ pub fn recover_from_dirt(
 
                 handle
                     .set_value(
-                        Box::new(StartTruncationValue::IsDirtyComponent),
+                        Box::new(StartTruncationValue::IsDirtyUtrComponent),
                         Value::Bool(true),
                     )
                     .ok();

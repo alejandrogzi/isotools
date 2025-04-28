@@ -601,7 +601,7 @@ fn process_component(
 
                 handle
                     .set_value(
-                        Box::new(PolyAPredictionValue::IsDirtyComponent),
+                        Box::new(PolyAPredictionValue::IsDirtyPolyAComponent),
                         serde_json::json!(true),
                     )
                     .ok();

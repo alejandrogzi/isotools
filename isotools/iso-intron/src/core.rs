@@ -356,7 +356,7 @@ fn recover_component(
 
         handle
             .set_value(
-                Box::new(IntronRetentionValue::IsDirtyComponent),
+                Box::new(IntronRetentionValue::IsDirtyIntronComponent),
                 serde_json::json!(true),
             )
             .ok();
@@ -515,7 +515,7 @@ impl RetentionSchema {
                 self.ref_introns_component_size.clone(),
             ),
             (
-                IntronRetentionValue::QueryComponentSize,
+                IntronRetentionValue::QueryIntronComponentSize,
                 self.query_component_size.clone(),
             ),
             (
@@ -523,7 +523,7 @@ impl RetentionSchema {
                 self.component_retention_ratio.clone(),
             ),
             (
-                IntronRetentionValue::IsDirtyComponent,
+                IntronRetentionValue::IsDirtyIntronComponent,
                 self.is_dirty_component.clone(),
             ),
             (
@@ -555,19 +555,19 @@ impl Default for RetentionSchema {
         RetentionSchema {
             intron_retention: false,
             retention_support_type: vec![],
-            number_of_retentions: Value::Null,
+            number_of_retentions: Value::Number(0.into()),
             coords_of_retention: vec![],
             location_of_retention: vec![],
             is_intron_retained_in_frame: vec![],
-            retains_rt_intron: Value::Null,
+            retains_rt_intron: Value::Bool(false),
             retains_rt_map: vec![],
             has_rt_intron: Value::Null,
             has_rt_intron_map: vec![],
             retention_acceptor_score: vec![],
             retention_donor_score: vec![],
-            ref_introns_component_size: Value::Null,
-            query_component_size: Value::Null,
-            component_retention_ratio: Value::Null,
+            ref_introns_component_size: Value::Number(0.into()),
+            query_component_size: Value::Number(0.into()),
+            component_retention_ratio: serde_json::json!(0.0),
             is_dirty_component: Value::Bool(false),
             exonic_status: IntronModuleReadAction::Keep,
             intronic_status: IntronModuleReadAction::Keep,

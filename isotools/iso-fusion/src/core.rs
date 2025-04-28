@@ -232,7 +232,6 @@ fn process_components(
 ///
 pub struct FusionSchema {
     is_fused_read: Value,
-    is_fusion_supported: Value,
     ref_component_size: Value,
     query_component_size: Value,
     whole_component_fusion_ratio: Value,
@@ -299,15 +298,11 @@ impl FusionSchema {
                 self.is_fused_read.clone(),
             ),
             (
-                FusionDetectionValue::IsFusionSupported,
-                self.is_fusion_supported.clone(),
-            ),
-            (
-                FusionDetectionValue::RefComponentSize,
+                FusionDetectionValue::RefFusionComponentSize,
                 self.ref_component_size.clone(),
             ),
             (
-                FusionDetectionValue::QueryComponentSize,
+                FusionDetectionValue::QueryFusionComponentSize,
                 self.query_component_size.clone(),
             ),
             (
@@ -323,7 +318,7 @@ impl FusionSchema {
                 self.fake_component_fusion_ratio.clone(),
             ),
             (
-                FusionDetectionValue::IsDirtyComponent,
+                FusionDetectionValue::IsDirtyFusionComponent,
                 self.is_dirty_component.clone(),
             ),
             (
@@ -352,16 +347,15 @@ impl FusionSchema {
 impl Default for FusionSchema {
     fn default() -> Self {
         FusionSchema {
-            is_fused_read: Value::Null,
-            is_fusion_supported: Value::Null,
-            ref_component_size: Value::Null,
-            query_component_size: Value::Null,
+            is_fused_read: Value::Bool(false),
+            ref_component_size: Value::Number(0.into()),
+            query_component_size: Value::Number(0.into()),
             whole_component_fusion_ratio: Value::Null,
             real_component_fusion_ratio: Value::Null,
             fake_component_fusion_ratio: Value::Null,
-            is_dirty_component: Value::Null,
+            is_dirty_component: Value::Bool(false),
             location_of_fusion: Value::Null,
-            fusion_in_frame: Value::Null,
+            fusion_in_frame: Value::Bool(false),
         }
     }
 }
@@ -611,7 +605,7 @@ fn recover_component(
 
         handle
             .set_value(
-                Box::new(FusionDetectionValue::IsDirtyComponent),
+                Box::new(FusionDetectionValue::IsDirtyFusionComponent),
                 Value::Bool(true),
             )
             .ok();
@@ -687,7 +681,6 @@ fn fill_schema(
             let mut schema = FusionSchema::default();
 
             schema.is_fused_read = Value::Bool(false);
-            schema.is_fusion_supported = Value::Bool(false);
             schema.ref_component_size = Value::Number(genes.into());
             schema.query_component_size = Value::Number(reads.len().into());
             schema.whole_component_fusion_ratio = serde_json::json!(whole);
