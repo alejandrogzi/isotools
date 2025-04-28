@@ -678,6 +678,7 @@ fn detect_retention(
 ) {
     let mut action = IntronModuleReadAction::Keep;
     let read_exons = read.get_exons();
+    let mut must_discard = false;
 
     for exon in read_exons {
         let exon_start = exon.0;
@@ -764,6 +765,7 @@ fn detect_retention(
                                     } else {
                                         // INFO: clear point where IR is in CDS + not in-frame + splicing
                                         // INFO: if support is splicing, discard read
+                                        must_discard = true;
                                         action = IntronModuleReadAction::Discard;
                                     }
                                 }
@@ -786,6 +788,7 @@ fn detect_retention(
                                 // INFO: logic changed here -> if intron is not in frame, discard read
                                 // INFO: if intron is in frame, keep read -> flag it as UNCLEAR
                                 if !stats.stats.is_in_frame {
+                                    must_discard = true;
                                     action = IntronModuleReadAction::Discard;
                                 } else {
                                     action = IntronModuleReadAction::Unclear;
@@ -799,5 +802,11 @@ fn detect_retention(
     }
 
     schema.number_of_retentions = Value::Number(schema.coords_of_retention.len().into());
-    schema.exonic_status = action;
+
+    // INFO: covering overwriting within loop
+    if must_discard {
+        schema.exonic_status = IntronModuleReadAction::Discard;
+    } else {
+        schema.exonic_status = action;
+    }
 }
