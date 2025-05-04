@@ -105,6 +105,16 @@ pub struct Args {
         action = ArgAction::Set,
     )]
     pub in_memory: bool,
+
+    #[arg(
+        short = 'p',
+        long = "prefix",
+        required = false,
+        value_name = "PATH",
+        help = "Prefix for output files",
+        default_value("")
+    )]
+    pub prefix: PathBuf,
 }
 
 impl ArgCheck for Args {

@@ -12,7 +12,6 @@
 //! parallelized to offer fast performance on large datasets.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -91,9 +90,9 @@ pub fn detect_intron_retentions(args: Args) -> Result<DashMap<String, Box<dyn Mo
         par_write_results(
             &accumulator,
             vec![
-                PathBuf::from(INTRON_RETENTIONS),
-                PathBuf::from(INTRON_RETENTION_FREE),
-                PathBuf::from(INTRON_RETENTION_REVIEW),
+                args.prefix.join(INTRON_RETENTIONS),
+                args.prefix.join(INTRON_RETENTION_FREE),
+                args.prefix.join(INTRON_RETENTION_REVIEW),
             ],
             None,
         );

@@ -8,7 +8,7 @@ use rayon::iter::ParallelIterator;
 use rayon::prelude::*;
 use rayon::str::ParallelString;
 
-use config::{write_objs, ModuleMap, TRUNCATIONS, TRUNCATION_FREE};
+use config::{write_objs, ModuleMap, ParallelCollector, TRUNCATIONS, TRUNCATION_FREE};
 
 pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashSet<String>> {
     if paths.is_empty() {
@@ -88,7 +88,28 @@ impl Default for ParallelAccumulator {
     }
 }
 
+/// ParallelCollector trait for ParallelAccumulator
+impl ParallelCollector for ParallelAccumulator {
+    /// Get the number of fields in the accumulator
+    fn len(&self) -> usize {
+        ParallelAccumulator::NUM_FIELDS
+    }
+
+    /// Get the a collection of items from the accumulator
+    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn std::error::Error>> {
+        let mut collections = Vec::with_capacity(ParallelAccumulator::NUM_FIELDS);
+
+        collections.push(&self.truncations);
+        collections.push(&self.no_truncations);
+
+        std::result::Result::Ok(collections)
+    }
+}
+
 impl ParallelAccumulator {
+    /// Number of fields in the accumulator of type DashSet<String>
+    pub const NUM_FIELDS: usize = 2;
+
     pub fn num_truncations(&self) -> usize {
         self.truncations.len()
     }

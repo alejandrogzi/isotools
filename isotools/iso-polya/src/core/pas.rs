@@ -1,7 +1,8 @@
 use config::{
-    bed_to_nested_map, get_progress_bar, write_descriptor, write_objs, BedColumn, BedColumnValue,
-    ModuleDescriptor, ModuleMap, ModuleType, PolyAPredictionValue, INTRAPRIMING_RATIO_THRESHOLD,
-    INTRAPRIMING_REVIEW, POLYA_DESCRIPTOR, POLYA_INTRAPRIMING, POLYA_PASS,
+    bed_to_nested_map, get_progress_bar, par_write_results, write_descriptor, BedColumn,
+    BedColumnValue, ModuleDescriptor, ModuleMap, ModuleType, ParallelCollector,
+    PolyAPredictionValue, INTRAPRIMING_RATIO_THRESHOLD, INTRAPRIMING_REVIEW, POLYA_DESCRIPTOR,
+    POLYA_INTRAPRIMING, POLYA_PASS,
 };
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
@@ -84,33 +85,20 @@ pub fn pas_caller(
             counter.num_of_reviews,
             counter.load_ratio()
         );
-
-        if !args.in_memory {
-            if accumulator.review.len() > 0 {
-                write_objs(&accumulator.review, INTRAPRIMING_REVIEW);
-            }
-        }
     }
 
     if !args.in_memory {
         log::info!("INFO: Writing results to disk...");
 
-        [&accumulator.pass, &accumulator.intrapriming]
-            .par_iter()
-            .zip(
-                [
-                    args.outdir
-                        .join(POLYA_PASS)
-                        .to_str()
-                        .expect("ERROR: Could not convert path!"),
-                    args.outdir
-                        .join(POLYA_INTRAPRIMING)
-                        .to_str()
-                        .expect("ERROR: Could not convert path!"),
-                ]
-                .par_iter(),
-            )
-            .for_each(|(rx, path)| write_objs(&rx, path));
+        par_write_results(
+            &accumulator,
+            vec![
+                args.prefix.join(POLYA_PASS),
+                args.prefix.join(POLYA_INTRAPRIMING),
+                args.prefix.join(INTRAPRIMING_REVIEW),
+            ],
+            None,
+        );
 
         write_descriptor(&accumulator.descriptor, POLYA_DESCRIPTOR);
     }
@@ -250,7 +238,29 @@ impl Default for ParallelAccumulator {
     }
 }
 
+/// ParallelCollector trait for ParallelAccumulator
+impl ParallelCollector for ParallelAccumulator {
+    /// Get the number of fields in the accumulator
+    fn len(&self) -> usize {
+        ParallelAccumulator::NUM_FIELDS
+    }
+
+    /// Get the a collection of items from the accumulator
+    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn std::error::Error>> {
+        let mut collections = Vec::with_capacity(ParallelAccumulator::NUM_FIELDS);
+
+        collections.push(&self.pass);
+        collections.push(&self.intrapriming);
+        collections.push(&self.review);
+
+        std::result::Result::Ok(collections)
+    }
+}
+
 impl ParallelAccumulator {
+    /// Number of fields in the accumulator of type DashSet<String>
+    pub const NUM_FIELDS: usize = 3;
+
     /// Adds a result to the accumulator
     ///
     /// # Arguments

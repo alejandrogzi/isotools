@@ -105,10 +105,10 @@ pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>>
         par_write_results(
             &accumulator,
             vec![
-                PathBuf::from(FUSIONS),
-                PathBuf::from(FUSION_FREE),
-                PathBuf::from(FUSION_REVIEW),
-                PathBuf::from(FUSION_FAKES),
+                args.prefix.join(FUSIONS),
+                args.prefix.join(FUSION_FREE),
+                args.prefix.join(FUSION_REVIEW),
+                args.prefix.join(FUSION_FAKES),
             ],
             None,
         );

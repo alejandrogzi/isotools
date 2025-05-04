@@ -748,7 +748,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "iso-classify"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "iso-fusion"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "iso-intron"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "iso-polya"
-version = "0.0.6"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -882,6 +882,7 @@ dependencies = [
  "rand",
  "rayon",
  "serde",
+ "serde_json",
  "simple_logger",
  "thiserror 2.0.11",
  "tokio",
@@ -890,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "iso-utr"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -912,6 +913,7 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "config",
+ "dashmap",
  "iso-classify",
  "iso-cov",
  "iso-fusion",

@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use config::{
-    get_progress_bar, write_descriptor, ModuleDescriptor, ModuleMap, ModuleType, OverlapType,
-    StartTruncationValue, TRUNCATION_DESCRIPTOR, TRUNCATION_RECOVERY_THRESHOLD,
-    TRUNCATION_THRESHOLD,
+    get_progress_bar, par_write_results, write_descriptor, ModuleDescriptor, ModuleMap, ModuleType,
+    OverlapType, StartTruncationValue, TRUNCATIONS, TRUNCATION_DESCRIPTOR, TRUNCATION_FREE,
+    TRUNCATION_RECOVERY_THRESHOLD, TRUNCATION_THRESHOLD,
 };
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
@@ -57,7 +57,15 @@ pub fn detect_truncations(args: Args) -> Result<DashMap<String, Box<dyn ModuleMa
     if !args.in_memory {
         info!("INFO: Writing results...");
 
-        write_results(&accumulator);
+        par_write_results(
+            &accumulator,
+            vec![
+                args.prefix.join(TRUNCATIONS),
+                args.prefix.join(TRUNCATION_FREE),
+            ],
+            None,
+        );
+
         write_descriptor(&accumulator.descriptor, TRUNCATION_DESCRIPTOR);
     }
 
@@ -405,7 +413,7 @@ pub fn recover_from_dirt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::{io::Write, path::PathBuf};
     use tempfile;
 
     #[test]
@@ -430,6 +438,7 @@ mod tests {
             recover: false,
             skip_exon: false,
             in_memory: true,
+            prefix: PathBuf::from(""),
         };
 
         assert!(detect_truncations(args).is_ok());
