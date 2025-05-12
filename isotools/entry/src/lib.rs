@@ -13,6 +13,12 @@ const GLOBAL_DESCRIPTOR: &str = "global_descriptor.tsv";
 pub fn lib(mut args: Vec<String>) {
     __check_args(&args);
 
+    // WARN: will expect to always have outdir as last argument
+    let outdir = args.pop().expect(&format!(
+        "ERROR: Missing output directory argument, you had: {:?}",
+        args
+    ));
+
     let introns = lib_iso_classify(args.clone())
         .expect("ERROR: Failed to classify introns")
         .display()
@@ -40,7 +46,7 @@ pub fn lib(mut args: Vec<String>) {
 
     write_descriptor(
         &global_descriptor,
-        format!("{}/{}", env!("CARGO_MANIFEST_DIR"), GLOBAL_DESCRIPTOR).as_str(),
+        format!("{}/{}", outdir, GLOBAL_DESCRIPTOR).as_str(),
     );
 }
 
