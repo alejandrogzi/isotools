@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use config::{
@@ -57,12 +58,11 @@ pub fn detect_truncations(args: Args) -> Result<DashMap<String, Box<dyn ModuleMa
     if !args.in_memory {
         info!("INFO: Writing results...");
 
+        let prefix = args.prefix.clone().unwrap_or_else(PathBuf::new);
+
         par_write_results(
             &accumulator,
-            vec![
-                args.prefix.join(TRUNCATIONS),
-                args.prefix.join(TRUNCATION_FREE),
-            ],
+            vec![prefix.join(TRUNCATIONS), prefix.join(TRUNCATION_FREE)],
             None,
         );
 
@@ -413,7 +413,7 @@ pub fn recover_from_dirt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io::Write, path::PathBuf};
+    use std::io::Write;
     use tempfile;
 
     #[test]
@@ -438,7 +438,7 @@ mod tests {
             recover: false,
             skip_exon: false,
             in_memory: true,
-            prefix: PathBuf::from(""),
+            prefix: None,
         };
 
         assert!(detect_truncations(args).is_ok());

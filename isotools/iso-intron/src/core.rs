@@ -12,6 +12,7 @@
 //! parallelized to offer fast performance on large datasets.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -87,12 +88,15 @@ pub fn detect_intron_retentions(args: Args) -> Result<DashMap<String, Box<dyn Mo
         info!("Writing results to disk...");
 
         write_descriptor(&accumulator.descriptor, INTRON_RETENTION_DESCRIPTOR);
+
+        let prefix = args.prefix.clone().unwrap_or_else(PathBuf::new);
+
         par_write_results(
             &accumulator,
             vec![
-                args.prefix.join(INTRON_RETENTIONS),
-                args.prefix.join(INTRON_RETENTION_FREE),
-                args.prefix.join(INTRON_RETENTION_REVIEW),
+                prefix.join(INTRON_RETENTIONS),
+                prefix.join(INTRON_RETENTION_FREE),
+                prefix.join(INTRON_RETENTION_REVIEW),
             ],
             None,
         );

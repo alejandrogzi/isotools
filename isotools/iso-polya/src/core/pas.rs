@@ -90,12 +90,14 @@ pub fn pas_caller(
     if !args.in_memory {
         log::info!("INFO: Writing results to disk...");
 
+        let prefix = args.prefix.clone().unwrap_or_else(PathBuf::new);
+
         par_write_results(
             &accumulator,
             vec![
-                args.prefix.join(POLYA_PASS),
-                args.prefix.join(POLYA_INTRAPRIMING),
-                args.prefix.join(INTRAPRIMING_REVIEW),
+                prefix.join(POLYA_PASS),
+                prefix.join(POLYA_INTRAPRIMING),
+                prefix.join(INTRAPRIMING_REVIEW),
             ],
             None,
         );

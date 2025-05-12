@@ -77,10 +77,9 @@ pub struct Args {
         long = "prefix",
         required = false,
         value_name = "PATH",
-        help = "Prefix for output files",
-        default_value("")
+        help = "Prefix for output files"
     )]
-    pub prefix: PathBuf,
+    pub prefix: Option<PathBuf>,
 }
 
 impl ArgCheck for Args {
