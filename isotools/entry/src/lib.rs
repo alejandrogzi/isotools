@@ -1,7 +1,6 @@
 use config::{merge, write_descriptor};
 
 use iso_classify::lib_iso_classify;
-use iso_fusion::lib_iso_fusion;
 use iso_intron::lib_iso_intron;
 use iso_polya::lib_iso_polya;
 use iso_utr::lib_iso_utr;
@@ -27,12 +26,17 @@ pub fn lib(mut args: Vec<String>) {
 
     let args = Arc::new(args);
 
+    // TODO: -F/--fusions -> will include lib_iso_fusion(args.clone());
     let retentions = lib_iso_intron(args.clone());
-    let fusions = lib_iso_fusion(args.clone());
     let truncations = lib_iso_utr(args.clone());
     let intraprimings = lib_iso_polya(args);
 
-    let global_descriptor = merge(vec![retentions, truncations, fusions, intraprimings]);
+    let global_descriptor = merge(vec![
+        retentions,
+        truncations,
+        dashmap::DashMap::new(),
+        intraprimings,
+    ]);
 
     write_descriptor(
         &global_descriptor,
