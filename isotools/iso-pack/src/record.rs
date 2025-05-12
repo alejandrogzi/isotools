@@ -468,7 +468,7 @@ impl GenePred {
     }
 
     #[inline(always)]
-    pub fn colorline(self: Self, color: &str) -> Self {
+    pub fn colorline(self: &Self, color: &str) -> Self {
         let nline = self.line.clone();
         let mut fields = nline.split('\t').collect::<Vec<_>>();
         fields[8] = color;
@@ -478,7 +478,7 @@ impl GenePred {
             line: new_line,
             name: self.name.clone(),
             chrom: self.chrom.clone(),
-            strand: self.strand,
+            strand: self.strand.clone(),
             start: self.start,
             end: self.end,
             cds_start: self.cds_start,
@@ -488,6 +488,54 @@ impl GenePred {
             exon_count: self.exon_count,
             is_ref: self.is_ref,
         }
+    }
+
+    /// Modifies the field at the given index with the provided value.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The index of the field to modify (0-based) -> BedColumn.
+    /// * `value` - The new value to set for the field.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut gene_pred = GenePred::new();
+    /// gene_pred.modify_field(3, "new_value");
+    ///
+    /// assert_eq!(gene_pred.line(), "new_value");
+    /// ```
+    #[inline(always)]
+    pub fn modify_field(&mut self, field: usize, value: &str) {
+        let mut tab_indices = Vec::with_capacity(field + 2);
+        for (i, b) in self.line.bytes().enumerate() {
+            if b == b'\t' {
+                tab_indices.push(i);
+                if tab_indices.len() > field + 1 {
+                    break;
+                }
+            }
+        }
+
+        let start = if field == 0 {
+            0
+        } else {
+            tab_indices
+                .get(field - 1)
+                .map_or(self.line.len(), |&i| i + 1)
+        };
+
+        let end = tab_indices
+            .get(field)
+            .copied()
+            .unwrap_or_else(|| self.line.len());
+
+        let mut line = String::with_capacity(self.line.len() - (end - start) + value.len());
+        line.push_str(&self.line[..start]);
+        line.push_str(value);
+        line.push_str(&self.line[end..]);
+
+        self.line = line.clone();
     }
 
     pub fn mut_name_from_line(&mut self, name: &str) -> String {
@@ -1877,6 +1925,8 @@ impl From<GenePred> for PolyAPred {
 
 #[cfg(test)]
 mod tests {
+    use config::BedColumn;
+
     use super::*;
 
     #[test]
@@ -2080,6 +2130,57 @@ mod tests {
             .iter()
             .cloned()
             .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_modify_line_color() {
+        let mut gp = GenePred {
+            name: "read1".to_string(),
+            chrom: "chr1".to_string(),
+            strand: Strand::Forward,
+            start: 1000,
+            end: 2000,
+            cds_start: 1000,
+            cds_end: 2000,
+            exon_count: 1,
+            exons: vec![(1000, 2000)],
+            introns: vec![],
+            line: "chr1\t1000\t2000\tread1\t0\t+\t1000\t2000\t0\t0\t0\t0".to_string(),
+            is_ref: false,
+        };
+
+        gp.modify_field(BedColumn::ItemRgb.into(), "0,0,255");
+
+        assert_eq!(
+            gp.line,
+            "chr1\t1000\t2000\tread1\t0\t+\t1000\t2000\t0,0,255\t0\t0\t0"
+        );
+    }
+
+    #[test]
+    fn test_modify_line_name() {
+        let mut gp = GenePred {
+            name: "read1".to_string(),
+            chrom: "chr1".to_string(),
+            strand: Strand::Forward,
+            start: 1000,
+            end: 2000,
+            cds_start: 1000,
+            cds_end: 2000,
+            exon_count: 1,
+            exons: vec![(1000, 2000)],
+            introns: vec![],
+            line: "chr1\t1000\t2000\tread1\t0\t+\t1000\t2000\t0\t0\t0\t0".to_string(),
+            is_ref: false,
+        };
+
+        let name = format!("{}_{}", gp.name, "SNG");
+        gp.modify_field(BedColumn::Name.into(), &name);
+
+        assert_eq!(
+            gp.line,
+            "chr1\t1000\t2000\tread1_SNG\t0\t+\t1000\t2000\t0\t0\t0\t0"
         );
     }
 }

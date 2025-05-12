@@ -112,9 +112,27 @@ pub struct Args {
         required = false,
         value_name = "PATH",
         help = "Prefix for output files",
-        default_value("")
+        default_value("fusion_results")
     )]
     pub prefix: PathBuf,
+
+    #[arg(
+        short = 'c',
+        long = "colorize",
+        help = "Flag to colorize output files",
+        value_name = "FLAG",
+        required = false
+    )]
+    pub colorize: Option<String>,
+
+    #[arg(
+        short = 'R',
+        long = "rename",
+        required = false,
+        value_name = "VALUE",
+        help = "Suffix to append at the end of the read name"
+    )]
+    pub suffix: Option<String>,
 }
 
 impl ArgCheck for Args {

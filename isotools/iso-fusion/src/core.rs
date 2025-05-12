@@ -14,9 +14,9 @@
 use anyhow::Result;
 use config::{
     exonic_overlap, get_progress_bar, par_write_results, splice_site_overlap, tsv_to_map,
-    write_descriptor, write_objs, FusionDetectionValue, MatchType, ModuleDescriptor, ModuleMap,
-    ModuleType, FUSIONS, FUSION_DESCRIPTOR, FUSION_FAKES, FUSION_FREE, FUSION_RATIO_THRESHOLD,
-    FUSION_REVIEW, SCALE,
+    write_descriptor, write_objs, BedColumn, FusionDetectionValue, MatchType, ModuleDescriptor,
+    ModuleMap, ModuleType, FUSIONS, FUSION_DESCRIPTOR, FUSION_FAKES, FUSION_FREE,
+    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, SCALE,
 };
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
@@ -82,6 +82,8 @@ pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>>
             &counter,
             args.recover,
             match_type,
+            args.colorize.clone(),
+            args.suffix.clone(),
         );
 
         pb.inc(1);
@@ -192,15 +194,24 @@ fn process_components(
     counter: &ParallelCounter,
     recover: bool,
     match_type: MatchType,
+    colorize: Option<String>,
+    suffix: Option<String>,
 ) {
     components.into_par_iter().for_each(|comp| {
         let comp = comp
-            .as_any()
-            .downcast_ref::<(RefGenePred, Vec<GenePred>)>()
+            .as_any_owned()
+            .downcast::<(RefGenePred, Vec<GenePred>)>()
             .expect("ERROR: Failed to downcast to RefGenePred");
 
-        let (fusions, no_fusions, fake_fusions, review, descriptor, is_dirty) =
-            process_component(comp, banned, recover, match_type).unwrap_or_default();
+        let (fusions, no_fusions, fake_fusions, review, descriptor, is_dirty) = process_component(
+            comp,
+            banned,
+            recover,
+            match_type,
+            colorize.clone(),
+            suffix.clone(),
+        )
+        .unwrap_or_default();
 
         accumulator.add(fusions, no_fusions, review, fake_fusions, descriptor);
 
@@ -522,10 +533,12 @@ impl LocalCounter {
 /// );
 /// ```
 fn process_component(
-    component: &(RefGenePred, Vec<GenePred>),
+    component: Box<(RefGenePred, Vec<GenePred>)>,
     banned: &HashSet<String>,
     recover: bool,
     match_type: MatchType,
+    colorize: Option<String>,
+    suffix: Option<String>,
 ) -> Option<(
     Vec<String>,
     Vec<String>,
@@ -545,8 +558,8 @@ fn process_component(
     let mut fake_fusions = Vec::new();
     let mut no_fusions = Vec::new();
 
-    let refs = &component.0;
-    let queries = &component.1;
+    let refs = component.0;
+    let mut queries = component.1;
 
     let genes = refs.get_names_split();
 
@@ -557,8 +570,8 @@ fn process_component(
     // INFO: if genes len = 1, we have a single gene in the component
     if genes.len() > 1 {
         identify_fusions(
-            refs,
-            &queries,
+            &refs,
+            &mut queries,
             &mut descriptor,
             &mut counter,
             &mut no_fusions,
@@ -566,6 +579,8 @@ fn process_component(
             &mut fake_fusions,
             banned,
             match_type,
+            colorize,
+            suffix,
         );
     }
 
@@ -758,7 +773,7 @@ fn fill_schema(
 /// ```
 fn identify_fusions(
     refs: &RefGenePred,
-    reads: &Vec<GenePred>,
+    reads: &mut Vec<GenePred>,
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
     counter: &mut LocalCounter,
     no_fusions: &mut Vec<String>,
@@ -766,16 +781,30 @@ fn identify_fusions(
     fake_fusions: &mut Vec<String>,
     banned: &HashSet<String>,
     match_type: MatchType,
+    colorize: Option<String>,
+    suffix: Option<String>,
 ) {
     // INFO: fusion loci [more than one gene in component]
     // INFO: we create a per-gene collection of exons
     let ref_exons = refs.smash_exons_by_name();
     let ref_introns = refs.smash_introns_by_name();
 
-    reads.iter().for_each(|query| {
+    let color = colorize.unwrap_or(String::new());
+    let suffix = suffix.unwrap_or(String::new());
+
+    reads.iter_mut().for_each(|query| {
         if banned.contains(&query.name) {
             no_fusions.push(query.line.clone());
             return;
+        }
+
+        if !color.is_empty() {
+            query.modify_field(BedColumn::ItemRgb.into(), &color);
+        }
+
+        if !suffix.is_empty() {
+            let name = format!("{}_{}", query.name, suffix);
+            query.modify_field(BedColumn::Name.into(), &name);
         }
 
         let mut schema = FusionSchema::default();

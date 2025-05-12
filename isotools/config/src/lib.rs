@@ -496,6 +496,39 @@ pub enum BedColumn {
     BlockStarts,
 }
 
+/// Convert BedColumn to usize
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::BedColumn;
+///
+/// let chrom = BedColumn::Chrom;
+/// let start = BedColumn::Start;
+///
+/// assert_eq!(usize::from(chrom), 0);
+/// assert_eq!(usize::from(start), 1);
+/// ```
+impl From<BedColumn> for usize {
+    #[inline(always)]
+    fn from(col: BedColumn) -> Self {
+        match col {
+            BedColumn::Chrom => 0,
+            BedColumn::Start => 1,
+            BedColumn::End => 2,
+            BedColumn::Name => 3,
+            BedColumn::Score => 4,
+            BedColumn::Strand => 5,
+            BedColumn::ThickStart => 6,
+            BedColumn::ThickEnd => 7,
+            BedColumn::ItemRgb => 8,
+            BedColumn::BlockCount => 9,
+            BedColumn::BlockSizes => 10,
+            BedColumn::BlockStarts => 11,
+        }
+    }
+}
+
 /// Bed column values
 ///
 /// This enum is used to store the values of a bed file.

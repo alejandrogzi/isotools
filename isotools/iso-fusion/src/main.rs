@@ -38,6 +38,10 @@ fn main() {
 
     if !args.map {
         info!("Detecting fusions in default mode...");
+        std::fs::create_dir_all(&args.prefix).expect(&format!(
+            "ERROR: Failed to create output directory -> {}",
+            args.prefix.display()
+        ));
 
         detect_fusions(args).unwrap_or_else(|e| {
             error!("{}", e);
