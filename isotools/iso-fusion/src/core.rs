@@ -598,7 +598,7 @@ fn process_component(
         // INFO: if the fusion ratio in the component is above the threshold,
         // INFO: mark all queries as dirty and submit them for revie
         if counter.get_real_ratio() >= FUSION_RATIO_THRESHOLD {
-            let review = recover_component(&queries, &mut descriptor);
+            let review = recover_component(&mut queries, &mut descriptor);
             return Some((vec![], vec![], vec![], Some(review), descriptor, true));
         }
     }
@@ -628,12 +628,15 @@ fn process_component(
 /// assert_eq!(review, vec!["line1"]);
 /// ```
 fn recover_component(
-    queries: &Vec<GenePred>,
+    queries: &mut Vec<GenePred>,
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
 ) -> Vec<String> {
     let mut review = vec![];
 
-    for query in queries.iter() {
+    for query in queries.iter_mut() {
+        let name = format!("{}_RVW", query.name);
+        query.modify_field(BedColumn::Name.into(), &name);
+
         review.push(query.line.clone());
         let handle = descriptor.get_mut(&query.name).unwrap();
 
