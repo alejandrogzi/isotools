@@ -51,7 +51,7 @@ pub fn calculate_polya(
 
     pb.finish_and_clear();
 
-    let paths = chunk_writer(&accumulator);
+    let paths = chunk_writer(&accumulator, args.outdir.clone());
 
     // INFO: push each path to cluster and run APPARENT
     // INFO: in the future the arg should be parsed as Executor::Something
@@ -151,7 +151,7 @@ impl Default for ParallelAccumulator {
 ///
 /// assert_eq!(std::fs::metadata("chunk_0").is_ok(), true);
 /// ```
-fn chunk_writer(accumulator: &ParallelAccumulator) -> &ParallelAccumulator {
+fn chunk_writer(accumulator: &ParallelAccumulator, outdir: PathBuf) -> &ParallelAccumulator {
     let counter = AtomicUsize::new(0);
 
     accumulator
@@ -162,7 +162,7 @@ fn chunk_writer(accumulator: &ParallelAccumulator) -> &ParallelAccumulator {
         .for_each(|chunk| {
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let filename = PathBuf::from(format!("chunk_{}", index));
-            let dest = get_assets_dir().join("TMP_CHUNKS").join(filename);
+            let dest = outdir.join("TMP_CHUNKS").join(filename);
 
             std::fs::create_dir_all(
                 dest.parent()
@@ -296,7 +296,7 @@ pub fn create_joblist(accumulator: &ParallelAccumulator) -> PathBuf {
 ///
 /// assert_eq!(std::fs::metadata("iso_polya_aparent.bed").is_ok(), true);
 /// ```
-fn bed_write(bed_dest: PathBuf, bed: String) {
+pub fn write_bed(bed_dest: PathBuf, bed: String) {
     let file = File::create(&bed_dest).expect("ERROR: Failed to create bed file");
     let mut writer = BufWriter::new(file);
     writer
@@ -320,7 +320,7 @@ fn bed_write(bed_dest: PathBuf, bed: String) {
 ///
 /// assert_eq!(std::fs::metadata("iso_polya_aparent_plus.bedGraph").is_ok(), true);
 /// ```
-fn bg_write(bg_dest_plus: PathBuf, bg_plus: String, bg_dest_minus: PathBuf, bg_minus: String) {
+fn write_bg(bg_dest_plus: PathBuf, bg_plus: String, bg_dest_minus: PathBuf, bg_minus: String) {
     vec![(bg_dest_plus, bg_plus), (bg_dest_minus, bg_minus)]
         .into_par_iter()
         .for_each(|(dest, data)| {
@@ -407,8 +407,8 @@ fn merge_results(chrom_sizes: HashMap<String, u32>, outdir: PathBuf) {
     let bw_dest_plus = assets.join("iso_polya_aparent_plus.bw");
     let bw_dest_minus = assets.join("iso_polya_aparent_minus.bw");
 
-    bed_write(bed_dest, bed);
-    bg_write(
+    write_bed(bed_dest, bed);
+    write_bg(
         bg_dest_plus.clone(),
         bg_plus,
         bg_dest_minus.clone(),
@@ -539,7 +539,7 @@ pub fn simulate_polya_reads(args: AparentArgs) -> Result<(), Box<dyn std::error:
     let accumulator = ParallelAccumulator::default();
 
     make_reads(args.clone(), &accumulator);
-    let paths = chunk_writer(&accumulator);
+    let paths = chunk_writer(&accumulator, get_assets_dir());
 
     // INFO: push each path to cluster and run APPARENT
     // INFO: in the future the arg should be parsed as Executor::Something
