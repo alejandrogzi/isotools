@@ -105,8 +105,8 @@ pub struct AparentArgs {
     #[arg(
         long = "threshold",
         help = "Number of threads",
-        value_name = "THREADS",
-        default_value_t = 0.01
+        value_name = "THRESHOLD",
+        default_value_t = 0.005
     )]
     pub threshold: f32,
 
@@ -241,6 +241,12 @@ impl ArgCheck for AparentArgs {
     // WARN: placeholder
     fn get_query(&self) -> &Vec<PathBuf> {
         &self.bed
+    }
+}
+
+impl AparentArgs {
+    pub fn from(args: Vec<String>) -> Self {
+        AparentArgs::parse_from(args)
     }
 }
 

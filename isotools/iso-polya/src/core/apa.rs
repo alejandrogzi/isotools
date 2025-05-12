@@ -21,11 +21,13 @@ use crate::{
 
 const PARA: &str = "para";
 const APPARENT_PY: &str = "run_aparent.py";
-const RAM_PER_SITE: f32 = 0.025;
+pub const RAM_PER_SITE: f32 = 0.025;
 const JOBLIST: &str = "joblist";
 const TOKIO_RUNTIME_THREADS: usize = 8;
 
-pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn calculate_polya(
+    args: AparentArgs,
+) -> Result<ParallelAccumulator, Box<dyn std::error::Error>> {
     let isoseqs = unpack::<MiniPolyAPred, _>(args.bed, config::OverlapType::Exon, true)
         .expect("ERROR: Could not unpack bed file!");
     let (genome, chrom_sizes) = get_sequences(
@@ -62,7 +64,7 @@ pub fn calculate_polya(args: AparentArgs) -> Result<(), Box<dyn std::error::Erro
         merge_results(chrom_sizes, args.outdir);
     }
 
-    Ok(())
+    Ok(paths.clone())
 }
 
 #[inline(always)]
@@ -121,7 +123,8 @@ fn distribute(
 ///
 /// assert_eq!(accumulator.lines.len(), 0);
 /// ```
-struct ParallelAccumulator {
+#[derive(Debug, Clone)]
+pub struct ParallelAccumulator {
     lines: DashSet<String>,
     paths: DashSet<String>,
 }
@@ -159,7 +162,16 @@ fn chunk_writer(accumulator: &ParallelAccumulator) -> &ParallelAccumulator {
         .for_each(|chunk| {
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let filename = PathBuf::from(format!("chunk_{}", index));
-            let dest = get_assets_dir().join(filename);
+            let dest = get_assets_dir().join("TMP_CHUNKS").join(filename);
+
+            std::fs::create_dir_all(
+                dest.parent()
+                    .expect("ERROR: Failed to get parent directory!"),
+            )
+            .expect(&format!(
+                "ERROR: Failed to create directory -> {}!",
+                dest.display()
+            ));
 
             if let Ok(file) = File::create(&dest) {
                 let mut writer = BufWriter::new(file);
@@ -191,9 +203,9 @@ fn chunk_writer(accumulator: &ParallelAccumulator) -> &ParallelAccumulator {
 ///
 /// assert_eq!(std::fs::metadata("joblist").is_ok(), true);
 /// ```
-fn submit_jobs(accumulator: &ParallelAccumulator, max_peak: bool) {
+fn submit_jobs(accumulator: &ParallelAccumulator, _: bool) {
     let mem = CHUNK_SIZE as f32 * RAM_PER_SITE * 1024.0;
-    let joblist = create_joblist_aparent(accumulator, max_peak);
+    let joblist = create_joblist(accumulator);
 
     let code = std::process::Command::new(PARA)
         .arg("make")
@@ -248,22 +260,18 @@ fn submit_jobs(accumulator: &ParallelAccumulator, max_peak: bool) {
 ///
 /// assert_eq!(std::fs::metadata("joblist").is_ok(), true);
 /// ```
-fn create_joblist_aparent(accumulator: &ParallelAccumulator, max_peak: bool) -> PathBuf {
+pub fn create_joblist(accumulator: &ParallelAccumulator) -> PathBuf {
     let joblist = PathBuf::from(JOBLIST);
     let file = File::create(joblist.clone()).expect("Failed to create joblist");
     let mut writer = BufWriter::new(file);
     let executable = get_assets_dir().join(APPARENT_PY);
 
     for path in accumulator.paths.iter() {
-        let mut cmd = format!(
+        let cmd = format!(
             "python3 {} -p {}",
             executable.to_string_lossy(),
             path.as_str()
         );
-
-        if max_peak {
-            cmd.push_str(" -mp");
-        }
 
         let _ = writer.write_all(cmd.as_bytes());
         let _ = writer.write_all(b"\n");
