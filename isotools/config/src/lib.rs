@@ -706,6 +706,33 @@ impl Sequence {
         Self { seq }
     }
 
+    /// Decode a sequence from bytes
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.decode(b"ACGT"), "ACGT");
+    /// ```
+    pub fn decode(seq: &[u8]) -> Self {
+        let base_count = seq.len() * 2;
+        let mut capacity = String::with_capacity(base_count);
+
+        for i in 0..base_count {
+            let byte = seq[i / 2];
+            let base_code = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F };
+
+            let base = Sequence::__decode_base(base_code);
+            if base != b'=' {
+                capacity.push(char::from(base));
+            }
+        }
+
+        Self { seq: capacity }
+    }
+
     /// Get the length of the sequence
     ///
     /// # Example
@@ -930,6 +957,134 @@ impl Sequence {
         Sequence {
             seq: self.seq[..from].to_string() + &self.seq[to..],
         }
+    }
+
+    /// Decode a base to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let base = Sequence::__decode_base(1);
+    /// assert_eq!(base, b'A');
+    /// ```
+    pub fn __decode_base(nt: u8) -> u8 {
+        match nt & 0x0f {
+            0 => b'=',
+            1 => b'A',
+            2 => b'C',
+            3 => b'M',
+            4 => b'G',
+            5 => b'R',
+            6 => b'S',
+            7 => b'V',
+            8 => b'T',
+            9 => b'W',
+            10 => b'Y',
+            11 => b'H',
+            12 => b'K',
+            13 => b'D',
+            14 => b'B',
+            15 => b'N',
+            _ => panic!(
+                "{}",
+                format!("ERROR: invalid character in sequence: {}", nt)
+            ),
+        }
+    }
+
+    /// Encode a base to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let base = Sequence::__encode_base(b'A');
+    /// assert_eq!(base, 1);
+    /// ```
+    pub fn __encode_base(nt: u8) -> u8 {
+        match nt {
+            b'=' => 0,
+            b'A' => 1,
+            b'C' => 2,
+            b'M' => 3,
+            b'G' => 4,
+            b'R' => 5,
+            b'S' => 6,
+            b'V' => 7,
+            b'T' => 8,
+            b'W' => 9,
+            b'Y' => 10,
+            b'H' => 11,
+            b'K' => 12,
+            b'D' => 13,
+            b'B' => 14,
+            _ => panic!(
+                "{}",
+                format!("ERROR: invalid character in sequence: {}", nt)
+            ),
+        }
+    }
+
+    /// Encode a cannonical base to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let base = Sequence::__encode_base_2(b'A');
+    /// assert_eq!(base, 0);
+    /// ```
+    pub fn __encode_base_2(nt: u8) -> u8 {
+        match nt {
+            b'A' => 0,
+            b'C' => 1,
+            b'T' => 2,
+            b'G' => 3,
+            _ => panic!(
+                "{}",
+                format!("ERROR: invalid character in sequence: {}", nt as char)
+            ),
+        }
+    }
+
+    /// Encode the reverse of a sequence to a usize
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.reverse_encode(0, 4), vec![3, 2, 1, 0]);
+    /// ```
+    pub fn reverse_encode(&self, start: usize, end: usize) -> Vec<usize> {
+        self.slice_as_bytes(start, end)
+            .iter()
+            .rev()
+            .map(|b| Self::__encode_base_2(*b) as usize)
+            .collect::<Vec<usize>>()
+    }
+
+    /// Encode the reverse of a sequence to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.reverse_encode_u8(0, 4), vec![3, 2, 1, 0]);
+    /// ```
+    pub fn reverse_encode_u8(&self, start: usize, end: usize) -> Vec<u8> {
+        self.slice_as_bytes(start, end)
+            .iter()
+            .rev()
+            .map(|b| Self::__encode_base_2(*b))
+            .collect::<Vec<u8>>()
     }
 }
 
