@@ -1,12 +1,17 @@
 [package]
 name = "iso-polya"
-version = "0.0.8"
+version = "0.0.9"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bio.workspace = true
+ndarray.workspace = true
+noodles-bam.workspace = true
+noodles-core.workspace = true
+noodles-sam.workspace = true
 iso-pack = { path = "../iso-pack" }
 iso-classify = { path = "../iso-classify" }
 iso-utr = { path = "../iso-utr" }

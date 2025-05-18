@@ -10,10 +10,14 @@ pub const CHUNK_SIZE: usize = 500;
 pub const MIN_PER_ID: usize = 98;
 pub const MAX_CLIP5: usize = 20;
 pub const MAX_CLIP3: usize = 20;
+const POLYA_SUFFIX: usize = 30;
+const SUFFIX_STEP_SIZE: usize = 50;
+const IDENTITY_THRESHOLD: f32 = 98.0;
+const MINIMUM_IDENTITY: f32 = 60.0;
 
 // HMM parameters
-pub const P2P: f32 = 0.9; // INFO: transition prob for polyA tail
-pub const EMIT_A: f32 = 0.99; // INFO: emission prob for A in polyA state
+pub const P2P: f64 = 0.9; // INFO: transition prob for polyA tail
+pub const EMIT_A: f64 = 0.99; // INFO: emission prob for A in polyA state
 
 // PASCaller parameters
 pub const POLYA_LENGTH_THRESHOLD: usize = 50;
@@ -46,10 +50,10 @@ pub enum SubArgs {
         #[command(flatten)]
         args: AparentArgs,
     },
-    #[command(name = "filter")]
-    Filter {
+    #[command(name = "segment")]
+    Segment {
         #[command(flatten)]
-        args: FilterArgs,
+        args: SegmentArgs,
     },
 
     #[command(name = "caller")]
@@ -251,124 +255,116 @@ impl AparentArgs {
 }
 
 #[derive(Debug, Parser, Clone)]
-pub struct FilterArgs {
+pub struct SegmentArgs {
     #[arg(
-        short = 's',
-        long = "sam",
+        short = 'b',
+        long = "bam",
         required = true,
         value_name = "PATH",
         value_delimiter = ',',
         num_args = 1,
-        help = "Path to .sam file"
+        help = "Path to .bam file"
     )]
-    pub sam: Vec<PathBuf>,
+    pub bam: PathBuf,
 
     #[arg(
-        long = "per_id",
+        short = 'I',
+        long = "identity",
         help = "Min %id (computed without the 5' and 3' clip). Must be [0-100] (percent).",
         value_name = "VALUE",
-        default_value_t = MIN_PER_ID,
+        default_value_t = IDENTITY_THRESHOLD,
     )]
-    pub per_id: usize,
+    pub identity: f32,
 
     #[arg(
+        short = 'i',
+        long = "min-identity",
+        help = "Mininum % identity, used to discard extremely low reads
+        (computed without the 5' and 3' clip). Must be [0-100] (percent).",
+        value_name = "VALUE",
+        default_value_t = MINIMUM_IDENTITY,
+    )]
+    pub min_identity: f32,
+
+    #[arg(
+        short = 's',
+        long = "tail-suffix",
+        help = "Suffix of the tail. Determines how many bases to consider at the end of the read",
+        value_name = "VALUE",
+        default_value_t = POLYA_SUFFIX,
+    )]
+    pub tail_suffix: usize,
+
+    #[arg(
+        short = 'S',
+        long = "step-size",
+        help = "Determines how many bp to move backwards in the read to find the tail",
+        value_name = "VALUE",
+        default_value_t = SUFFIX_STEP_SIZE,
+    )]
+    pub suffix_step_size: usize,
+
+    #[arg(
+        short = 'f',
         long = "clip5",
         help = "Max 5' soft or hard clip",
         value_name = "VALUE",
         default_value_t = MAX_CLIP5,
     )]
-    pub clip5: usize,
+    pub max_clip_five: usize,
 
     #[arg(
+        short = 't',
         long = "clip3",
         help = "Max 3' soft or hard clip",
         value_name = "VALUE",
         default_value_t = MAX_CLIP3,
     )]
-    pub clip3: usize,
+    pub max_clip_three: usize,
 
     #[arg(
+        short = 'P',
         long = "p2p",
         help = "Transition probability of looping in the polyA state ",
         value_name = "VALUE",
         default_value_t = P2P,
     )]
-    pub p2p: f32,
+    pub p2p: f64,
 
     #[arg(
+        short = 'E',
         long = "emit-a",
         help = "Probability of emitting A in the polyA state",
         value_name = "VALUE",
         default_value_t = EMIT_A,
     )]
-    pub emit_a: f32,
+    pub emit_a: f64,
 
     #[arg(
-        long = "stat",
-        required = false,
+        short = 'T',
+        long = "tag",
+        help = "Flag to tag read names with polyA information",
         value_name = "FLAG",
-        help = "If set output a {input}.tsv file that contains statistics of all reads readID {tab} perID {tab} 5'clip {tab} 3'clip (non-PolyA part){tab} polyA tail length of 3'clip [optionally]{tab} polyA tail length of read",
         default_missing_value("true"),
         default_value("false"),
         num_args(0..=1),
         require_equals(true),
         action = ArgAction::Set,
     )]
-    pub stat: bool,
+    pub tag: bool,
 
     #[arg(
-        long = "keep",
-        required = false,
+        short = 'B',
+        long = "bed",
+        help = "Flag to convert bam to bed",
         value_name = "FLAG",
-        help = "If set, produce an {input}.TESBad5Prime.bed file which contains reads that align well but only have a 5' clip above our threshold. Can be used for PAScaller",
         default_missing_value("true"),
         default_value("false"),
         num_args(0..=1),
         require_equals(true),
         action = ArgAction::Set,
     )]
-    pub keep: bool,
-
-    #[arg(
-        long = "suffix",
-        required = false,
-        value_name = "FLAG",
-        help = "If >0, compute and output the length of the polyA tail in the polyAReadSuffix + 3'clip_len suffix of the read (default don't do that)"
-    )]
-    pub suffix: Option<usize>,
-
-    #[arg(
-        long = "para",
-        required = false,
-        value_name = "FLAG",
-        help = "Send jobs to Hillerlab cluster",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
-    )]
-    pub para: bool,
-
-    #[arg(
-        short = 'q',
-        long = "queue",
-        required = false,
-        value_name = "QUEUE",
-        help = "Queue to send jobs to",
-        requires("para")
-    )]
-    pub queue: Option<String>,
-
-    #[arg(
-        short = 'm',
-        long = "mem",
-        required = false,
-        value_name = "QUEUE",
-        help = "Memory to send jobs to",
-        requires("para")
-    )]
-    pub mem: Option<usize>,
+    pub bed: bool,
 
     #[arg(
         long = "outdir",
@@ -380,23 +376,16 @@ pub struct FilterArgs {
         default_value = "."
     )]
     pub outdir: PathBuf,
-}
 
-impl ArgCheck for FilterArgs {
-    // WARN: placeholder
-    fn get_blacklist(&self) -> &Vec<PathBuf> {
-        &self.sam
-    }
-
-    // WARN: placeholder
-    fn get_ref(&self) -> &Vec<PathBuf> {
-        &self.sam
-    }
-
-    // WARN: placeholder
-    fn get_query(&self) -> &Vec<PathBuf> {
-        &self.sam
-    }
+    #[arg(
+        long = "prefix",
+        required = false,
+        value_name = "FILE_PREFIX",
+        num_args = 1,
+        help = "File name prefix",
+        default_value = "file"
+    )]
+    pub prefix: PathBuf,
 }
 
 #[derive(Debug, Parser)]

@@ -7,8 +7,8 @@ use iso_polya::{
     cli::{Args, SubArgs},
     core::{
         apa::{calculate_polya, simulate_polya_reads},
-        filter::filter_minimap,
         pas::pas_caller,
+        segment::segment,
     },
 };
 
@@ -46,13 +46,8 @@ fn main() {
                 });
             }
         }
-        SubArgs::Filter { args } => {
-            args.check().unwrap_or_else(|e| {
-                error!("{}", e);
-                std::process::exit(1);
-            });
-
-            filter_minimap(args).unwrap_or_else(|e| {
+        SubArgs::Segment { args } => {
+            segment(args).unwrap_or_else(|e| {
                 error!("{}", e);
                 std::process::exit(1);
             });
