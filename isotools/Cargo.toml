@@ -40,6 +40,11 @@ bigtools = "=0.5.4"
 twobit = "0.2.1"
 tokio = { version = "1.16", features = ["full"] }
 lazy_static = "1.5.0"
+bio = "2.3.0"
+ndarray = "0.16.1"
+noodles-bam = "0.79.0"
+noodles-core = "0.17.0"
+noodles-sam = "0.75.0"
 
 [profile.release]
 lto = true
