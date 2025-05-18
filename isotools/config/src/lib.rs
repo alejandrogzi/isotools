@@ -38,6 +38,28 @@ pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
 
 // polya numeric values
 pub const INTRAPRIMING_RATIO_THRESHOLD: f32 = 0.5;
+// [aparent parameters]
+pub const CHUNK_SIZE: usize = 500;
+// [segment parameters]
+pub const MIN_PER_ID: usize = 98;
+pub const MAX_CLIP5: usize = 20;
+pub const MAX_CLIP3: usize = 20;
+pub const POLYA_SUFFIX: usize = 30;
+pub const SUFFIX_STEP_SIZE: usize = 50;
+pub const IDENTITY_THRESHOLD: f32 = 98.0;
+pub const MINIMUM_IDENTITY: f32 = 60.0;
+pub const RGB_ACCEPT: &str = "43,118,219";
+pub const RGB_REJECT: &str = "213,67,67";
+// [HMM parameters]
+// INFO: transition prob for polyA tail
+pub const P2P: f64 = 0.9;
+// INFO: emission prob for A in polyA state
+pub const EMIT_A: f64 = 0.99;
+// [PASCaller parameters]
+pub const POLYA_LENGTH_THRESHOLD: usize = 50;
+pub const GENOMIC_POLYA_THRESHOLD: usize = 5; // INFO: 5 A's in genome
+pub const APARENT_THRESHOLD: f32 = 0.01;
+pub const WIGGLE: usize = 2;
 
 // file names
 pub const INTRON_RETENTIONS: &str = "intron.retentions.bed";

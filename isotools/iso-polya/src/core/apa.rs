@@ -1,5 +1,5 @@
 use bigtools::BigWigWrite;
-use config::{get_progress_bar, Sequence, Strand};
+use config::{get_progress_bar, Sequence, Strand, CHUNK_SIZE};
 use dashmap::DashSet;
 use iso_classify::core::Genome;
 use packbed::{par_reader, unpack};
@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::{
-    cli::{AparentArgs, CHUNK_SIZE},
+    cli::AparentArgs,
     utils::{bg_par_reader, get_assets_dir, get_sequences, MiniPolyAPred},
 };
 

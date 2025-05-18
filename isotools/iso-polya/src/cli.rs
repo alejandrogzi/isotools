@@ -1,29 +1,7 @@
 use clap::{ArgAction, Parser, Subcommand};
-use config::ArgCheck;
+use config::*;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-// Aparent parameters
-pub const CHUNK_SIZE: usize = 500;
-
-// Read parameters
-pub const MIN_PER_ID: usize = 98;
-pub const MAX_CLIP5: usize = 20;
-pub const MAX_CLIP3: usize = 20;
-const POLYA_SUFFIX: usize = 30;
-const SUFFIX_STEP_SIZE: usize = 50;
-const IDENTITY_THRESHOLD: f32 = 98.0;
-const MINIMUM_IDENTITY: f32 = 60.0;
-
-// HMM parameters
-pub const P2P: f64 = 0.9; // INFO: transition prob for polyA tail
-pub const EMIT_A: f64 = 0.99; // INFO: emission prob for A in polyA state
-
-// PASCaller parameters
-pub const POLYA_LENGTH_THRESHOLD: usize = 50;
-pub const GENOMIC_POLYA_THRESHOLD: usize = 5; // INFO: 5 A's in genome
-pub const APARENT_THRESHOLD: f32 = 0.01;
-pub const WIGGLE: usize = 2;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
