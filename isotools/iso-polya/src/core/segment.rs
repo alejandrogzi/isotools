@@ -38,16 +38,12 @@ pub fn segment(args: SegmentArgs) -> Result<(), String> {
 
         let mut reader = noodles_bam::io::indexed_reader::Builder::default()
             .build_from_path(&args.bam)
-            .expect(&format!(
-                "ERROR: could not open file: {}",
-                args.bam.display()
-            ));
+            .unwrap_or_else(|e| panic!("ERROR: could not open file: {e}"));
 
         // INFO: must re-read header per thread since IndexedReader owns its header
-        let header = reader.read_header().expect(&format!(
-            "ERROR: could not read header for file: {}",
-            args.bam.display()
-        ));
+        let header = reader
+            .read_header()
+            .unwrap_or_else(|e| panic!("ERROR: could not open file: {e}"));
 
         let mut track = 0;
 
@@ -57,7 +53,7 @@ pub fn segment(args: SegmentArgs) -> Result<(), String> {
 
         reader
             .query(&header, &region)
-            .expect(&format!("ERROR: could not query region: {}", region))
+            .unwrap_or_else(|e| panic!("ERROR: could not query genomic region: {e}"))
             .for_each(|result| match result {
                 Ok(record) => {
                     track += 1;
@@ -205,10 +201,10 @@ fn write_beds(
 
     fn spawn_writer(output_path: PathBuf, lines: Vec<String>) -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || {
-            let mut writer = BufWriter::new(File::create(&output_path).expect(&format!(
-                "ERROR: could not create file: {}",
-                output_path.display()
-            )));
+            let mut writer = BufWriter::new(
+                File::create(&output_path)
+                    .unwrap_or_else(|e| panic!("ERROR: could not create file: {e}")),
+            );
 
             let joined = lines.join("\n");
             writer.write_all(joined.as_bytes()).unwrap();
@@ -258,7 +254,7 @@ fn read_bam(
 ) {
     let mut reader = noodles_bam::io::indexed_reader::Builder::default()
         .build_from_path(&bam)
-        .expect(&format!("ERROR: could not open file: {}", bam.display()));
+        .unwrap_or_else(|e| panic!("ERROR: could not read .bam file: {e}"));
 
     let header = reader.read_header().unwrap();
     let refs = Arc::new(header.reference_sequences().clone()); // clone for sharing
@@ -357,10 +353,8 @@ fn process_record(
 
     read.set_three_clip(read.three_clip - read.polya_len);
 
-    let mut record = RecordBuf::try_from_alignment_record(&header, &record).expect(&format!(
-        "ERROR: could not convert record to RecordBuf: {:?}",
-        record
-    ));
+    let mut record = RecordBuf::try_from_alignment_record(&header, &record)
+        .unwrap_or_else(|err| panic!("ERROR: failed to convert record: {err:?}"));
 
     if args.tag {
         *record.name_mut() = Some(read.tag_read(track, chr).into());
@@ -694,10 +688,8 @@ impl HMM {
         let emission = HMM::__get_emission(weight);
         let initial = array![0.5, 0.5];
 
-        let model = Model::with_float(&transition, &emission, &initial).expect(&format!(
-            "Failed to create HMM with transition: {:?}, emission: {:?}, initial: {:?}",
-            transition, emission, initial
-        ));
+        let model = Model::with_float(&transition, &emission, &initial)
+            .unwrap_or_else(|err| panic!("ERROR: failed to build HMM model: {err:?}"));
 
         Self { model }
     }
@@ -1014,10 +1006,7 @@ impl Read {
         let mut end_site = record
             .alignment_start()
             .and_then(|start| start.ok())
-            .expect(&format!(
-                "ERROR: could not get alignment start for record: {:?}",
-                record.name()
-            ))
+            .unwrap_or_else(|| panic!("ERROR: could not get end site from read!"))
             .get();
 
         record.cigar().iter().for_each(|op| {
@@ -1191,13 +1180,13 @@ impl Read {
     /// assert_eq!(read.name, record.name().unwrap());
     /// ```
     fn set_name(&mut self, record: &Record) {
-        self.name = record
-            .name()
-            .expect(&format!(
-                "ERROR: could not get name for record: {:?}",
-                record.name()
-            ))
-            .to_string();
+        let name = match record.name() {
+            Some(name) => name,
+            None => {
+                panic!("ERROR: could not get name for record (None returned)");
+            }
+        };
+        self.name = name.to_string();
     }
 
     /// Get the sized reverse clipped sequence of the read

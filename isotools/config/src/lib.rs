@@ -1066,17 +1066,7 @@ impl Sequence {
             b'C' => Some(1),
             b'T' => Some(2),
             b'G' => Some(3),
-            _ => {
-                log::warn!(
-                    "{}",
-                    format!(
-                        "WARN: found invalid character in sequence: {}, will skip them...",
-                        nt as char
-                    )
-                );
-
-                return None;
-            }
+            _ => None,
         }
     }
 

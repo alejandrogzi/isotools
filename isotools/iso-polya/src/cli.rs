@@ -10,6 +10,7 @@ pub struct Args {
     pub command: SubArgs,
 
     #[arg(
+        global = true,
         short = 't',
         long = "threads",
         help = "Number of threads",
@@ -283,7 +284,6 @@ pub struct SegmentArgs {
     pub suffix_step_size: usize,
 
     #[arg(
-        short = 'f',
         long = "clip5",
         help = "Max 5' soft or hard clip",
         value_name = "VALUE",
@@ -292,7 +292,6 @@ pub struct SegmentArgs {
     pub max_clip_five: usize,
 
     #[arg(
-        short = 't',
         long = "clip3",
         help = "Max 3' soft or hard clip",
         value_name = "VALUE",
@@ -364,6 +363,12 @@ pub struct SegmentArgs {
         default_value = "file"
     )]
     pub prefix: PathBuf,
+}
+
+impl SegmentArgs {
+    pub fn from(args: Vec<String>) -> Self {
+        SegmentArgs::parse_from(args)
+    }
 }
 
 #[derive(Debug, Parser)]
