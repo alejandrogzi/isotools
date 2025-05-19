@@ -1060,16 +1060,23 @@ impl Sequence {
     /// let base = Sequence::__encode_base_2(b'A');
     /// assert_eq!(base, 0);
     /// ```
-    pub fn __encode_base_2(nt: u8) -> u8 {
+    pub fn __encode_base_2(nt: u8) -> Option<u8> {
         match nt {
-            b'A' => 0,
-            b'C' => 1,
-            b'T' => 2,
-            b'G' => 3,
-            _ => panic!(
-                "{}",
-                format!("ERROR: invalid character in sequence: {}", nt as char)
-            ),
+            b'A' => Some(0),
+            b'C' => Some(1),
+            b'T' => Some(2),
+            b'G' => Some(3),
+            _ => {
+                log::warn!(
+                    "{}",
+                    format!(
+                        "WARN: found invalid character in sequence: {}, will skip them...",
+                        nt as char
+                    )
+                );
+
+                return None;
+            }
         }
     }
 
@@ -1087,7 +1094,8 @@ impl Sequence {
         self.slice_as_bytes(start, end)
             .iter()
             .rev()
-            .map(|b| Self::__encode_base_2(*b) as usize)
+            .filter_map(|b| Self::__encode_base_2(*b))
+            .map(|nt| nt as usize)
             .collect::<Vec<usize>>()
     }
 
@@ -1105,7 +1113,7 @@ impl Sequence {
         self.slice_as_bytes(start, end)
             .iter()
             .rev()
-            .map(|b| Self::__encode_base_2(*b))
+            .filter_map(|b| Self::__encode_base_2(*b))
             .collect::<Vec<u8>>()
     }
 }
