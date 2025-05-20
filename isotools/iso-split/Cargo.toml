@@ -1,0 +1,25 @@
+[package]
+name = "iso-split"
+description = "split fa/fq into N chunks"
+version = "0.0.1"
+keywords = ["split", "fasta", "fastq", "io"]
+readme = "README.md"
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+log.workspace = true
+simple_logger.workspace = true
+anyhow.workspace = true
+rayon.workspace = true
+memchr.workspace = true
+memmap2.workspace = true
+flate2.workspace = true
+clap.workspace = true
+config.workspace = true
+num_cpus.workspace = true
