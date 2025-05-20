@@ -1868,38 +1868,43 @@ impl BedParser for PolyAPred {
 /// assert_eq!(stats, (0, 49, 50, 1));
 /// ```
 fn get_polya_stats(read: &str) -> (u32, u32, u32, u32) {
-    let fields = read.split('_').collect::<Vec<_>>();
-    let stats = fields
-        .get(fields.len() - 3..)
-        .expect("ERROR: Could not get polyA stats from name");
+    let tags = get_tags_from_read(read);
 
-    let clip = stats[0]
-        .split_at(5)
-        .1
-        .parse::<u32>()
-        .expect("ERROR: Could not parse clip");
-    let clipped_a = stats[1]
-        .split_at(5)
-        .1
-        .parse::<u32>()
-        .expect("ERROR: Could not parse clipped A's");
-    let read_a = stats[2]
-        .split_at(9)
-        .1
-        .parse::<u32>()
-        .expect("ERROR: Could not parse read A's");
+    let clip3 = *tags.get("TC").unwrap() as u32;
+    let clipped_a = *tags.get("PA").unwrap() as u32;
+    let read_a = *tags.get("PR").unwrap() as u32;
 
     // INFO: the whole polyA is clipped!
     if clipped_a == read_a {
-        return (clip, clipped_a, read_a, 0);
+        return (clip3, clipped_a, read_a, 0);
     } else if clipped_a > read_a {
         log::error!("ERROR: clipped A's is greater than read A's");
         std::process::exit(1);
     }
 
-    let gpa = read_a - (clip + clipped_a);
+    let gpa = read_a - (clip3 + clipped_a);
 
-    (clip, clipped_a, read_a, gpa)
+    (clip3, clipped_a, read_a, gpa)
+}
+
+fn get_tags_from_read(read: &str) -> HashMap<String, usize> {
+    let mut map = HashMap::with_capacity(5); // WARN: enforcing 5 tags!
+
+    if let Some((_, tags_part)) = read.split_once("::") {
+        // WARN: enforcing two letter tag!
+        for tag in tags_part.split(':') {
+            if tag.len() >= 3 {
+                // Safe slicing because ASCII: two-letter key + numeric value
+                let key = &tag[..2];
+                let val = &tag[2..];
+                if let Ok(parsed_val) = val.parse::<usize>() {
+                    map.insert(key.to_string(), parsed_val);
+                }
+            }
+        }
+    }
+
+    map
 }
 
 impl From<GenePred> for PolyAPred {
