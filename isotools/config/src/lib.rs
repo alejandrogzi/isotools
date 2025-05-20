@@ -657,6 +657,42 @@ impl From<&str> for FilterSide {
     }
 }
 
+/// Region [iso-split]
+///
+/// This enum is used to store region boundaries
+/// of a fq/fa file
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::Region;
+///
+/// let region = Region{start: 1, end: 43};
+/// assert_eq!(43, region.end);
+/// ```
+#[derive(Debug, Clone)]
+pub struct ChunkRegion {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Filter side
+///
+/// This enum is used to store the --mode CLI arg
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::Mode;
+///
+/// let mode = Mode::Fasta;
+/// ```
+#[derive(Debug, Clone)]
+pub enum SplitMode {
+    ChunkSize(usize), // N records per output file
+    NumFiles(usize),  // K output files
+}
+
 // public structs
 /// Sequence struct
 ///
