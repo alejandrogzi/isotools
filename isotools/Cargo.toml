@@ -10,6 +10,7 @@ members = [
     "iso-classify",
     "iso-orf",
     "iso-polya",
+    "iso-split",
 ]
 resolver = "2"
 
@@ -45,6 +46,9 @@ ndarray = "0.16.1"
 noodles-bam = "0.79.0"
 noodles-core = "0.17.0"
 noodles-sam = "0.75.0"
+memchr = "2.7.4"
+memmap2 = "0.9.4"
+flate2 = "1.0.20"
 
 [profile.release]
 lto = true
