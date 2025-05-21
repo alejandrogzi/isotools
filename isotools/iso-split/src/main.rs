@@ -12,14 +12,14 @@ fn main() -> Result<()> {
 
     let args: Args = Args::parse();
 
-    let _ = dispatch!(args.file,
-        {
-            ".fa" => split_fa(args),
-            ".fasta" => split_fa(args),
-            ".fq.gz" => split_fq(args),
-            ".fastq.gz" => split_fq(args),
-        }
-    );
+    let _ = dispatch!(&args.file, {
+        "fa.gz" => split_fa_gz(&args)?,
+        "fasta.gz" =>  split_fa_gz(&args)?,
+        "fq.gz" =>  split_fq(&args)?,
+        "fastq.gz" =>  split_fq(&args)?,
+        "fa" =>  split_fa(&args)?,
+        "fasta" =>  split_fa(&args)?,
+    });
 
     let elapsed = start.elapsed();
     info!("Elapsed time: {:?}", elapsed);
