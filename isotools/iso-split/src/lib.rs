@@ -23,7 +23,6 @@ use cli::Args;
 macro_rules! dispatch {
     ($file:expr, { $($suffix:literal => $action:expr),* $(,)?}) => {{
         let f = $file.file_name().and_then(|f| f.to_str()).unwrap_or_default();
-        dbg!(f);
         let mut matched = false;
         $(
             if f.ends_with($suffix) {
@@ -31,7 +30,6 @@ macro_rules! dispatch {
                 $action
             }
         )*
-        dbg!(f);
         if !matched {
             dbg!(f);
             anyhow::bail!("ERROR: unrecognized file format: {}", $file.display());

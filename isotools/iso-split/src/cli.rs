@@ -64,7 +64,10 @@ pub struct Args {
 
 impl Args {
     pub fn from(args: Vec<String>) -> Self {
-        Args::parse_from(args)
+        let mut full_args = vec![env!("CARGO_PKG_NAME").to_string()];
+        full_args.extend(args);
+
+        Args::parse_from(full_args)
     }
 
     pub fn mode(&self) -> anyhow::Result<SplitMode> {
