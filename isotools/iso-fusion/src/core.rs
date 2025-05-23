@@ -103,7 +103,10 @@ pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>>
     }
 
     if !args.in_memory {
-        write_descriptor(&accumulator.descriptor, FUSION_DESCRIPTOR);
+        if args.descriptor {
+            write_descriptor(&accumulator.descriptor, FUSION_DESCRIPTOR);
+        }
+
         par_write_results(
             &accumulator,
             vec![

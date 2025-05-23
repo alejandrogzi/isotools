@@ -133,6 +133,19 @@ pub struct Args {
         help = "Suffix to append at the end of the read name"
     )]
     pub suffix: Option<String>,
+
+    #[arg(
+        short = 'd',
+        long = "descriptor",
+        help = "Flag to output descriptor as a .tsv file",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub descriptor: bool,
 }
 
 impl ArgCheck for Args {
