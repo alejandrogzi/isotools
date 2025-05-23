@@ -883,7 +883,15 @@ fn get_coords(
             .split(',')
             .filter_map(|num| {
                 if !num.is_empty() {
-                    Some(num.parse::<u64>().expect("Cannot parse number"))
+                    Some(num.parse::<u64>().unwrap_or_else(|e| {
+                        panic!(
+                            "ERROR: Cannot parse number -> {e}. {starts}
+                                {sizes}
+                                {tx_start}
+                                {tx_end}
+                                {strand}"
+                        )
+                    }))
                 } else {
                     None
                 }
