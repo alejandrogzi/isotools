@@ -88,7 +88,7 @@ pub fn split_fa(args: &Args) -> Result<()> {
                 .enumerate()
                 .try_for_each(|(i, chunk)| -> Result<()> {
                     let output_file =
-                        PathBuf::from(&args.outdir).join(format!("chunk_{:03}_{suffix}.fa", i));
+                        PathBuf::from(&args.outdir).join(format!("tmp_chunk_{:03}_{suffix}.fa", i));
                     let mut writer = BufWriter::new(File::create(output_file)?);
                     writer.write_all(&data[chunk.start..chunk.end])?;
                     writer.flush()?;
@@ -118,7 +118,7 @@ pub fn split_fa(args: &Args) -> Result<()> {
                 .enumerate()
                 .try_for_each(|(i, chunk)| -> Result<()> {
                     let output_file =
-                        PathBuf::from(&args.outdir).join(format!("part_{:03}_{suffix}.fa", i));
+                        PathBuf::from(&args.outdir).join(format!("tmp_part_{:03}_{suffix}.fa", i));
                     let mut writer = BufWriter::new(File::create(output_file)?);
                     writer.write_all(&data[chunk.start..chunk.end])?;
                     writer.flush()?;
@@ -189,7 +189,7 @@ pub fn split_fa_gz(args: &Args) -> Result<()> {
         .enumerate()
         .try_for_each(|(i, chunk)| -> Result<()> {
             let output_file =
-                PathBuf::from(&args.outdir).join(format!("chunk_{:03}_{suffix}.fa.gz", i));
+                PathBuf::from(&args.outdir).join(format!("tmp_chunk_{:03}_{suffix}.fa.gz", i));
             let file = File::create(output_file)?;
             let writer = BufWriter::new(file);
 
