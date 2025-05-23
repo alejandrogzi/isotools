@@ -194,9 +194,7 @@ pub fn split_fa_gz(args: &Args) -> Result<()> {
             let writer = BufWriter::new(file);
 
             // You can customize compression level, time, filename, etc.
-            let mut encoder = flate2::GzBuilder::new()
-                .filename(format!("chunk_{:03}.fa", i))
-                .write(writer, flate2::Compression::fast());
+            let mut encoder = flate2::write::GzEncoder::new(writer, flate2::Compression::fast());
 
             encoder.write_all(&data[chunk.start..chunk.end])?;
             encoder.finish()?; // ensures footer is written
@@ -283,7 +281,7 @@ fn new_writer<P: AsRef<Path>>(
 ) -> anyhow::Result<BufWriter<GzEncoder<File>>> {
     let path = out_dir
         .as_ref()
-        .join(format!("chunk_{index:03}_{suffix}.fastq.gz"));
+        .join(format!("tmp_chunk_{index:03}_{suffix}.fastq.gz"));
     let file = File::create(path)?;
     let encoder = GzEncoder::new(file, Compression::fast());
     Ok(BufWriter::new(encoder))
