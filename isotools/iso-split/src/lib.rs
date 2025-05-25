@@ -1,6 +1,7 @@
 use std::{
     fs::{create_dir_all, File},
     io::{BufRead, BufReader, BufWriter, Read, Write},
+    os::unix::fs::symlink,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -145,7 +146,14 @@ pub fn split_fa_gz(args: &Args) -> Result<()> {
 
     // --- Step 2: Find FASTA headers (start of records) ---
     let header: Vec<usize> = memchr_iter(FA_NEEDLE, data.as_ref()).collect();
+    log::info!(
+        "INFO: Found {} records in {}",
+        header.len(),
+        &args.file.display()
+    );
+
     if header.is_empty() {
+        log::error!("ERROR: No FASTA records found in decompressed data");
         anyhow::bail!("ERROR: No FASTA records found in decompressed data");
     }
 
@@ -154,12 +162,29 @@ pub fn split_fa_gz(args: &Args) -> Result<()> {
     create_dir_all(&args.outdir)?;
 
     let chunks: Vec<_> = match mode {
-        SplitMode::ChunkSize(nchunks) => {
-            let chunk_size = (header.len() + nchunks - 1) / nchunks;
+        SplitMode::ChunkSize(records_per_file) => {
+            if header.len() <= records_per_file {
+                // INFO: fewer records than chunk size -> just symlink
+                let outpath =
+                    PathBuf::from(&args.outdir).join(format!("tmp_chunk_000_{}.fa.gz", suffix));
+                std::fs::create_dir_all(&args.outdir)?;
+                log::warn!(
+                            "Only {} records found, less than chunk size {}, creating symlink to original file...",
+                            header.len(),
+                            records_per_file
+                        );
+                symlink(&args.file, &outpath)?;
+                return Ok(());
+            }
+
+            let nchunks = (header.len() + records_per_file - 1) / records_per_file;
+
             (0..nchunks)
                 .map(|i| {
-                    let start = *header.get(i * chunk_size).unwrap_or(&data.len());
-                    let end = *header.get((i + 1) * chunk_size).unwrap_or(&data.len());
+                    let start = *header.get(i * records_per_file).unwrap_or(&data.len());
+                    let end = *header
+                        .get((i + 1) * records_per_file)
+                        .unwrap_or(&data.len());
                     ChunkRegion { start, end }
                 })
                 .collect()
@@ -183,7 +208,6 @@ pub fn split_fa_gz(args: &Args) -> Result<()> {
         }
     };
 
-    // --- Step 3: Parallel writing to .fa.gz files ---
     chunks
         .into_par_iter()
         .enumerate()
