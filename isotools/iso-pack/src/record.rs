@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Bed12 {
-    data: GenePred,
+    pub data: GenePred,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
