@@ -16,7 +16,7 @@ use config::{
     exonic_overlap, get_progress_bar, par_write_results, splice_site_overlap, tsv_to_map,
     write_descriptor, write_objs, BedColumn, FusionDetectionValue, MatchType, ModuleDescriptor,
     ModuleMap, ModuleType, FUSIONS, FUSION_DESCRIPTOR, FUSION_FAKES, FUSION_FREE,
-    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, SCALE,
+    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, REVIEW_RGB, SCALE,
 };
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
@@ -637,8 +637,12 @@ fn recover_component(
     let mut review = vec![];
 
     for query in queries.iter_mut() {
-        let name = format!("{}_RVW", query.name);
+        // INFO: append :RW tag to read name
+        let name = format!("{}:RW", query.name);
         query.modify_field(BedColumn::Name.into(), &name);
+
+        // INFO: change color for review reads!
+        query.modify_field(BedColumn::ItemRgb.into(), REVIEW_RGB);
 
         review.push(query.line.clone());
         let handle = descriptor.get_mut(&query.name).unwrap();
@@ -809,7 +813,8 @@ fn identify_fusions(
         }
 
         if !suffix.is_empty() {
-            let name = format!("{}_{}", query.name, suffix);
+            // INFO: append --suffix as tag :{TAG}
+            let name = format!("{}:{}", query.name, suffix);
             query.modify_field(BedColumn::Name.into(), &name);
         }
 
@@ -860,7 +865,7 @@ fn identify_fusions(
                     }
                 };
 
-                // counterreal_fusion_count += 1.0;
+                // counter.real_fusion_count += 1.0;
                 counter.inc_real();
                 fusions.push(query.line.clone());
 
@@ -870,6 +875,10 @@ fn identify_fusions(
             } else {
                 counter.inc_fake();
                 // fake_fusion_count += 1.0;
+                // INFO: append fake tag to read {:FK}
+                let name = format!("{}:FK", query.name);
+                query.modify_field(BedColumn::Name.into(), &name);
+
                 fake_fusions.push(query.line.clone());
                 schema.is_fused_read = Value::Bool(false);
             }
