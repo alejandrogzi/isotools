@@ -35,6 +35,7 @@ pub const MAX_ENT_SCORE_RECOVERY_THRESHOLD: f32 = 1.5; // INFO: if both splice s
 
 // fusion numeric values
 pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
+pub const REVIEW_RGB: &str = "222,166,62";
 
 // polya numeric values
 pub const INTRAPRIMING_RATIO_THRESHOLD: f32 = 0.5;

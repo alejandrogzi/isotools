@@ -88,7 +88,7 @@ pub fn get_progress_bar(length: u64, msg: &str) -> ProgressBar {
 /// ```
 pub fn write_objs<T>(data: &DashSet<T>, fname: &str)
 where
-    T: AsRef<str> + Sync + Send + Eq + std::hash::Hash,
+    T: AsRef<[u8]> + Sync + Send + Eq + std::hash::Hash,
 {
     log::info!("Reads in {}: {:?}. Writing...", fname, data.len());
     let f = match File::create(fname) {
@@ -98,9 +98,13 @@ where
     let mut writer = BufWriter::new(f);
 
     for line in data.iter() {
-        writeln!(writer, "{}", line.as_ref()).unwrap_or_else(|e| {
-            panic!("Error writing to file: {}", e);
-        });
+        let bytes = line.as_ref();
+        writer
+            .write_all(bytes)
+            .unwrap_or_else(|e| panic!("ERROR: Error writing to file -> {e}"));
+        writer
+            .write_all(b"\n")
+            .unwrap_or_else(|e| panic!("ERROR: Error newline to file -> {e}"));
     }
 }
 
