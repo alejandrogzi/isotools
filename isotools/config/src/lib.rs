@@ -16,6 +16,10 @@ pub use mods::*;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// tag separators
+pub const SEP: &str = "#"; // WARN: should change to ':' -> breaks ORF caller [translationai hdf5]
+pub const BIG_SEP: &str = "__"; // WARN: should change to '::' -> breaks ORF caller [translationai hdf5]
+
 // numeric values
 pub const SCALE: u64 = 100000000000; // 100Gb
 pub const MIN_THREADS: usize = 1;

@@ -16,7 +16,7 @@ use config::{
     exonic_overlap, get_progress_bar, par_write_results, splice_site_overlap, tsv_to_map,
     write_descriptor, write_objs, BedColumn, FusionDetectionValue, MatchType, ModuleDescriptor,
     ModuleMap, ModuleType, FUSIONS, FUSION_DESCRIPTOR, FUSION_FAKES, FUSION_FREE,
-    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, REVIEW_RGB, SCALE,
+    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, REVIEW_RGB, SCALE, SEP,
 };
 use dashmap::DashMap;
 use hashbrown::{HashMap, HashSet};
@@ -638,7 +638,7 @@ fn recover_component(
 
     for query in queries.iter_mut() {
         // INFO: append :RW tag to read name
-        let name = format!("{}:RW", query.name);
+        let name = format!("{}{SEP}RW", query.name);
         query.modify_field(BedColumn::Name.into(), &name);
 
         // INFO: change color for review reads!
@@ -876,7 +876,7 @@ fn identify_fusions(
                 counter.inc_fake();
                 // fake_fusion_count += 1.0;
                 // INFO: append fake tag to read {:FK}
-                let name = format!("{}:FK", query.name);
+                let name = format!("{}{SEP}FK", query.name);
                 query.modify_field(BedColumn::Name.into(), &name);
 
                 fake_fusions.push(query.line.clone());

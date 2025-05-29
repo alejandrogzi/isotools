@@ -1,4 +1,4 @@
-use config::{BedParser, OverlapType, Sequence, Strand, SupportType, SCALE};
+use config::{BedParser, OverlapType, Sequence, Strand, SupportType, BIG_SEP, SCALE, SEP};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
@@ -1896,11 +1896,11 @@ fn get_polya_stats(read: &str) -> (u32, u32, u32, u32) {
 }
 
 fn get_tags_from_read(read: &str) -> HashMap<String, usize> {
-    let mut map = HashMap::with_capacity(5); // WARN: enforcing 5 tags!
+    let mut map = HashMap::with_capacity(5); // WARN: enforcing 5 tags -> fusion tags come after this step!
 
-    if let Some((_, tags_part)) = read.split_once("::") {
+    if let Some((_, tags_part)) = read.split_once(BIG_SEP) {
         // WARN: enforcing two letter tag!
-        for tag in tags_part.split(':') {
+        for tag in tags_part.split(SEP) {
             if tag.len() >= 3 {
                 // Safe slicing because ASCII: two-letter key + numeric value
                 let key = &tag[..2];

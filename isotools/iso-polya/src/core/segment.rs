@@ -1342,7 +1342,7 @@ impl Read {
     /// ```
     fn tag_read(&self, index: u64, chr: &String) -> String {
         format!(
-            "R{}_{chr}::FC{}:TC{}:PA{}:PR{}:IY{}",
+            "R{}_{chr}{BIG_SEP}FC{}{SEP}TC{}{SEP}PA{}{SEP}PR{}{SEP}IY{}",
             index,
             self.five_clip,
             self.three_clip,
