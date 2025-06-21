@@ -682,6 +682,124 @@ where
     Ok(tracks)
 }
 
+/// Convert a BED file into a row-wise nested collection structure
+///
+/// This function is used to parse a BED file and convert it into a
+/// DashMap of chromosome-dependent HashMaps. Each inner HashMap stores
+/// the 'attributes' of each row in the BED file as a `Vec<BedColumnValue>`.
+/// The user specifies which attributes should be stored.
+///
+/// # Arguments
+///
+/// * `contents` - the contents of the BED file
+/// * `key` - the column to be used as the key for the outer HashMap
+/// * `attributes` - the attributes to be stored in the inner HashMap
+///
+/// # Returns
+///
+/// * `DashMap<String, HashMap<String, Vec<BedColumnValue>>>` - a DashMap where the key is the chromosome
+/// * and the value is a HashMap of key-dependent values. User can specify which column should be used
+/// * as the key and which attribute should be stored.
+pub fn bed_to_nested_collection<T>(
+    contents: Arc<String>,
+    key: BedColumn,
+    attributes: Vec<BedColumn>,
+) -> Result<DashMap<String, HashMap<String, Vec<BedColumnValue>>>, anyhow::Error>
+where
+    T: BedParser,
+{
+    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
+    let tracks = DashMap::new();
+
+    contents
+        .par_lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            T::parse(line, OverlapType::Exon, false) // WARN: placeholders
+                .map_err(|e| warn!("Error parsing {}: {}", line, e))
+                .ok()
+        })
+        .for_each(|record| {
+            let chrom = record.chrom().to_owned();
+
+            // INFO: we need to use the key column to create a unique key for each entry
+            // INFO: in case of duplicates, only BedColumn::Score stores multiple values!
+            let inner_key = match key {
+                BedColumn::Chrom => record.chrom().to_string(),
+                BedColumn::Start => record.start().to_string(),
+                BedColumn::End => record.end().to_string(),
+                BedColumn::Name => record.name().to_string(),
+                BedColumn::Score => record.score().to_string(),
+                BedColumn::Strand => record.strand().to_string(),
+                BedColumn::ThickStart => record.cds_start().to_string(),
+                BedColumn::ThickEnd => record.cds_end().to_string(),
+                _ => {
+                    warn!(
+                        "ERROR: Invalid key column for BED file. Is not possible
+                        to use as a key either because is redundant or is not meaningful!"
+                    );
+                    return;
+                }
+            };
+
+            let mut values = Vec::new();
+            for attribute in &attributes {
+                if !attribute.is_valid() {
+                    warn!(
+                        "ERROR: Invalid attribute column for BED file: {:?}. Skipping...",
+                        attribute
+                    );
+                    continue;
+                }
+
+                let value = match attribute {
+                    BedColumn::Chrom => BedColumnValue::Chrom(record.chrom().to_string()),
+                    BedColumn::Start => BedColumnValue::Start(record.start()),
+                    BedColumn::End => BedColumnValue::End(record.end()),
+                    BedColumn::Name => BedColumnValue::Name(record.name().to_string()),
+                    BedColumn::Score => BedColumnValue::Score(vec![record.score()]),
+                    BedColumn::Strand => BedColumnValue::Strand(record.strand()),
+                    BedColumn::ThickStart => BedColumnValue::ThickStart(record.cds_start()),
+                    BedColumn::ThickEnd => BedColumnValue::ThickEnd(record.cds_end()),
+                    BedColumn::ItemRgb => BedColumnValue::ItemRgb(record.rgb().to_string()),
+                    BedColumn::BlockCount => BedColumnValue::BlockCount(record.block_count()),
+                    BedColumn::BlockSizes => {
+                        BedColumnValue::BlockSizes(record.block_sizes().clone())
+                    }
+                    BedColumn::BlockStarts => {
+                        BedColumnValue::BlockStarts(record.block_starts().clone())
+                    }
+                };
+
+                values.push(value);
+            }
+
+            let mut entry = tracks.entry(chrom).or_insert_with(HashMap::new);
+            entry
+                .entry(inner_key)
+                .and_modify(|existing: &mut Vec<BedColumnValue>| existing.extend(values.clone()))
+                .or_insert(values);
+
+            pb.inc(1);
+        });
+
+    pb.finish_and_clear();
+
+    if tracks.is_empty() {
+        anyhow::bail!("ERROR: No tracks found in the provided file!");
+    }
+
+    info!(
+        "INFO: Parsed {} rows from the BED file!",
+        tracks
+            .iter()
+            .map(|entry| entry.value().len())
+            .sum::<usize>()
+    );
+
+    Ok(tracks)
+}
+
 /// Convert a TSV file into a HashMap of key-dependent values
 ///
 /// This function is used to parse a TSV file and convert it into a

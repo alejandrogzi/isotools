@@ -523,6 +523,26 @@ pub enum BedColumn {
     BlockStarts,
 }
 
+impl BedColumn {
+    pub fn is_valid(self) -> bool {
+        matches!(
+            self,
+            BedColumn::Chrom
+                | BedColumn::Start
+                | BedColumn::End
+                | BedColumn::Name
+                | BedColumn::Score
+                | BedColumn::Strand
+                | BedColumn::ThickStart
+                | BedColumn::ThickEnd
+                | BedColumn::ItemRgb
+                | BedColumn::BlockCount
+                | BedColumn::BlockSizes
+                | BedColumn::BlockStarts
+        )
+    }
+}
+
 /// Convert BedColumn to usize
 ///
 /// # Example
