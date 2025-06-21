@@ -441,6 +441,46 @@ pub enum Strand {
     Reverse,
 }
 
+impl Strand {
+    /// Get the opposite strand
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Strand;
+    ///
+    /// let forward = Strand::Forward;
+    /// let reverse = forward.opposite();
+    ///
+    /// assert_eq!(reverse, Strand::Reverse);
+    /// ```
+    pub fn opposite(&self) -> Self {
+        match self {
+            Strand::Forward => Strand::Reverse,
+            Strand::Reverse => Strand::Forward,
+        }
+    }
+
+    /// Get the string representation of the strand
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Strand;
+    /// let forward = Strand::Forward;
+    /// assert_eq!(forward.as_str(), "+");
+    ///
+    /// let reverse = Strand::Reverse;
+    /// assert_eq!(reverse.as_str(), "-");
+    /// ```
+    pub fn as_str(&self) -> &str {
+        match self {
+            Strand::Forward => "+",
+            Strand::Reverse => "-",
+        }
+    }
+}
+
 impl std::str::FromStr for Strand {
     type Err = Box<dyn std::error::Error>;
 
@@ -721,6 +761,7 @@ impl BedColumnValue {
             BedColumnValue::Chrom(s) => Some(s),
             BedColumnValue::Name(s) => Some(s),
             BedColumnValue::ItemRgb(s) => Some(s),
+            BedColumnValue::Strand(s) => Some(s.as_str()),
             _ => None,
         }
     }
