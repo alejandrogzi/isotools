@@ -648,6 +648,82 @@ impl BedColumnValue {
             _ => None,
         }
     }
+
+    /// String representation of BedColumnValue
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::BedColumnValue;
+    /// let name = BedColumnValue::Name("foo");
+    ///
+    /// assert_eq!(name, String::from("foo"));
+    /// ```
+    pub fn as_string(&self) -> String {
+        match self {
+            BedColumnValue::Chrom(s) => s.clone(),
+            BedColumnValue::Start(i) => i.to_string(),
+            BedColumnValue::End(i) => i.to_string(),
+            BedColumnValue::Name(s) => s.clone(),
+            BedColumnValue::Score(scores) => scores
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            BedColumnValue::Strand(s) => s.to_string(),
+            BedColumnValue::ThickStart(i) => i.to_string(),
+            BedColumnValue::ThickEnd(i) => i.to_string(),
+            BedColumnValue::ItemRgb(s) => s.clone(),
+            BedColumnValue::BlockCount(i) => i.to_string(),
+            BedColumnValue::BlockSizes(sizes) => sizes
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+            BedColumnValue::BlockStarts(starts) => starts
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        }
+    }
+
+    /// String representation of BedColumnValue
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::BedColumnValue;
+    /// let start = BedColumnValue::Start(123);
+    ///
+    /// assert_eq!(start, Some(123_u64));
+    /// ```
+    pub fn as_number(&self) -> Option<u64> {
+        match self {
+            BedColumnValue::Start(i) => Some(*i),
+            BedColumnValue::End(i) => Some(*i),
+            BedColumnValue::ThickStart(i) => Some(*i),
+            BedColumnValue::ThickEnd(i) => Some(*i),
+            BedColumnValue::BlockCount(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    /// str representation of BedColumnValue
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::BedColumnValue;
+    /// let chr = BedColumnValue::Chrom("chr1");
+    ///
+    /// assert_eq!(chr, Some("chr1"));
+    /// ```
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            BedColumnValue::Chrom(s) => Some(s),
+            BedColumnValue::Name(s) => Some(s),
+            BedColumnValue::ItemRgb(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 /// Filter side
