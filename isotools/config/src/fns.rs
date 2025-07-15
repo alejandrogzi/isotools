@@ -1,8 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
 use indicatif::{ProgressBar, ProgressStyle};
-use log::{info, warn};
+use log::warn;
 use num_traits::{Num, NumCast};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
@@ -562,15 +562,7 @@ where
         );
 
     pb.finish_and_clear();
-
-    if tracks.is_empty() {
-        anyhow::bail!("No tracks found in the provided file!");
-    }
-    info!(
-        "Parsed {} blacklisted intervals.",
-        tracks.values().flatten().count()
-    );
-    Ok(tracks)
+    crate::validate_track!(tracks, F)
 }
 
 /// Convert a BED file into a row-wise nested structure
@@ -666,20 +658,7 @@ where
         });
 
     pb.finish_and_clear();
-
-    if tracks.is_empty() {
-        anyhow::bail!("ERROR: No tracks found in the provided file!");
-    }
-
-    info!(
-        "INFO: Parsed {} rows from the BED file!",
-        tracks
-            .iter()
-            .map(|entry| entry.value().len())
-            .sum::<usize>()
-    );
-
-    Ok(tracks)
+    crate::validate_track!(tracks, I)
 }
 
 /// Convert a BED file into a row-wise nested collection structure
@@ -784,20 +763,76 @@ where
         });
 
     pb.finish_and_clear();
+    crate::validate_track!(tracks, I)
+}
 
-    if tracks.is_empty() {
-        anyhow::bail!("ERROR: No tracks found in the provided file!");
-    }
+/// Convert a BED file into a row-wise nested collection structure of structs
+///
+/// This function is used to parse a BED file and convert it into a
+/// DashMap of chromosome-dependent HashMaps. Each inner HashMap stores
+/// the 'attributes' of each row in the BED file as a BED-like struct
+/// (bounded by the BedParser trait).
+/// The user specifies which struct should be stored.
+///
+/// # Arguments
+///
+/// * `contents` - the contents of the BED file
+/// * `key` - the column to be used as the key for the outer HashMap
+///
+/// # Returns
+///
+/// * `DashMap<String, HashMap<String, T>>` - a DashMap where the key is the chromosome
+/// * and the value is a HashMap of key-dependent values. User can specify which column should be used
+/// * as the key and which struct <T: BedParser> should be stored.
+pub fn bed_to_struct_collection<T>(
+    contents: Arc<String>,
+    key: BedColumn,
+) -> Result<DashMap<String, HashMap<String, T>>, anyhow::Error>
+where
+    T: BedParser,
+{
+    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
+    let tracks = DashMap::new();
 
-    info!(
-        "INFO: Parsed {} rows from the BED file!",
-        tracks
-            .iter()
-            .map(|entry| entry.value().len())
-            .sum::<usize>()
-    );
+    contents
+        .par_lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            T::parse(line, OverlapType::Exon, false) // WARN: placeholders
+                .map_err(|e| warn!("Error parsing {}: {}", line, e))
+                .ok()
+        })
+        .for_each(|record| {
+            let chrom = record.chrom().to_owned();
 
-    Ok(tracks)
+            // INFO: we need to use the key column to create a unique key for each entry
+            let inner_key = match key {
+                BedColumn::Chrom => record.chrom().to_string(),
+                BedColumn::Start => record.start().to_string(),
+                BedColumn::End => record.end().to_string(),
+                BedColumn::Name => record.name().to_string(),
+                BedColumn::Score => record.score().to_string(),
+                BedColumn::Strand => record.strand().to_string(),
+                BedColumn::ThickStart => record.cds_start().to_string(),
+                BedColumn::ThickEnd => record.cds_end().to_string(),
+                _ => {
+                    warn!(
+                        "ERROR: Invalid key column for BED file. Is not possible
+                        to use as a key either because is redundant or is not meaningful!"
+                    );
+                    return;
+                }
+            };
+
+            // WARN: we assume that there is only 1 record per key!
+            let mut entry = tracks.entry(chrom).or_insert_with(HashMap::new);
+            entry.entry(inner_key).or_insert(record);
+
+            pb.inc(1);
+        });
+
+    pb.finish_and_clear();
+    crate::validate_track!(tracks, I)
 }
 
 /// Convert a TSV file into a HashMap of key-dependent values
@@ -901,17 +936,61 @@ where
         );
 
     pb.finish_and_clear();
+    crate::validate_track!(tracks, V)
+}
 
-    if tracks.is_empty() {
-        bail!("No tracks found in the provided file!");
-    }
+/// Validate the tracks based on their collection type
+///
+/// # Arguments
+///
+/// * `tracks` - the track collection [HashMap, DashMap, Vec, etc.]
+/// * `flag` - one-letter const flag indicating the type of operation to perform
+#[macro_export]
+macro_rules! validate_track {
+    // INFO: V -> vector
+    ($tracks:expr, V) => {{
+        if $tracks.is_empty() {
+            ::anyhow::bail!("No tracks found in the provided file!");
+        }
 
-    info!(
-        "Parsed {} records from file!",
-        tracks.values().map(Vec::len).sum::<usize>()
-    );
+        ::log::info!(
+            "Parsed {} records from file!",
+            $tracks.values().map(Vec::len).sum::<usize>()
+        );
 
-    Ok(tracks)
+        Ok($tracks)
+    }};
+
+    // INFO: I -> iterable
+    ($tracks:expr, I) => {{
+        if $tracks.is_empty() {
+            ::anyhow::bail!("No tracks found in the provided file!");
+        }
+
+        ::log::info!(
+            "INFO: Parsed {} rows from the BED file!",
+            $tracks
+                .iter()
+                .map(|entry| entry.value().len())
+                .sum::<usize>()
+        );
+
+        Ok($tracks)
+    }};
+
+    // INFO: F -> flat
+    ($tracks:expr, F) => {{
+        if $tracks.is_empty() {
+            ::anyhow::bail!("No tracks found in the provided file!");
+        }
+
+        ::log::info!(
+            "INFO: Parsed {} blacklisted intervals.",
+            $tracks.values().flatten().count()
+        );
+
+        Ok($tracks)
+    }};
 }
 
 /// Writes the descriptor to a JSON file
