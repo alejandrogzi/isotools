@@ -799,23 +799,32 @@ impl From<&str> for FilterSide {
     }
 }
 
-/// Region [iso-split]
+/// BED operation
 ///
-/// This enum is used to store region boundaries
-/// of a fq/fa file
+/// This enum is define an operation to perform on a BedColumn
 ///
 /// # Example
 ///
 /// ```rust, no_run
-/// use iso::Region;
+/// use iso::BedOperation;
 ///
-/// let region = Region{start: 1, end: 43};
-/// assert_eq!(43, region.end);
+/// let op = BedOperation::SplitName(".".to_string());
 /// ```
-#[derive(Debug, Clone)]
-pub struct ChunkRegion {
-    pub start: usize,
-    pub end: usize,
+pub enum BedOperation {
+    /// Split the name by a delimiter and get the Nth part
+    SplitName(String, usize),
+    /// Convert the name to uppercase
+    UppercaseName,
+    /// Convert the name to lowercase
+    LowercaseName,
+    /// Add a prefix to the name
+    AddPrefix(String),
+    /// Add a suffix to the name
+    AddSuffix(String),
+    /// Add amount of padding to the start and end positions
+    AddPadding { padding: u64 },
+    /// Substract amount of padding to the start and end positions
+    SubtractPadding { padding: u64 },
 }
 
 /// Filter side
@@ -836,6 +845,25 @@ pub enum SplitMode {
 }
 
 // public structs
+/// Region [iso-split]
+///
+/// This enum is used to store region boundaries
+/// of a fq/fa file
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::Region;
+///
+/// let region = Region{start: 1, end: 43};
+/// assert_eq!(43, region.end);
+/// ```
+#[derive(Debug, Clone)]
+pub struct ChunkRegion {
+    pub start: usize,
+    pub end: usize,
+}
+
 /// Sequence struct
 ///
 /// This struct is used to store a sequence of nucleotides.

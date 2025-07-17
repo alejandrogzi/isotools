@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
-    BedColumn, BedColumnValue, BedParser, CoordType, MatchType, ModuleMap, OverlapType,
-    ParallelCollector, TsvParser,
+    BedColumn, BedColumnValue, BedOperation, BedParser, CoordType, MatchType, ModuleMap,
+    OverlapType, ParallelCollector, TsvParser,
 };
 
 // os
@@ -823,6 +823,138 @@ where
                     return;
                 }
             };
+
+            // WARN: we assume that there is only 1 record per key!
+            let mut entry = tracks.entry(chrom).or_insert_with(HashMap::new);
+            entry.entry(inner_key).or_insert(record);
+
+            pb.inc(1);
+        });
+
+    pb.finish_and_clear();
+    crate::validate_track!(tracks, I)
+}
+
+/// Convert a BED file into a row-wise nested collection structure of structs
+/// with an inner key choosen by a custom operation
+///
+/// This function is used to parse a BED file and convert it into a
+/// DashMap of chromosome-dependent HashMaps. Each inner HashMap stores
+/// the 'attributes' of each row in the BED file as a BED-like struct
+/// (bounded by the BedParser trait).
+///
+/// The user specifies which struct should be stored. The difference with
+/// bed_to_struct_collection() is that the user can specify an operation
+/// to perform on the inner key, allowing for more flexibility in how is
+/// accessed and stored. An example of this feature is to split the name.
+///
+/// # Arguments
+///
+/// * `contents` - the contents of the BED file
+/// * `key` - the column to be used as the key for the outer HashMap
+///
+/// # Returns
+///
+/// * `DashMap<String, HashMap<String, T>>` - a DashMap where the key is the chromosome
+/// * and the value is a HashMap of key-dependent values. User can specify which column should be used
+/// * as the key and which struct <T: BedParser> should be stored.
+pub fn bed_to_custom_struct_collection<T>(
+    contents: Arc<String>,
+    key: BedColumn,
+    op: BedOperation,
+) -> Result<DashMap<String, HashMap<String, T>>, anyhow::Error>
+where
+    T: BedParser,
+{
+    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED files...");
+    let tracks = DashMap::new();
+
+    contents
+        .par_lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            T::parse(line, OverlapType::Exon, false) // WARN: placeholders
+                .map_err(|e| warn!("Error parsing {}: {}", line, e))
+                .ok()
+        })
+        .for_each(|record| {
+            let chrom = record.chrom().to_owned();
+
+            // INFO: we need to use the key column to create a unique key for each entry
+            let mut inner_key = match key {
+                BedColumn::Chrom => record.chrom().to_string(),
+                BedColumn::Start => record.start().to_string(),
+                BedColumn::End => record.end().to_string(),
+                BedColumn::Name => record.name().to_string(),
+                BedColumn::Score => record.score().to_string(),
+                BedColumn::Strand => record.strand().to_string(),
+                BedColumn::ThickStart => record.cds_start().to_string(),
+                BedColumn::ThickEnd => record.cds_end().to_string(),
+                _ => {
+                    warn!(
+                        "ERROR: Invalid key column for BED file. Is not possible
+                        to use as a key either because is redundant or is not meaningful!"
+                    );
+                    return;
+                }
+            };
+
+            match &op {
+                BedOperation::SplitName(delimiter, index) => {
+                    // INFO: split the name by a delimiter
+                    inner_key = inner_key
+                        .split(delimiter)
+                        .nth(*index)
+                        .unwrap_or_else(|| {
+                            warn!(
+                                "ERROR: Could not split inner key {} by delimiter {} and get index {}",
+                                inner_key,
+                                delimiter,
+                                index
+                            );
+                            &inner_key
+                        })
+                        .to_string();
+                }
+                BedOperation::UppercaseName => {
+                    // INFO: convert the name to uppercase
+                    inner_key = inner_key.to_uppercase();
+                }
+                BedOperation::LowercaseName => {
+                    // INFO: convert the name to lowercase
+                    inner_key = inner_key.to_lowercase();
+                }
+                BedOperation::AddPrefix(prefix) => {
+                    // INFO: add a prefix to the name
+                    inner_key = format!("{}{}", prefix, inner_key);
+                }
+                BedOperation::AddSuffix(suffix) => {
+                    // INFO: add a suffix to the name
+                    inner_key = format!("{}{}", inner_key, suffix);
+                }
+                BedOperation::AddPadding { padding } => {
+                    // INFO: add amount of padding to the start and end positions
+                    inner_key = inner_key
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| {
+                            warn!("ERROR: Could not parse inner key as u64: {}", inner_key);
+                            0
+                        })
+                        .saturating_add(*padding)
+                        .to_string();
+                }
+                BedOperation::SubtractPadding { padding } => {
+                    // INFO: add amount of padding to the start and end positions
+                    inner_key = inner_key
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| {
+                            warn!("ERROR: Could not parse inner key as u64: {}", inner_key);
+                            0
+                        })
+                        .saturating_sub(*padding)
+                        .to_string();
+                }
+            }
 
             // WARN: we assume that there is only 1 record per key!
             let mut entry = tracks.entry(chrom).or_insert_with(HashMap::new);
