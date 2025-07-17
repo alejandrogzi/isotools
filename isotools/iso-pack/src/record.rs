@@ -25,6 +25,87 @@ pub struct GenePred {
     pub is_ref: bool,
 }
 
+impl GenePred {
+    /// Maps ORF transcript coordinates to absolute genomic coordinates (strand-aware).
+    ///
+    /// This function takes ORF coordinates defined in **linear transcript space**
+    /// (as produced by a CDS/ORF predictor) and returns the corresponding genomic
+    /// start and end coordinates of the coding region, accounting for exon structure
+    /// and strand orientation. For transcripts on the reverse strand, it assumes
+    /// coordinates have been **strand-normalized** using a fixed scale (`SCALE`) and
+    /// reverses them appropriately.
+    ///
+    /// # Arguments
+    ///
+    /// * `orf_start` - The start of the ORF in transcript (spliced) coordinates.
+    /// * `orf_end` - The end of the ORF in transcript (spliced) coordinates. This is exclusive.
+    ///
+    /// # Returns
+    ///
+    /// * `Option<(u64, u64)>` - A tuple of genomic start and end coordinates corresponding
+    ///   to the CDS region. Returns `Some((start, end))` if mapping succeeds; otherwise,
+    ///   may return `None` if the coordinates do not map within the exon structure.
+    ///
+    /// # Strand Behavior
+    ///
+    /// * On the `Strand::Forward`, transcript coordinates map left-to-right across exons.
+    /// * On the `Strand::Reverse`, the exons are reversed and mapped using:
+    ///   `SCALE - (exon_end - offset)`, where `SCALE` is a user-defined upper genomic bound
+    ///   used for coordinate normalization.
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let mut gene = GenePred { /* initialized */ };
+    /// let orf_start = 15;
+    /// let orf_end = 45;
+    /// if let Some((cds_start, cds_end)) = gene.map_absolute_cds(orf_start, orf_end) {
+    ///     println!("Genomic CDS coordinates: {} - {}", cds_start, cds_end);
+    /// }
+    /// ```
+    pub fn map_absolute_cds(&mut self, orf_start: u64, orf_end: u64) -> Option<(u64, u64)> {
+        let exons = match self.strand {
+            Strand::Forward => &self.exons,
+            Strand::Reverse => &self.exons.iter().rev().map(|&(s, e)| (s, e)).collect(),
+        };
+
+        let mut transcript_offset = 0;
+        let mut cds_start = 0;
+        let mut cds_end = 0;
+
+        for (exon_start, exon_end) in exons {
+            let exon_len = exon_end - exon_start;
+            let exon_tx_start = transcript_offset;
+            let exon_tx_end = transcript_offset + exon_len;
+
+            // INFO: ORF start falls in this exon
+            if orf_start >= exon_tx_start && orf_start < exon_tx_end {
+                let offset = orf_start - exon_tx_start;
+                let g_start = match self.strand {
+                    Strand::Forward => exon_start + offset,
+                    Strand::Reverse => SCALE - (exon_end - offset), // INFO: reverse strand -> walk from right to left
+                };
+                cds_start = g_start;
+            }
+
+            // INFO: ORF end falls in this exon
+            if orf_end > exon_tx_start && orf_end <= exon_tx_end {
+                let offset = orf_end - exon_tx_start;
+                let g_end = match self.strand {
+                    Strand::Forward => exon_start + offset,
+                    Strand::Reverse => SCALE - (exon_end - offset),
+                };
+                cds_end = g_end;
+                break; // INFO: early exit, done mapping
+            }
+
+            transcript_offset += exon_len;
+        }
+
+        Some((cds_start, cds_end))
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct RefGenePred {
     pub reads: Vec<GenePred>,
@@ -2195,5 +2276,37 @@ mod tests {
             gp.line,
             "chr1\t1000\t2000\tread1_SNG\t0\t+\t1000\t2000\t0\t0\t0\t0"
         );
+    }
+
+    #[test]
+    fn test_absolute_cds_mapping_forward() {
+        let line = "chr6\t8259278\t8593709\tR441_chr6__FC23#TC31#PA0#PR0#IY1000\t60\t+\t8259278\t8593709\t43,118,219\t10\t215,109,62,215,152,87,117,153,211,2165\t0,11194,114627,167692,278538,299221,313903,320308,323301,332266";
+        let mut gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 237;
+        let orf_end = 420;
+
+        let (predicted_cds_start, predicted_cds_end) =
+            gp.map_absolute_cds(orf_start, orf_end).unwrap();
+
+        assert_eq!(predicted_cds_start, 8270494);
+        assert_eq!(predicted_cds_end, 8427004);
+    }
+
+    #[test]
+    fn test_absolute_cds_mapping_reverse() {
+        let line = "chr6\t8259278\t8593709\tR441_chr6__FC23#TC31#PA0#PR0#IY1000\t60\t-\t8259278\t8593709\t43,118,219\t10\t215,109,62,215,152,87,117,153,211,2165\t0,11194,114627,167692,278538,299221,313903,320308,323301,332266";
+        let mut gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 237;
+        let orf_end = 420;
+
+        let (predicted_cds_start, predicted_cds_end) =
+            gp.map_absolute_cds(orf_start, orf_end).unwrap();
+
+        assert_eq!(predicted_cds_start, 8270494);
+        assert_eq!(predicted_cds_end, 8427004);
     }
 }
