@@ -810,17 +810,17 @@ impl From<&str> for FilterSide {
 ///
 /// let op = BedOperation::SplitName(".".to_string());
 /// ```
-pub enum BedOperation {
+pub enum BedOperation<'a> {
     /// Split the name by a delimiter and get the Nth part
-    SplitName(String, usize),
+    SplitName(&'a str, usize),
     /// Convert the name to uppercase
     UppercaseName,
     /// Convert the name to lowercase
     LowercaseName,
     /// Add a prefix to the name
-    AddPrefix(String),
+    AddPrefix(&'a str),
     /// Add a suffix to the name
-    AddSuffix(String),
+    AddSuffix(&'a str),
     /// Add amount of padding to the start and end positions
     AddPadding { padding: u64 },
     /// Substract amount of padding to the start and end positions
