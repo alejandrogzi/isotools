@@ -102,6 +102,13 @@ impl GenePred {
             transcript_offset += exon_len;
         }
 
+        if cds_start >= cds_end {
+            panic!(
+                "ERROR: CDS start ({}) is greater than or equal to CDS end ({}) for ORF coordinates: {}-{} in {} strand. Exons: {:?}",
+                cds_start, cds_end, orf_start, orf_end, self.strand, self.exons
+            );
+        }
+
         Some((cds_start, cds_end))
     }
 }
