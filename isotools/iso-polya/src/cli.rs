@@ -363,6 +363,16 @@ pub struct SegmentArgs {
         default_value = "file"
     )]
     pub prefix: PathBuf,
+
+    #[arg(
+        short = 'b',
+        long = "batch",
+        required = false,
+        value_name = "BATCH",
+        help = "Index to use as a prefix for each batch when run in parallel [NUMBER]",
+        default_value("")
+    )]
+    pub batch: String,
 }
 
 impl SegmentArgs {

@@ -357,7 +357,7 @@ fn process_record(
         .unwrap_or_else(|err| panic!("ERROR: failed to convert record: {err:?}"));
 
     if args.tag {
-        *record.name_mut() = Some(read.tag_read(track, chr).into());
+        *record.name_mut() = Some(read.tag_read(track, chr, &args.batch).into());
     }
 
     if read.identity >= args.identity
@@ -1340,10 +1340,11 @@ impl Read {
     ///
     /// assert_eq!(read.name, "R1_chr1::FC5:TC24:PA45:PR65:IY98");
     /// ```
-    fn tag_read(&self, index: u64, chr: &String) -> String {
+    fn tag_read(&self, index: u64, chr: &String, batch: &String) -> String {
         format!(
-            "R{}_{chr}{BIG_SEP}FC{}{SEP}TC{}{SEP}PA{}{SEP}PR{}{SEP}IY{}",
+            "R{}{}_{chr}{BIG_SEP}FC{}{SEP}TC{}{SEP}PA{}{SEP}PR{}{SEP}IY{}",
             index,
+            batch,
             self.five_clip,
             self.three_clip,
             self.polya_len,
