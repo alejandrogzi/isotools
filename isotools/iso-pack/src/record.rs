@@ -102,11 +102,24 @@ impl GenePred {
             transcript_offset += exon_len;
         }
 
-        if cds_start >= cds_end {
-            panic!(
-                "ERROR: CDS start ({}) is greater than or equal to CDS end ({}) for ORF coordinates: {}-{} in {} strand. Exons: {:?}",
-                cds_start, cds_end, orf_start, orf_end, self.strand, self.exons
+        // WARN: the only case where both coords should be discarded is when
+        // WARN: the ORF start is out of bounds
+        if cds_start == 0 {
+            // INFO: ORF start or end is not within the exon structure
+            log::warn!(
+                "WARN: CDS start ({}) is 0 for ORF coordinates: {}-{} in {} strand. Exons: {:?}. Will skip this ORF!",
+                cds_start,
+                orf_start,
+                orf_end,
+                self.strand,
+                self.exons
             );
+            return None;
+        } else if cds_end == 0 {
+            // INFO: ORF end is out of bounds but we extend the CDS end to the transcript end
+            log::warn!("ERROR: CDS start ({}) is greater than or equal to CDS end ({}) for ORF coordinates: {}-{} in {} strand. Exons: {:?}",
+                    cds_start, cds_end, orf_start, orf_end, self.strand, self.exons);
+            return Some((cds_start, self.end));
         }
 
         Some((cds_start, cds_end))
