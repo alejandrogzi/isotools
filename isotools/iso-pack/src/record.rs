@@ -119,7 +119,13 @@ impl GenePred {
             // INFO: ORF end is out of bounds but we extend the CDS end to the transcript end
             log::warn!("ERROR: CDS start ({}) is greater than or equal to CDS end ({}) for ORF coordinates: {}-{} in {} strand. Exons: {:?}",
                     cds_start, cds_end, orf_start, orf_end, self.strand, self.exons);
-            return Some((cds_start, self.end));
+
+            match self.strand {
+                Strand::Forward => cds_end = self.end,
+                Strand::Reverse => cds_end = SCALE - self.start,
+            }
+
+            return Some((cds_start, cds_end));
         }
 
         Some((cds_start, cds_end))
@@ -2316,17 +2322,17 @@ mod tests {
 
     #[test]
     fn test_absolute_cds_mapping_reverse() {
-        let line = "chr6\t8259278\t8593709\tR441_chr6__FC23#TC31#PA0#PR0#IY1000\t60\t-\t8259278\t8593709\t43,118,219\t10\t215,109,62,215,152,87,117,153,211,2165\t0,11194,114627,167692,278538,299221,313903,320308,323301,332266";
+        let line = "chr6\t135706785\t136149375\tR12468_chr6__FC39#TC26#PA0#PR0#IY907\t60\t-\t135706785\t136149375\t43,118,219\t14\t4161,239,188,161,230,126,154,172,203,115,599,429,467,115\t0,6496,9171,11134,42405,44995,48873,49438,50346,113300,193084,314103,441628,442475";
         let mut gp = Bed12::read(line, OverlapType::Exon, false)
             .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
 
-        let orf_start = 237;
-        let orf_end = 420;
+        let orf_start = 2771;
+        let orf_end = 436127;
 
         let (predicted_cds_start, predicted_cds_end) =
             gp.map_absolute_cds(orf_start, orf_end).unwrap();
 
-        assert_eq!(predicted_cds_start, 8270494);
-        assert_eq!(predicted_cds_end, 8427004);
+        assert_eq!(predicted_cds_start, 135709556);
+        assert_eq!(predicted_cds_end, 136149375);
     }
 }
