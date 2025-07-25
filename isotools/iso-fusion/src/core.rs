@@ -83,7 +83,7 @@ pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>>
             args.recover,
             match_type,
             args.colorize.clone(),
-            args.suffix.clone(),
+            args.tag.clone(),
         );
 
         pb.inc(1);

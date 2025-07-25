@@ -126,13 +126,13 @@ pub struct Args {
     pub colorize: Option<String>,
 
     #[arg(
-        short = 'R',
-        long = "rename",
+        short = 'T',
+        long = "tag",
         required = false,
         value_name = "VALUE",
         help = "Suffix to append at the end of the read name"
     )]
-    pub suffix: Option<String>,
+    pub tag: Option<String>,
 
     #[arg(
         short = 'd',
