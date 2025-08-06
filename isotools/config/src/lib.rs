@@ -1058,6 +1058,26 @@ impl Sequence {
         self.seq.to_lowercase()
     }
 
+    /// Get the complement of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.complement().to_string(), "GCTA");
+    /// ```
+    pub fn complement(&self) -> Self {
+        let comp = self
+            .seq
+            .chars()
+            .map(|c| COMPLEMENT[c as usize] as char)
+            .collect::<String>();
+
+        Self { seq: comp }
+    }
+
     /// Get the reverse complement of the sequence
     ///
     /// # Example
