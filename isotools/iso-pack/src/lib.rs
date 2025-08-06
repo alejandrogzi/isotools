@@ -160,6 +160,21 @@ pub enum PackMode {
     PolyA,   // Vec<PolyAPred>
 }
 
+/// Reads the entire content of a file into a `String`.
+///
+/// This function provides a basic utility for synchronously reading a file's
+/// contents. It's generic over any type that can be converted to a `Path` and
+/// is `Debug` printable.
+///
+/// # Arguments
+///
+/// * `file` - The path to the file to read.
+///
+/// # Returns
+///
+/// A `Result<String, Box<dyn std::error::Error>>` containing the file's
+/// contents on success, or an error if the file cannot be opened or read.
+///
 pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
     let mut file = File::open(file)?;
     let mut contents = String::new();
@@ -167,6 +182,20 @@ pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::er
     Ok(contents)
 }
 
+/// Reads multiple files in parallel and concatenates their contents into a single `String`.
+///
+/// This function leverages Rayon for parallel processing, making it efficient for
+/// reading many files concurrently. It panics if any individual file fails to read.
+///
+/// # Arguments
+///
+/// * `files` - A vector of paths to the files to read.
+///
+/// # Returns
+///
+/// A `Result<String, anyhow::Error>` containing the concatenated contents of all files
+/// on success, or an error if parallel reading fails.
+///
 pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
     files: Vec<P>,
 ) -> Result<String, anyhow::Error> {
@@ -181,6 +210,28 @@ pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
     Ok(contents.concat())
 }
 
+/// Unpacks and parses multiple BED-like files into a `HashMap` of records, keyed by chromosome.
+///
+/// This function first reads the contents of all specified files in parallel using `par_reader`,
+/// then parses the combined content into a `HashMap` where keys are chromosome names and values
+/// are vectors of parsed records (`K`). The parsing is also done in parallel.
+///
+/// # Type Parameters
+///
+/// * `K` - The type of BED record to parse, which must implement `BedParser`, `Debug`, `Send`, and `Sync`.
+/// * `P` - The type of file path, which must implement `AsRef<Path>`, `Debug`, `Send`, and `Sync`.
+///
+/// # Arguments
+///
+/// * `files` - A vector of paths to the BED-like files.
+/// * `overlap` - The `OverlapType` to use during parsing.
+/// * `is_ref` - A boolean indicating if the records are reference data.
+///
+/// # Returns
+///
+/// A `Result<HashMap<String, Vec<K>>, anyhow::Error>` containing the parsed records
+/// on success, or an error if any step fails.
+///
 pub fn unpack<K, P>(
     files: Vec<P>,
     overlap: OverlapType,
@@ -196,6 +247,27 @@ where
     Ok(tracks)
 }
 
+/// Parses a string containing multiple BED-like records into a `HashMap` keyed by chromosome.
+///
+/// This function processes the input `contents` string in parallel, filtering out comment lines
+/// and parsing each valid line into a record of type `K`. It uses a progress bar to track
+/// parsing progress and sorts the records within each chromosome by start and then end position.
+///
+/// # Type Parameters
+///
+/// * `K` - The type of BED record to parse, which must implement `BedParser`, `Debug`, `Send`, and `Sync`.
+///
+/// # Arguments
+///
+/// * `contents` - A string slice containing the BED-like data.
+/// * `overlap` - The `OverlapType` to use during parsing.
+/// * `is_ref` - A boolean indicating if the records are reference data.
+///
+/// # Returns
+///
+/// A `Result<HashMap<String, Vec<K>>, anyhow::Error>` containing the parsed and sorted records
+/// on success, or an error if parsing fails.
+///
 pub fn parse_tracks<'a, K>(
     contents: &'a str,
     overlap: OverlapType,
@@ -248,18 +320,46 @@ where
     Ok(tracks)
 }
 
+/// A Disjoint Set Union (DSU) data structure for efficiently managing sets of elements.
+///
+/// This struct implements the Union-Find algorithm, which is used to group elements
+/// into disjoint sets and efficiently determine if two elements are in the same set.
 #[derive(Debug, Clone)]
 struct UnionFind {
     parent: Vec<usize>,
 }
 
 impl UnionFind {
+    /// Creates a new `UnionFind` instance with `n` disjoint sets, where each element
+    /// is initially in its own set.
+    ///
+    /// # Arguments
+    ///
+    /// * `n` - The number of elements.
+    ///
+    /// # Returns
+    ///
+    /// A new `UnionFind` instance.
+    ///
     fn new(n: usize) -> Self {
         Self {
             parent: (0..n).collect(),
         }
     }
 
+    /// Finds the representative (root) of the set containing element `x`.
+    ///
+    /// This method uses path compression for efficiency, flattening the tree
+    /// structure during traversal.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - The element whose set representative is to be found.
+    ///
+    /// # Returns
+    ///
+    /// The representative of the set containing `x`.
+    ///
     #[inline(always)]
     fn find(&mut self, x: usize) -> usize {
         if self.parent[x] != x {
@@ -268,6 +368,16 @@ impl UnionFind {
         self.parent[x]
     }
 
+    /// Unites the sets containing elements `x` and `y`.
+    ///
+    /// If `x` and `y` are already in the same set, this method does nothing.
+    /// Otherwise, it merges their sets by setting one's root as the parent of the other.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - The first element.
+    /// * `y` - The second element.
+    ///
     #[inline(always)]
     fn union(&mut self, x: usize, y: usize) {
         let root_x = self.find(x);
@@ -278,6 +388,28 @@ impl UnionFind {
     }
 }
 
+/// Groups gene transcripts into "buckets" based on their genomic overlap.
+///
+/// This function takes a `HashMap` of `GenePred` records (keyed by chromosome) and
+/// uses a Union-Find algorithm to identify overlapping transcripts. Transcripts that
+/// overlap based on the specified `OverlapType` are grouped into the same "bucket".
+/// The function then processes these groups according to the `PackMode`, converting
+/// them into a `DashMap` of `BedPackage` trait objects.
+///
+/// # Arguments
+///
+/// * `tracks` - A `HashMap` of `GenePred` records, keyed by chromosome.
+/// * `overlap` - The `OverlapType` to use for determining transcript overlap.
+/// * `amount` - The total number of transcripts, used for progress bar initialization.
+/// * `mode` - The `PackMode` which dictates how the grouped transcripts are packaged
+///            (e.g., `Default`, `Intron`, `Query`, `Exon`, `Paired`, `PolyA`).
+///
+/// # Returns
+///
+/// A `DashMap<String, Vec<Box<dyn BedPackage>>>` where keys are chromosome names
+/// and values are vectors of boxed `BedPackage` trait objects, representing the
+/// grouped and processed transcripts.
+///
 pub fn buckerize(
     tracks: HashMap<String, Vec<GenePred>>,
     overlap: OverlapType,
@@ -433,6 +565,14 @@ pub fn buckerize(
     cmap
 }
 
+/// Selects a random color from a predefined RGB array.
+///
+/// This is a utility function for providing a random color, likely for visualization purposes.
+///
+/// # Returns
+///
+/// A `&'a str` representing an RGB color string.
+///
 #[allow(dead_code)]
 fn choose_color<'a>() -> &'a str {
     let mut rng = rand::thread_rng();
@@ -440,6 +580,29 @@ fn choose_color<'a>() -> &'a str {
     RGB[idx]
 }
 
+/// Packs BED-like reference and optional query files into categorized buckets.
+///
+/// This is a high-level function that orchestrates the unpacking, combining, and
+/// buckerizing of genomic data. It takes reference files and optionally query files,
+/// determines their type based on the `PackMode`, unpacks them, combines them if
+/// queries are provided, and then groups them into `BedPackage` buckets based on overlap.
+///
+/// # Type Parameters
+///
+/// * `T` - The type of file path, which must implement `AsRef<Path>`, `Debug`, `Send`, and `Sync`.
+///
+/// # Arguments
+///
+/// * `refs` - A vector of paths to the reference files.
+/// * `queries` - An `Option` containing a vector of paths to query files.
+/// * `overlap` - The `OverlapType` to use for determining genomic overlap.
+/// * `mode` - The `PackMode` which dictates how the data is processed and packaged.
+///
+/// # Returns
+///
+/// A `Result<DashMap<String, Vec<Box<dyn BedPackage>>>, anyhow::Error>` containing the
+/// categorized and packaged genomic data on success, or an error if any step fails.
+///
 pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     refs: Vec<T>,
     queries: Option<Vec<T>>,
@@ -482,6 +645,29 @@ pub fn packbed<T: AsRef<Path> + Debug + Send + Sync>(
     Ok(buckets)
 }
 
+/// Combines two sets of genomic tracks (references and queries) into a single `HashMap`.
+///
+/// This function merges two `HashMap`s of `BedParser` implementors, `refs` and `queries`,
+/// into a single `HashMap`. It handles cases where the types `P` and `K` are the same,
+/// performing a direct extension, or where they are different, performing a conversion
+/// using the `Into<K>` trait. The process is parallelized for efficiency.
+///
+/// # Type Parameters
+///
+/// * `P` - The type of records in the `refs` HashMap, must implement `BedParser`, `Debug`, `Send`, `Sync`, and `Into<K>`.
+/// * `K` - The type of records in the `queries` HashMap, and the target type for conversion, must implement `BedParser`, `Debug`, `Send`, and `Sync`.
+///
+/// # Arguments
+///
+/// * `refs` - A `HashMap` of reference tracks, keyed by chromosome.
+/// * `queries` - A `HashMap` of query tracks, keyed by chromosome.
+///
+/// # Returns
+///
+/// A tuple `(HashMap<String, Vec<K>>, usize)` containing:
+/// * The combined `HashMap` of tracks.
+/// * The total count of combined transcripts.
+///
 pub fn combine<P, K>(
     refs: HashMap<String, Vec<P>>,
     queries: HashMap<String, Vec<K>>,
