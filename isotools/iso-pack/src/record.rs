@@ -172,10 +172,16 @@ impl GenePred {
     /// }
     /// ```
     pub fn map_absolute_cds(&mut self, orf_start: u64, orf_end: u64) -> (u64, u64) {
-        assert!(orf_start > 0, "ERROR: {orf_start} is not bigget than 0!");
-        assert!(orf_end > 0, "ERROR: {orf_end} is not bigget than 0!");
-
         let (cds_start, cds_end) = self.get_cds_from_pos(orf_start, orf_end);
+
+        assert!(
+            cds_start > 0,
+            "ERROR: {orf_start} is not bigger than 0! -> {self:?}"
+        );
+        assert!(
+            cds_end > 0,
+            "ERROR: {orf_end} is not bigget than 0! -> {self:?}"
+        );
 
         (cds_start, cds_end)
     }
