@@ -125,8 +125,8 @@ fn distribute(
 /// ```
 #[derive(Debug, Clone)]
 pub struct ParallelAccumulator {
-    lines: DashSet<String>,
-    paths: DashSet<String>,
+    pub lines: DashSet<String>,
+    pub paths: DashSet<String>,
 }
 
 impl Default for ParallelAccumulator {

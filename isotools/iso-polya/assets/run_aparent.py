@@ -1,4 +1,4 @@
-#!/usr/env/bin python3
+#!/usr/bin/env python3
 
 __author__ = "Alejandro Gonzales-Irribarren"
 __email__ = "alejandrxgzi@gmail.com"
@@ -9,6 +9,7 @@ import argparse
 import aparent.predictor
 import numpy as np
 from typing import List, Tuple, Callable
+from pathlib import Path
 from keras.models import load_model
 
 EncoderType = Callable[[List[str]], List[np.ndarray]]
@@ -20,9 +21,8 @@ PEAK_THRESHOLD = 0.01
 PEAK_MIN_DISTANCE = 3
 PEAK_PROMINENCE = (0.01, None)
 LIB_BIAS = 4
-INSTALL_DIR = "/beegfs/projects/hillerlab/genome/src/APARENT"
-MODEL = "/saved_models/aparent_large_lessdropout_all_libs_no_sampleweights.h5"
-
+MODEL = "model/aparent_large_lessdropout_all_libs_no_sampleweights.h5"
+MODEL_PATH = Path(__file__).parent / MODEL
 
 def run() -> None:
     """
@@ -37,7 +37,7 @@ def run() -> None:
     if args.model:
         model = load_model(args.model)
     else:
-        model = load_model(INSTALL_DIR + MODEL)
+        model = load_model(MODEL_PATH)
 
     encoder = aparent.predictor.get_aparent_encoder(lib_bias=LIB_BIAS)
 
