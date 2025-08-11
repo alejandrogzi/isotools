@@ -96,11 +96,18 @@ pub fn classify_nmd(args: Args) -> Result<(), String> {
     pb.finish_and_clear();
     info!("Reads categorized as NMDs: {}", accumulator.num_nmds());
 
-    par_write_results(
-        &accumulator,
-        vec![NMD_FREE_READS.into(), NMD_READS.into()],
-        Some(args.outdir),
-    );
+    let (no_nmd, nmd) = if let Some(prefix) = args.prefix {
+        info!("INFO: Prefix for output files: {prefix}");
+        (
+            format!("{prefix}_{NMD_FREE_READS}").into(),
+            format!("{prefix}_{NMD_READS}").into(),
+        )
+    } else {
+        info!("INFO: No prefix provided, using default output names.");
+        (NMD_FREE_READS.into(), NMD_READS.into())
+    };
+
+    par_write_results(&accumulator, vec![no_nmd, nmd], Some(args.outdir));
 
     Ok(())
 }

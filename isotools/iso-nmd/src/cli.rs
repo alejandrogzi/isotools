@@ -101,4 +101,13 @@ pub struct Args {
         action = ArgAction::Set
     )]
     pub big_exon_dist_to_ej: u64,
+
+    #[arg(
+        short = 'p',
+        long = "prefix",
+        required = false,
+        value_name = "VALUE",
+        help = "Prefix to append at the beginning of the read name"
+    )]
+    pub prefix: Option<String>,
 }
