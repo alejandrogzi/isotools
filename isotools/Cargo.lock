@@ -1059,6 +1059,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "iso-nmd"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "config",
+ "dashmap",
+ "hashbrown 0.15.2",
+ "iso-pack",
+ "log",
+ "num_cpus",
+ "rayon",
+ "serde_json",
+ "simple_logger",
+]
+
+[[package]]
 name = "iso-orf"
 version = "0.0.1"
 dependencies = [
@@ -1079,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "iso-pack"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -1123,6 +1139,22 @@ dependencies = [
  "thiserror 2.0.11",
  "tokio",
  "twobit",
+]
+
+[[package]]
+name = "iso-split"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "config",
+ "flate2",
+ "log",
+ "memchr",
+ "memmap2",
+ "num_cpus",
+ "rayon",
+ "simple_logger",
 ]
 
 [[package]]
@@ -1338,6 +1370,15 @@ name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
+
+[[package]]
+name = "memmap2"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd3f7eed9d3848f8b98834af67102b720745c4ec028fcd0aa0239277e7de374f"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "miniz_oxide"

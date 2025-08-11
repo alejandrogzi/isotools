@@ -89,6 +89,8 @@ pub const INTRAPRIMING_REVIEW: &str = "intrapriming_review.bed";
 pub const POLYA_PASS: &str = "polya_pass.bed";
 pub const POLYA_INTRAPRIMING: &str = "polya_intrapriming.bed";
 pub const POLYA_DESCRIPTOR: &str = "polya.json";
+pub const NMD_FREE_READS: &str = "reads.bed";
+pub const NMD_READS: &str = "nmd.bed";
 
 // spliceai-related names
 pub const ACCEPTOR_MINUS: &str = "spliceAiAcceptorMinus.bw";

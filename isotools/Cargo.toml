@@ -11,6 +11,7 @@ members = [
     "iso-orf",
     "iso-polya",
     "iso-split",
+    "iso-nmd",
 ]
 resolver = "2"
 
