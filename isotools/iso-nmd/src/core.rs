@@ -68,6 +68,7 @@ pub fn classify_nmd(args: Args) -> Result<(), String> {
         packbed::PackMode::Paired,
     )
     .unwrap_or_else(|e| panic!("ERROR: failed to pack records in {:?} -> {e}", &args.refs));
+
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
@@ -107,6 +108,12 @@ pub fn classify_nmd(args: Args) -> Result<(), String> {
         (NMD_FREE_READS.into(), NMD_READS.into())
     };
 
+    std::fs::create_dir_all(&args.outdir).map_err(|e| {
+        format!(
+            "ERROR: Could not create output directory {:?} -> {e}",
+            &args.outdir
+        )
+    })?;
     par_write_results(&accumulator, vec![no_nmd, nmd], Some(args.outdir));
 
     Ok(())
