@@ -7,17 +7,26 @@ use iso_utr::lib_iso_utr;
 
 use std::sync::Arc;
 
-const KEYS: [&str; 5] = ["--query", "--toga", "--aparent", "--bigwig", "--twobit"];
+const KEYS: [&str; 6] = [
+    "--query",
+    "--toga",
+    "--aparent",
+    "--bigwig",
+    "--twobit",
+    "--outdir",
+];
 const GLOBAL_DESCRIPTOR: &str = "global_descriptor.tsv";
 
 pub fn lib(mut args: Vec<String>) {
     __check_args(&args);
 
-    // WARN: will expect to always have outdir as last argument
+    // WARN: will expect to always have outdir as last argument [ last 2 ]
+    // INFO: fmt -> '[--arg1, <VALUE>, --arg2, <VALUE>]'
     let outdir = args.pop().expect(&format!(
         "ERROR: Missing output directory argument, you had: {:?}",
         args
     ));
+    let mut args = args[..args.len() - 1].to_vec(); // INFO: dropping --outdir
 
     let introns = lib_iso_classify(args.clone())
         .expect("ERROR: Failed to classify introns")

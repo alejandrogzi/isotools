@@ -48,6 +48,7 @@ Usage: isotools run --query <PATHS> --toga <PATH> --aparent <PATH> --bigwig <DIR
   --aparent <PATH>            Path to APARENT BED12 file to classify [iso-polya aparent output]
   --bigwig <DIR_PATH>         Path to BigWig file to classify
   --twobit <PATH>             Path to TwoBit file to classify
+  --outdir <DIR>              Output directory for the classification results
   -h, --help                  Print help
 "#;
 
