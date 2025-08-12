@@ -145,7 +145,7 @@ def find_polya_peaks(
             seq_slice = (seq[start_pos:] + ("X" * 200))[:205]
             effective_len = len(seq[start_pos:])
 
-        _, cut_pred = aparent_model.predict(x=aparent_encoder([seq_slice]))
+        _, cut_pred = aparent_model.predict(x=aparent_encoder([seq_slice]), verbose=0)
 
         # print("Striding over subsequence [" + str(start_pos) + ", " + str(end_pos) + "] (Total length = " + str(len(seq)) + ")...")
 
