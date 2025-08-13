@@ -165,6 +165,7 @@ impl IntronArgs {
         let mut full_args = vec![env!("CARGO_PKG_NAME").to_string()];
         full_args.extend(local_args);
         full_args.push("--scan".to_string());
+        full_args.push("--nag".to_string());
 
         IntronArgs::parse_from(full_args)
     }

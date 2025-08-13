@@ -254,14 +254,7 @@ where
 }
 
 pub fn load_scan_scores() -> Option<(SpliceScoreMap, SpliceScoreMap)> {
-    let mut assets = std::env::current_dir().expect("Failed to get executable path");
-
-    if !assets.ends_with("iso-classify") {
-        let rest = PathBuf::from("iso-classify").join(CLASSIFY_ASSETS);
-        assets.push(rest);
-    } else {
-        assets = assets.join(CLASSIFY_ASSETS);
-    }
+    let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CLASSIFY_ASSETS);
 
     let acceptor_scores = parse_tsv::<AcceptorScores>(
         reader(assets.join(MAXENTSCAN_ACCEPTOR_DB)).expect(
