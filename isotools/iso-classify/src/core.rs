@@ -1,3 +1,23 @@
+//! Core module for intron classification
+//! Alejandro Gonzales-Irribarren, 2025
+//!
+//! This module provides a comprehensive sub-pipeline for classifying
+//! introns within genomic sequences. It different data sources to
+//! categorize introns based on their predicted splicing potential
+//! and structural characteristics.
+//!
+//! In essence, this module identifies and characterizes introns from
+//! input long-read sequencing data. It performs data integration,
+//! collecting splice site prediction scores (from tools like SpliceAI
+//! and MaxEntScan), analyzing genomic sequence context, and detecting
+//! specific sequence patterns such as RT repeats and NAG motifs. Through
+//! a parallel processing approach, each intron is evaluated to determine
+//! its "support type", indicating whether it is likely to be a genuine
+//! spliced intron, an RT-driven event, or an unclear case requiring
+//! further investigation. The final output is a detailed, classified list
+//! of introns, enabling deeper insights into alternative splicing and
+//! RNA processing.
+
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -28,6 +48,28 @@ const WIGGLE_SWITCH: [usize; 2] = [2, 4];
 type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
 pub type Genome = DashMap<String, Vec<u8>>;
 
+/// Classifies introns based on various criteria,
+/// including splice site scores, genomic context,
+/// and repeat sequences.
+///
+/// This function orchestrates the entire intron classification pipeline. It loads data,
+/// parallelizes the processing by chromosome, and writes the final classified introns to a file.
+///
+/// # Arguments
+///
+/// * `args`: An `Args` struct containing all necessary configuration and input paths.
+///
+/// # Returns
+///
+/// * A `Result<PathBuf>` which is the path to the output file if the classification is successful.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// // Assume 'args' is a properly constructed Args struct
+/// let output_path = classify_introns(args).expect("Failed to classify introns");
+/// println!("Intron classification complete. Output at: {:?}", output_path);
+/// ```
 pub fn classify_introns(args: Args) -> Result<PathBuf> {
     log::info!("INFO: Classifying introns...");
 
@@ -38,7 +80,25 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
         PackMode::Intron,
     )?;
 
-    let (splice_plus, splice_minus) = get_splice_scores(args.spliceai);
+    let mut chrs = Vec::with_capacity(isoseqs.len());
+    isoseqs.iter().for_each(|bucket| {
+        log::debug!(
+            "DEBUG: Bucket key: {}, value size: {}",
+            bucket.key(),
+            bucket.value().len()
+        );
+
+        if !bucket.value().is_empty() {
+            chrs.push(bucket.key().clone());
+        }
+    });
+
+    log::info!(
+        "INFO: Collecting data for {} chromosome keys...",
+        chrs.len()
+    );
+
+    let (splice_plus, splice_minus) = get_splice_scores(args.spliceai, chrs);
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
     let genome = if let Some(twobit) = args.twobit {
@@ -102,6 +162,26 @@ impl Default for ParallelAccumulator {
     }
 }
 
+/// Distributes intron buckets for parallel processing.
+///
+/// This function takes a vector of `BedPackage` components (intron buckets) and processes them in parallel.
+/// It applies various classification rules to each intron, collecting the results in a shared accumulator.
+///
+/// # Arguments
+///
+/// * `components`: A `Vec` of `Box<dyn BedPackage>` representing intron data for a specific chromosome.
+/// * `banned`: A `HashSet` of `(u64, u64)` tuples representing blacklisted introns.
+/// * `splice_map`: A tuple of `SharedSpliceMap` containing SpliceAI scores for plus and minus strands.
+/// * `scan_scores`: An `Option` containing `ScanScores` for MaxEnt scanning.
+/// * `genome`: An `Option` containing the genome sequence data.
+/// * `accumulator`: A `ParallelAccumulator` for thread-safe collection of results.
+/// * `nag`: A `bool` indicating whether to scan for NAG patterns.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// distribute(components, banned, &splice_map, &scan_scores, &genome, &accumulator, nag);
+/// ```
 #[inline(always)]
 fn distribute(
     components: Vec<Box<dyn BedPackage>>,
@@ -128,6 +208,31 @@ fn distribute(
     });
 }
 
+/// Processes a single `IntronBucket` and classifies its introns.
+///
+/// This function iterates through all introns in a given `IntronBucket`, applies classification logic
+/// (e.g., getting splice site context, SpliceAI scores, MaxEnt scores, and checking for RT and NAG repeats),
+/// and determines the support type for each intron.
+///
+/// # Arguments
+///
+/// * `component`: A mutable reference to an `IntronBucket`.
+/// * `banned`: A `HashSet` of `(u64, u64)` tuples representing blacklisted introns.
+/// * `splice_map`: A tuple of `SharedSpliceMap` containing SpliceAI scores.
+/// * `scan_scores`: An `Option` containing `ScanScores` for MaxEnt scanning.
+/// * `genome`: An `Option` containing the genome sequence data.
+/// * `nag`: A `bool` indicating whether to scan for NAG patterns.
+///
+/// # Returns
+///
+/// * A `HashMap<(u64, u64), String>`
+///     where the key is the intron coordinates and the value is a formatted string of its classification descriptor.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// let classified_introns = process_component(&mut component, &banned, &splice_map, &scan_scores, &genome, nag);
+/// ```
 #[inline(always)]
 fn process_component(
     component: &mut IntronBucket,
@@ -222,6 +327,26 @@ fn process_component(
     acc
 }
 
+/// Extracts the genomic sequence context around the splice junction.
+///
+/// This function retrieves the donor and acceptor splice site sequences and their surrounding context from the genome.
+/// It also handles reverse strand sequences by taking the reverse complement. It then calls functions to calculate
+/// MaxEnt scores and scan for RT repeats.
+///
+/// # Arguments
+///
+/// * `intron`: A tuple `(u64, u64)` representing the start and end coordinates of the intron.
+/// * `descriptor`: A mutable reference to an `IntronPredStats` struct to store the extracted sequences and scores.
+/// * `strand`: The `Strand` of the intron (`Forward` or `Reverse`).
+/// * `chr`: The chromosome name as a `String`.
+/// * `genome`: An `Option` containing the genome sequence data.
+/// * `scan_scores`: An `Option` containing `ScanScores` for MaxEnt scanning.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// get_sj_context(&intron, &mut descriptor, &strand, &chr, &genome, &scan_scores);
+/// ```
 fn get_sj_context(
     intron: &(u64, u64),
     descriptor: &mut IntronPredStats,
@@ -308,6 +433,21 @@ fn get_sj_context(
     }
 }
 
+/// Calculates the MaxEnt scores for the donor and acceptor splice sites.
+///
+/// This function looks up the pre-calculated MaxEnt scores for the splice site contexts stored in the
+/// `scan_scores` database and updates the intron descriptor.
+///
+/// # Arguments
+///
+/// * `descriptor`: A mutable reference to an `IntronPredStats` struct.
+/// * `scan_scores`: An `Option` containing `ScanScores` for MaxEnt lookup.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// get_sj_max_entropy(&mut descriptor, &scan_scores);
+/// ```
 fn get_sj_max_entropy(descriptor: &mut IntronPredStats, scan_scores: &ScanScores) {
     if let Some(scan_scores) = scan_scores {
         let (donor_score_map, acceptor_score_map): &(SpliceScoreMap, SpliceScoreMap) = scan_scores;
@@ -332,6 +472,24 @@ fn get_sj_max_entropy(descriptor: &mut IntronPredStats, scan_scores: &ScanScores
     }
 }
 
+/// Retrieves the SpliceAI scores for the donor and acceptor splice sites.
+///
+/// This function queries the SpliceAI score maps for the given intron's
+/// donor and acceptor coordinates and updates the intron descriptor
+/// with the found scores.
+///
+/// # Arguments
+///
+/// * `intron`: A tuple `(u64, u64)` representing the start and end coordinates of the intron.
+/// * `descriptor`: A mutable reference to an `IntronPredStats` struct.
+/// * `splice_scores`: An `Option` containing a reference to `SharedSpliceMap`.
+/// * `strand`: The `Strand` of the intron.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// get_sj_ai_scores(&intron, &mut descriptor, splice_scores, &strand);
+/// ```
 fn get_sj_ai_scores(
     intron: &(u64, u64),
     descriptor: &mut IntronPredStats,
@@ -375,6 +533,32 @@ fn get_sj_ai_scores(
     }
 }
 
+/// Processes a potential NAG-derived intron.
+///
+/// This function creates a new intron descriptor for a NAG-derived
+/// intron, retrieves its genomic context and splice site scores,
+/// and formats a new descriptor string. This new intron is considered
+/// a splicing intron.
+///
+/// # Arguments
+///
+/// * `base_intron`: A tuple `(u64, u64)` of the original intron coordinates.
+/// * `offset`: An `i64` representing the coordinate shift for the new intron.
+/// * `strand`: The `Strand` of the intron.
+/// * `chr`: The chromosome name.
+/// * `genome`: An `Option` containing the genome sequence data.
+/// * `scan_scores`: An `Option` containing `ScanScores`.
+/// * `splice_scores`: An `Option` containing a reference to `SharedSpliceMap`.
+///
+/// # Returns
+///
+/// * A `String` containing the formatted descriptor for the new NAG intron.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// let nag_descriptor = process_nag_pattern(&intron, -3, &strand, &chr, &genome, &scan_scores, splice_scores);
+/// ```
 fn process_nag_pattern(
     base_intron: &(u64, u64),
     offset: i64,
@@ -408,6 +592,28 @@ fn process_nag_pattern(
     new_descriptor.fmt(chr, strand, scaled_intron.0, scaled_intron.1)
 }
 
+/// Scans for NAG patterns in the acceptor context.
+///
+/// If the pre- or post-acceptor sequence matches one of the NAG
+/// patterns (`CAG`, `TAG`, `AAG`), this function calls `process_nag_pattern`
+/// to create and classify new introns at the wiggled splice sites.
+///
+/// # Arguments
+///
+/// * `intron`: A tuple `(u64, u64)` of the original intron coordinates.
+/// * `descriptor`: A mutable reference to the `IntronPredStats` struct.
+/// * `strand`: The `Strand` of the intron.
+/// * `chr`: The chromosome name.
+/// * `genome`: An `Option` containing the genome sequence data.
+/// * `scan_scores`: An `Option` containing `ScanScores`.
+/// * `splice_scores`: An `Option` containing a reference to `SharedSpliceMap`.
+/// * `acc`: A mutable `HashMap` to store the new NAG introns.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// scan_nag_repeats(&intron, &mut descriptor, &strand, &chr, &genome, &scan_scores, splice_scores, &mut acc);
+/// ```
 fn scan_nag_repeats(
     intron: &(u64, u64),
     descriptor: &mut IntronPredStats,
@@ -433,12 +639,43 @@ fn scan_nag_repeats(
     }
 }
 
+/// Scans for RT repeats between the donor and acceptor splice sites.
+///
+/// This function checks if there are repeated sequences between the donor and acceptor contexts,
+/// which is an indicator of an RT-driven intron.
+///
+/// # Arguments
+///
+/// * `descriptor`: A mutable reference to an `IntronPredStats` struct.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// scan_rt_repeats(&mut descriptor);
+/// ```
 fn scan_rt_repeats(descriptor: &mut IntronPredStats) {
     unsafe {
         scan_sequence(descriptor);
     }
 }
 
+/// Performs the core logic for detecting RT repeats.
+///
+/// This unsafe function compares k-mers (8-mers in this case) from the donor and acceptor contexts.
+/// If a match with a Hamming distance less than or equal to `MISMATCHES` is found, it sets the `is_rt_intron`
+/// flag to true and returns.
+///
+/// # Arguments
+///
+/// * `descriptor`: A mutable reference to an `IntronPredStats` struct.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// unsafe {
+///     scan_sequence(&mut descriptor);
+/// }
+/// ```
 #[inline(always)]
 unsafe fn scan_sequence(descriptor: &mut IntronPredStats) {
     let donor = &descriptor.donor_rt_context.as_bytes();
@@ -505,6 +742,24 @@ unsafe fn scan_sequence(descriptor: &mut IntronPredStats) {
     descriptor.is_rt_intron = false;
 }
 
+/// Wiggles splice sites and checks for support in a reference set.
+///
+/// This function is currently unused (`#[allow(unused)]`) but is intended to check if slightly shifted splice
+/// sites are present in a set of reference introns. This could potentially be used to recover or reclassify
+/// introns that are just a few bases off from a known splicing event.
+///
+/// # Arguments
+///
+/// * `acc`: A mutable `HashMap` to store and update intron classification results.
+/// * `intron`: A tuple `(u64, u64)` of the intron coordinates.
+/// * `ref_introns`: A `HashSet` of reference intron coordinates.
+/// * `strand`: The `Strand` of the intron.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// wiggle_splice_sites(&mut acc, &intron, &ref_introns, &strand);
+/// ```
 #[allow(unused)]
 fn wiggle_splice_sites(
     acc: &mut HashMap<(u64, u64), String>,
