@@ -979,7 +979,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "iso-classify"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -995,26 +995,6 @@ dependencies = [
  "simple_logger",
  "thiserror 2.0.11",
  "twobit",
-]
-
-[[package]]
-name = "iso-cov"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "config",
- "dashmap",
- "hashbrown 0.15.2",
- "iso-pack",
- "log",
- "num-traits",
- "num_cpus",
- "rand",
- "rayon",
- "serde",
- "serde_json",
- "simple_logger",
 ]
 
 [[package]]
@@ -1072,25 +1052,6 @@ dependencies = [
  "rayon",
  "serde_json",
  "simple_logger",
-]
-
-[[package]]
-name = "iso-orf"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "config",
- "dashmap",
- "hashbrown 0.15.2",
- "iso-classify",
- "iso-pack",
- "iso-utr",
- "log",
- "num_cpus",
- "rayon",
- "simple_logger",
- "thiserror 2.0.11",
 ]
 
 [[package]]
@@ -1183,10 +1144,8 @@ dependencies = [
  "config",
  "dashmap",
  "iso-classify",
- "iso-cov",
  "iso-fusion",
  "iso-intron",
- "iso-orf",
  "iso-pack",
  "iso-polya",
  "iso-utr",

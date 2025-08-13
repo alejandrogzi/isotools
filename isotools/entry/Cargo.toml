@@ -18,9 +18,7 @@ iso-intron = { path = "../iso-intron" }
 iso-utr = { path = "../iso-utr" }
 iso-pack = { path = "../iso-pack" }
 iso-fusion = { path = "../iso-fusion" }
-iso-cov = { path = "../iso-cov" }
 iso-classify = { path = "../iso-classify" }
-iso-orf = { path = "../iso-orf" }
 config = { path = "../config" }
 log.workspace = true
 simple_logger.workspace = true
