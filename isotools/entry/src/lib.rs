@@ -20,6 +20,11 @@ const GLOBAL_DESCRIPTOR: &str = "global_descriptor.tsv";
 pub fn lib(mut args: Vec<String>) {
     __check_args(&args);
 
+    let introns = lib_iso_classify(args.clone())
+        .expect("ERROR: Failed to classify introns")
+        .display()
+        .to_string();
+
     // WARN: will expect to always have outdir as last argument [ last 2 ]
     // INFO: fmt -> '[--arg1, <VALUE>, --arg2, <VALUE>]'
     let outdir = args.pop().expect(&format!(
@@ -27,11 +32,6 @@ pub fn lib(mut args: Vec<String>) {
         args
     ));
     let mut args = args[..args.len() - 1].to_vec(); // INFO: dropping --outdir
-
-    let introns = lib_iso_classify(args.clone())
-        .expect("ERROR: Failed to classify introns")
-        .display()
-        .to_string();
 
     args.extend(vec![
         "--introns".to_string(),
