@@ -9,9 +9,7 @@
 /// - iso-polya
 /// - iso-intron
 /// - iso-utr
-/// - iso-cov
 /// - iso-classify
-/// - iso-orf
 ///
 /// Each subcommand/submodule offers different functionalities,
 /// such as detecting fusions, polyadenylation sites, introns,
@@ -72,12 +70,8 @@ enum Commands {
     Intron(IsoArgs),
     #[command(name = "iso-utr")]
     Utr(IsoArgs),
-    #[command(name = "iso-cov")]
-    Coverage(IsoArgs),
     #[command(name = "iso-classify")]
     Classify(IsoArgs),
-    #[command(name = "iso-orf")]
-    Orf(IsoArgs),
     #[command(name = "run")]
     Run(IsoArgs),
 }
@@ -99,9 +93,7 @@ fn main() {
         Commands::Polya(args) => ("iso-polya", args.args),
         Commands::Intron(args) => ("iso-intron", args.args),
         Commands::Utr(args) => ("iso-utr", args.args),
-        Commands::Coverage(args) => ("iso-cov", args.args),
         Commands::Classify(args) => ("iso-classify", args.args),
-        Commands::Orf(args) => ("iso-orf", args.args),
         Commands::Run(args) => ("run", args.args),
     };
 
@@ -156,9 +148,7 @@ fn init() {
         - iso-polya
         - iso-intron
         - iso-utr
-        - iso-cov
         - iso-classify
-        - iso-orf
 
         > version: {}
         > author: alejandro gonzales-irribarren, 2025
