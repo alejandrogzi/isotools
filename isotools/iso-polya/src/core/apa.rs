@@ -161,7 +161,7 @@ fn chunk_writer(accumulator: &ParallelAccumulator, outdir: PathBuf) -> &Parallel
         .chunks(CHUNK_SIZE)
         .for_each(|chunk| {
             let index = counter.fetch_add(1, Ordering::Relaxed);
-            let filename = PathBuf::from(format!("chunk_{}", index));
+            let filename = PathBuf::from(format!("tmp_chunk_{}", index));
             let dest = outdir.join("TMP_CHUNKS").join(filename);
 
             std::fs::create_dir_all(
@@ -239,7 +239,7 @@ fn submit_jobs(accumulator: &ParallelAccumulator, _: bool) {
             .unwrap()
             .to_str()
             .unwrap()
-            .starts_with("chunk_")
+            .starts_with("tmp_chunk_")
         {
             let _ = std::fs::remove_file(path);
         }
@@ -424,7 +424,7 @@ fn merge_results(chrom_sizes: HashMap<String, u32>, outdir: PathBuf) {
                 .unwrap()
                 .to_str()
                 .unwrap()
-                .starts_with("polya")
+                .starts_with("tmp_polya")
             {
                 let _ = std::fs::remove_file(path);
             }

@@ -24,6 +24,7 @@ LIB_BIAS = 4
 MODEL = "model/aparent_large_lessdropout_all_libs_no_sampleweights.h5"
 MODEL_PATH = Path(__file__).parent / MODEL
 
+
 def run() -> None:
     """
     Run APPARENT to estimate poly(A) tail length from a chunked file
@@ -42,7 +43,7 @@ def run() -> None:
     encoder = aparent.predictor.get_aparent_encoder(lib_bias=LIB_BIAS)
 
     (bedgraph, bed) = process_chunk(args, model, encoder)
-    write_results(bedgraph, bed, args.path)
+    write_results(bedgraph, bed, args.path, args.bedgraph)
 
 
 def process_chunk(
@@ -89,9 +90,10 @@ def process_chunk(
                     # peak = 0
                     continue  # WARN: ignoring peaks below threshold
 
-                graph_lines.append(
-                    f"{chrom}\t{end - i - 1}\t{end - i}\t{peak}\t{strand}\n"
-                )
+                if args.bedgraph:
+                    graph_lines.append(
+                        f"{chrom}\t{end - i - 1}\t{end - i}\t{peak}\t{strand}\n"
+                    )
 
                 line = [
                     chrom,
@@ -109,9 +111,10 @@ def process_chunk(
                     # peak = 0
                     continue
 
-                graph_lines.append(
-                    f"{chrom}\t{start + i - 1}\t{start + i}\t{peak}\t{strand}\n"
-                )
+                if args.bedgraph:
+                    graph_lines.append(
+                        f"{chrom}\t{start + i - 1}\t{start + i}\t{peak}\t{strand}\n"
+                    )
 
                 line = [
                     chrom,
@@ -137,7 +140,9 @@ def process_chunk(
     return (graph_lines, bed_lines)
 
 
-def write_results(bedgraph: List[str], bed_lines: List[str], path: str) -> None:
+def write_results(
+    bedgraph: List[str], bed_lines: List[str], path: str, bg_flag: bool
+) -> None:
     """
     Write results to output files
 
@@ -163,11 +168,13 @@ def write_results(bedgraph: List[str], bed_lines: List[str], path: str) -> None:
 
     suffix = path.rsplit("_", 1)[-1]
     path = path.rsplit("/", 1)[0]
-    bg = f"{path}/polya_{suffix}.bedGraph"
-    bed = f"{path}/polya_{suffix}.bed"
+    bed = f"{path}/tmp_polya_{suffix}.bed"
 
-    with open(bg, "w") as f:
-        f.writelines(bedgraph)
+    if bg_flag:
+        bg = f"{path}/tmp_polya_{suffix}.bedGraph"
+
+        with open(bg, "w") as f:
+            f.writelines(bedgraph)
 
     with open(bed, "w") as f:
         f.writelines(bed_lines)
@@ -242,6 +249,13 @@ def parse() -> argparse.Namespace:
         action="store_const",
         const=True,
         metavar="use only the max peak of the APARENT frame",
+    )
+    parser.add_argument(
+        "-bg",
+        "--bedgraph",
+        action="store_const",
+        const=True,
+        metavar="flag to write .bedGraph file from peaks",
     )
     parser.add_argument(
         "-m",
