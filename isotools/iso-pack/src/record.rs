@@ -406,36 +406,53 @@ impl IntronPred {
             is_nag_intron,
             support,
         ) = (
-            data.next().expect("ERROR: Cannot parse chrom"),
-            data.next().expect("ERROR: Cannot parse start"),
-            data.next().expect("ERROR: Cannot parse end"),
-            data.next().expect("ERROR: Cannot parse strand"),
-            data.next().expect("ERROR: Cannot parse seen"),
-            data.next().expect("ERROR: Cannot parse spanned"),
-            data.next().expect("ERROR: Cannot parse splice_ai_donor"),
-            data.next().expect("ERROR: Cannot parse splice_ai_acceptor"),
-            data.next().expect("ERROR: Cannot parse max_ent_donor"),
-            data.next().expect("ERROR: Cannot parse max_ent_acceptor"),
-            data.next().expect("ERROR: Cannot parse donor_sequence"),
-            data.next().expect("ERROR: Cannot parse acceptor_sequence"),
-            data.next().expect("ERROR: Cannot parse donor_context"),
-            data.next().expect("ERROR: Cannot parse acceptor_context"),
-            data.next().expect("ERROR: Cannot parse intron_position"),
-            data.next().expect("ERROR: Cannot parse is_toga_supported"),
-            data.next().expect("ERROR: Cannot parse is_in_frame"),
-            data.next().expect("ERROR: Cannot parse donor_rt_context"),
             data.next()
-                .expect("ERROR: Cannot parse acceptor_rt_context"),
-            data.next().expect("ERROR: Cannot parse is_rt_intron"),
-            data.next().expect("ERROR: Cannot parse is_nag_intron"),
-            data.next().expect("ERROR: Cannot parse support"),
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse chrom -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse start -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse end -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse strand -> {:?}", data))
+                .parse::<Strand>()
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse strand -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse seen -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse spanned -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse splice_ai_donor -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse splice_ai_acceptor -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse max_ent_donor -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse max_ent_acceptor -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse donor_sequence -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse acceptor_sequence -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse donor_context -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse acceptor_context -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse intron_position -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse is_toga_supported -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse is_in_frame -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse donor_rt_context -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse acceptor_rt_context -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse is_rt_intron -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse is_nag_intron -> {:?}", data)),
+            data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse support -> {:?}", data)),
         );
-
-        let strand = match strand {
-            "+" => Strand::Forward,
-            "-" => Strand::Reverse,
-            _ => panic!("ERROR: Strand is not + or -"),
-        };
 
         let (start, end) = match strand {
             Strand::Forward => {
@@ -585,22 +602,24 @@ impl IntronPredStats {
             is_nag_intron,
             support,
         ) = (
-            data[0].parse::<usize>().expect("ERROR: Cannot parse seen"),
+            data[0]
+                .parse::<usize>()
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse seen -> {:?}", data)),
             data[1]
                 .parse::<usize>()
-                .expect("ERROR: Cannot parse spanned"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse spanned -> {:?}", data)),
             data[2]
                 .parse::<f32>()
-                .expect("ERROR: Cannot parse splice_ai_donor"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse splice_ai_donor -> {:?}", data)),
             data[3]
                 .parse::<f32>()
-                .expect("ERROR: Cannot parse splice_ai_acceptor"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse splice_ai_acceptor -> {:?}", data)),
             data[4]
                 .parse::<f32>()
-                .expect("ERROR: Cannot parse max_ent_donor"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse max_ent_donor -> {:?}", data)),
             data[5]
                 .parse::<f32>()
-                .expect("ERROR: Cannot parse max_ent_acceptor"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse max_ent_acceptor -> {:?}", data)),
             data[6].into(),
             data[7].into(),
             Sequence::new(data[8].as_bytes()),
@@ -610,25 +629,25 @@ impl IntronPredStats {
                 "CDS" => IntronPosition::CDS,
                 "Mixed" => IntronPosition::Mixed,
                 "Unknown" => IntronPosition::Unknown,
-                _ => panic!("ERROR: Cannot parse intron_position"),
+                _ => panic!("ERROR: Cannot parse intron_position -> {:?}", data),
             },
             data[11]
                 .parse::<bool>()
-                .expect("ERROR: Cannot parse is_toga_supported"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse is_toga_supported -> {:?}", data)),
             data[12]
                 .parse::<bool>()
-                .expect("ERROR: Cannot parse is_in_frame"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse is_in_frame -> {:?}", data)),
             data[13].into(),
             data[14].into(),
             data[15]
                 .parse::<bool>()
-                .expect("ERROR: Cannot parse is_rt_intron"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse is_rt_intron -> {:?}", data)),
             data[16]
                 .parse::<bool>()
-                .expect("ERROR: Cannot parse is_nag_intron"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse is_nag_intron -> {:?}", data)),
             data[17]
                 .parse::<SupportType>()
-                .expect("ERROR: Cannot parse support"),
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse support -> {:?}", data)),
         );
 
         Self {
@@ -1384,28 +1403,49 @@ impl Bed12 {
             exon_sizes,
             exon_starts,
         ) = (
-            fields.next().ok_or("Cannot parse chrom")?,
-            fields.next().ok_or("Cannot parse tx_start")?,
-            fields.next().ok_or("Cannot parse tx_end")?,
-            fields.next().ok_or("Cannot parse name")?,
-            fields.next().ok_or("Cannot parse score")?,
             fields
                 .next()
-                .ok_or("Cannot parse strand")?
-                .chars()
+                .unwrap_or_else(|| panic!("Cannot parse chrom -> {:?}", fields)),
+            fields
                 .next()
-                .ok_or("Cannot parse strand as char")?,
-            fields.next().ok_or("Cannot parse cds_start")?,
-            fields.next().ok_or("Cannot parse cds_end")?,
-            fields.next().ok_or("Cannot parse rgb")?,
-            fields.next().ok_or("Cannot parse block_count")?,
-            fields.next().ok_or("Cannot parse exon_sizes")?,
-            fields.next().ok_or("Cannot parse exon_starts")?,
+                .unwrap_or_else(|| panic!("Cannot parse tx_start -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse tx_end -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse name -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse score -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse strand -> {:?}", fields))
+                .parse::<Strand>()
+                .unwrap_or_else(|_| panic!("Cannot parse strand -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse cds_start -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse cds_end -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse rgb -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse block_count -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse exon_sizes -> {:?}", fields)),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("Cannot parse exon_starts -> {:?}", fields)),
         );
 
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
         let (tx_start, tx_end, cds_start, cds_end) =
-            abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get)?;
+            abs_pos(tx_start, tx_end, cds_start, cds_end, strand.clone(), get)?;
 
         let (exons, introns, total_exon_len) = get_coords(
             exon_starts,
@@ -1414,7 +1454,7 @@ impl Bed12 {
             tx_end,
             cds_start,
             cds_end,
-            strand,
+            strand.clone(),
             overlap,
         )?;
 
@@ -1425,12 +1465,6 @@ impl Bed12 {
         introns.sort_unstable();
 
         let exon_count = exons.len();
-
-        let strand = match strand {
-            '+' => Strand::Forward,
-            '-' => Strand::Reverse,
-            _ => return Err("ERROR: Strand is not + or -"),
-        };
 
         Ok(GenePred {
             name: name.into(),
@@ -1561,7 +1595,7 @@ fn get_coords(
     tx_end: u64,
     cds_start: u64,
     cds_end: u64,
-    strand: char,
+    strand: Strand,
     overlap: OverlapType,
 ) -> Result<(HashSet<(u64, u64)>, HashSet<(u64, u64)>, u64), &'static str> {
     let group = |field: &str| -> Result<Vec<u64>, &'static str> {
@@ -1596,16 +1630,15 @@ fn get_coords(
     }
 
     let offset = match strand {
-        '+' => tx_start,
-        '-' => tx_end,
-        _ => return Err("Strand is not + or -"),
+        Strand::Forward => tx_start,
+        Strand::Reverse => tx_end,
     };
 
     let exons = ss
         .iter()
         .zip(&sz)
         .map(|(&s, &z)| match strand {
-            '+' => match overlap {
+            Strand::Forward => match overlap {
                 OverlapType::Exon | OverlapType::Boundary | OverlapType::CDSBound => {
                     Ok((s + offset, s + z + offset))
                 }
@@ -1624,7 +1657,7 @@ fn get_coords(
                     }
                 }
             },
-            '-' => match overlap {
+            Strand::Reverse => match overlap {
                 OverlapType::Exon | OverlapType::Boundary | OverlapType::CDSBound => {
                     Ok((offset - s - z, offset - s))
                 }
@@ -1643,7 +1676,6 @@ fn get_coords(
                     }
                 }
             },
-            _ => return Err("Strand is not + or -"),
         })
         .filter_map(Result::ok)
         .collect::<HashSet<_>>();
@@ -1692,11 +1724,11 @@ pub fn abs_pos(
     tx_end: &str,
     cds_start: &str,
     cds_end: &str,
-    strand: char,
+    strand: Strand,
     get: impl Fn(&str) -> Result<u64, &'static str>,
 ) -> Result<(u64, u64, u64, u64), &'static str> {
     match strand {
-        '+' => {
+        Strand::Forward => {
             let tx_start = get(tx_start)?;
             let tx_end = get(tx_end)?;
             let cds_start = get(cds_start)?;
@@ -1704,7 +1736,7 @@ pub fn abs_pos(
 
             Ok((tx_start, tx_end, cds_start, cds_end))
         }
-        '-' => {
+        Strand::Reverse => {
             let tx_start = get(tx_start)?;
             let tx_end = get(tx_end)?;
             let cds_start = get(cds_start)?;
@@ -1717,7 +1749,6 @@ pub fn abs_pos(
                 SCALE - cds_start,
             ))
         }
-        _ => Err("Strand is not + or -"),
     }
 }
 
@@ -2450,14 +2481,28 @@ impl Bed6 {
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
 
         let (chrom, start, end, id, score, strand) = (
-            fields.next().ok_or("Cannot parse chrom")?.to_string(),
-            get(fields.next().ok_or("Cannot parse start")?)?,
-            get(fields.next().ok_or("Cannot parse end")?)?,
-            fields.next().ok_or("Cannot parse id")?.to_string(),
-            fields.next().ok_or("Cannot parse score")?,
             fields
                 .next()
-                .ok_or("ERROR: Cannot parse strand!")?
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse chrom -> {fields:?}"))
+                .to_string(),
+            get(fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse start -> {fields:?}")))
+            .unwrap(),
+            get(fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse end -> {fields:?}")))
+            .unwrap(),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse id -> {fields:?}"))
+                .to_string(),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse score -> {fields:?}")),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse strand -> {fields:?}"))
                 .parse::<Strand>()?,
         );
 
@@ -2694,31 +2739,40 @@ impl PolyAPred {
 
         let mut fields = line.split('\t');
         let (chrom, tx_start, tx_end, name, _, strand, cds_start, cds_end) = (
-            fields.next().ok_or("Cannot parse chrom")?,
-            fields.next().ok_or("Cannot parse tx_start")?,
-            fields.next().ok_or("Cannot parse tx_end")?,
-            fields.next().ok_or("Cannot parse name")?,
-            fields.next().ok_or("Cannot parse score")?,
             fields
                 .next()
-                .ok_or("Cannot parse strand")?
-                .chars()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse chrom -> {fields:?}"))
+                .to_string(),
+            fields
                 .next()
-                .ok_or("Cannot parse strand as char")?,
-            fields.next().ok_or("Cannot parse cds_start")?,
-            fields.next().ok_or("Cannot parse cds_end")?,
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse start -> {fields:?}")),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse end -> {fields:?}")),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse id -> {fields:?}"))
+                .to_string(),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse score -> {fields:?}")),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse strand -> {fields:?}"))
+                .parse::<Strand>()
+                .unwrap(),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse cds_start -> {fields:?}")),
+            fields
+                .next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse cds_end -> {fields:?}")),
         );
 
         let (tx_start, tx_end, cds_start, cds_end) =
-            abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get)?;
+            abs_pos(tx_start, tx_end, cds_start, cds_end, strand.clone(), get)?;
 
-        let strand = match strand {
-            '+' => Strand::Forward,
-            '-' => Strand::Reverse,
-            _ => return Err("ERROR: Strand is not + or -"),
-        };
-
-        let (clip, clipped_a, poly_a, gpa) = get_polya_stats(name);
+        let (clip, clipped_a, poly_a, gpa) = get_polya_stats(&name);
 
         Ok(PolyAPred {
             name: name.into(),
@@ -2933,7 +2987,7 @@ mod tests {
         let tx_end = "20";
         let cds_start = "10";
         let cds_end = "20";
-        let strand = '+';
+        let strand = Strand::Forward;
 
         let (tx_start, tx_end, cds_start, cds_end) =
             abs_pos(tx_start, tx_end, cds_start, cds_end, strand, |x| {
@@ -2953,7 +3007,7 @@ mod tests {
         let tx_end = "20";
         let cds_start = "10";
         let cds_end = "20";
-        let strand = '-';
+        let strand = Strand::Reverse;
 
         let (tx_start, tx_end, cds_start, cds_end) =
             abs_pos(tx_start, tx_end, cds_start, cds_end, strand, |x| {
@@ -2975,7 +3029,7 @@ mod tests {
         let tx_end = 50;
         let cds_start = 15;
         let cds_end = 45;
-        let strand = '+';
+        let strand = Strand::Forward;
         let overlap = OverlapType::CDS;
 
         let (exons, introns, _) = get_coords(
@@ -3004,12 +3058,12 @@ mod tests {
         let tx_end = "100";
         let cds_start = "30";
         let cds_end = "80";
-        let strand = '-';
+        let strand = Strand::Reverse;
         let overlap = OverlapType::CDS;
 
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
         let (tx_start, tx_end, cds_start, cds_end) =
-            abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get).unwrap();
+            abs_pos(tx_start, tx_end, cds_start, cds_end, strand.clone(), get).unwrap();
 
         let (exons, introns, _) = get_coords(
             start, size, tx_start, tx_end, cds_start, cds_end, strand, overlap,
@@ -3050,7 +3104,7 @@ mod tests {
         let tx_end = 100;
         let cds_start = 15;
         let cds_end = 95;
-        let strand = '+';
+        let strand = Strand::Forward;
         let overlap = OverlapType::CDS;
 
         let (exons, introns, _) = get_coords(
@@ -3088,12 +3142,12 @@ mod tests {
         let tx_end = "80";
         let cds_start = "15";
         let cds_end = "75";
-        let strand = '-';
+        let strand = Strand::Reverse;
         let overlap = OverlapType::CDS;
 
         let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
         let (tx_start, tx_end, cds_start, cds_end) =
-            abs_pos(tx_start, tx_end, cds_start, cds_end, strand, get).unwrap();
+            abs_pos(tx_start, tx_end, cds_start, cds_end, strand.clone(), get).unwrap();
 
         let (exons, introns, _) = get_coords(
             start, size, tx_start, tx_end, cds_start, cds_end, strand, overlap,
