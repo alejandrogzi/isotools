@@ -1405,45 +1405,49 @@ impl Bed12 {
         ) = (
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse chrom -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse chrom -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse tx_start -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse tx_start -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse tx_end -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse tx_end -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse name -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse name -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse score -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse score -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse strand -> {:?}", fields))
+                .unwrap_or_else(|| panic!("Cannot parse strand -> {:?} {line}", fields))
                 .parse::<Strand>()
-                .unwrap_or_else(|_| panic!("Cannot parse strand -> {:?}", fields)),
+                .unwrap_or_else(|_| panic!("Cannot parse strand -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse cds_start -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse cds_start -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse cds_end -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse cds_end -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse rgb -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse rgb -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse block_count -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse block_count -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse exon_sizes -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse exon_sizes -> {:?} {line}", fields)),
             fields
                 .next()
-                .unwrap_or_else(|| panic!("Cannot parse exon_starts -> {:?}", fields)),
+                .unwrap_or_else(|| panic!("Cannot parse exon_starts -> {:?} {line}", fields)),
         );
 
-        let get = |field: &str| field.parse::<u64>().map_err(|_| "Cannot parse field");
+        let get = |field: &str| {
+            field
+                .parse::<u64>()
+                .map_err(|_| "ERROR: Cannot parse field -> {e} - {field} -> {line}")
+        };
         let (tx_start, tx_end, cds_start, cds_end) =
             abs_pos(tx_start, tx_end, cds_start, cds_end, strand.clone(), get)?;
 
