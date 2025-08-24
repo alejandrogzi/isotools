@@ -78,14 +78,16 @@ impl GenePred {
     fn get_pos_in_exons(&self, pos: u64) -> Option<u64> {
         let mut current_pos = 0;
 
-        for exon in self.exons.iter() {
-            let block = exon.1 - exon.0;
-            if current_pos + block < pos {
-                current_pos += block
-            } else {
-                let remainder = pos - current_pos;
-                return Some(exon.0 + remainder);
+        for (exon_start, exon_end) in &self.exons {
+            let block_len = exon_end - exon_start; // INFO: exon length
+
+            if pos < current_pos + block_len {
+                // INFO: position falls inside this exon
+                let offset = pos - current_pos;
+                return Some(exon_start + offset);
             }
+
+            current_pos += block_len;
         }
 
         None
@@ -3330,15 +3332,36 @@ mod tests {
         let orf_start = 1284;
         let orf_end = 3321;
 
-        let predicted_cds_end = gp.get_pos_in_exons(orf_start);
+        let predicted_cds_end = gp.get_pos_in_exons(orf_start).unwrap();
         let predicted_cds_start = gp.get_pos_in_exons(orf_end);
 
         dbg!(
             SCALE - predicted_cds_start.unwrap(),
-            SCALE - predicted_cds_end.unwrap()
+            SCALE - predicted_cds_end
         );
 
         assert_eq!(SCALE - predicted_cds_start.unwrap(), 45503698);
-        assert_eq!(SCALE - predicted_cds_end.unwrap(), 45515991);
+        assert_eq!(SCALE - predicted_cds_end, 45515991);
+    }
+
+    #[test]
+    fn test_get_pos_in_exons_reverse_additional() {
+        let line = "chr2\t73092800\t73214447\tNM_025942.2\t0\t-\t73093622\t73212960\t0\t11\t924,123,97,141,98,81,176,128,144,101,162,\t0,4344,6491,7273,49097,49507,63937,106600,110524,120059,121485,";
+        let gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 162;
+        let orf_end = 1350;
+
+        let predicted_cds_end = gp.get_pos_in_exons(orf_start).unwrap();
+        let predicted_cds_start = gp.get_pos_in_exons(orf_end);
+
+        dbg!(
+            SCALE - predicted_cds_start.unwrap(),
+            SCALE - predicted_cds_end
+        );
+
+        assert_eq!(SCALE - predicted_cds_start.unwrap(), 73093625);
+        assert_eq!(SCALE - predicted_cds_end, 73212960);
     }
 }
