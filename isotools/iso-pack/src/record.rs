@@ -79,7 +79,7 @@ impl GenePred {
         let mut current_pos = 0;
 
         for (exon_start, exon_end) in &self.exons {
-            let block_len = exon_end - exon_start; // INFO: exon length
+            let block_len = exon_end - exon_start; // info: exon length
 
             if pos < current_pos + block_len {
                 // INFO: position falls inside this exon
@@ -88,6 +88,11 @@ impl GenePred {
             }
 
             current_pos += block_len;
+        }
+
+        // INFO: edge case -> dispute between 0-based and 1-based coords [always ends]
+        if pos >= current_pos {
+            return Some(self.exons.last().unwrap().1);
         }
 
         None
@@ -3345,7 +3350,25 @@ mod tests {
     }
 
     #[test]
-    fn test_get_pos_in_exons_reverse_additional() {
+    fn test_get_pos_in_exons_forward_refseq_tai_prediction() {
+        let line = "chr1\t58713285\t58733227\tNM_009805.4\t0\t+\t58726436\t58732362\t0\t5\t374,427,106,136,975,\t0,13020,15770,17866,18967,";
+        let gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 505;
+        let orf_end = 1150;
+
+        let predicted_cds_start = gp.get_pos_in_exons(orf_start).unwrap();
+        let predicted_cds_end = gp.get_pos_in_exons(orf_end).unwrap();
+
+        dbg!(predicted_cds_start, predicted_cds_end);
+
+        assert_eq!(predicted_cds_start, 58726436);
+        assert_eq!(predicted_cds_end + 3, 58732362);
+    }
+
+    #[test]
+    fn test_get_pos_in_exons_reverse_refseq_tai_prediction() {
         let line = "chr2\t73092800\t73214447\tNM_025942.2\t0\t-\t73093622\t73212960\t0\t11\t924,123,97,141,98,81,176,128,144,101,162,\t0,4344,6491,7273,49097,49507,63937,106600,110524,120059,121485,";
         let gp = Bed12::read(line, OverlapType::Exon, false)
             .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
@@ -3361,7 +3384,39 @@ mod tests {
             SCALE - predicted_cds_end
         );
 
-        assert_eq!(SCALE - predicted_cds_start.unwrap(), 73093625);
+        assert_eq!(SCALE - predicted_cds_start.unwrap() - 3, 73093622);
         assert_eq!(SCALE - predicted_cds_end, 73212960);
+    }
+
+    #[test]
+    fn test_get_pos_in_exons_reverse_refseq_orfipy_prediction() {
+        let line = "chr5\t151561660\t151586924\tNM_001102582.1\t0\t-\t151561660\t151586906\t0\t5\t911,124,228,836,286,\t0,11135,14005,22893,24978,";
+        let gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_end = 2385;
+
+        let predicted_cds_start = gp.get_pos_in_exons(orf_end);
+
+        dbg!(SCALE - predicted_cds_start.unwrap());
+
+        assert_eq!(SCALE - predicted_cds_start.unwrap(), 151561660);
+    }
+
+    #[test]
+    fn test_get_pos_in_exons_forward_refseq_orfipy_prediction() {
+        let line ="chr1\t83116765\t83119167\tNM_001159738.1\t0\t+\t83116823\t83118717\t0\t4\t137,112,78,472,\t0,1033,1233,1930,";
+        let gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 46;
+        let orf_end = 349;
+
+        let (predicted_cds_start, predicted_cds_end) = gp.get_cds_from_pos(orf_start, orf_end);
+
+        dbg!(predicted_cds_start, predicted_cds_end);
+
+        assert_eq!(predicted_cds_start, 83116811);
+        assert_eq!(predicted_cds_end, 83118717);
     }
 }
