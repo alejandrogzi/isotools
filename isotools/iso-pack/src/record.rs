@@ -78,8 +78,8 @@ impl GenePred {
     fn get_pos_in_exons(&self, pos: u64) -> Option<u64> {
         let mut current_pos = 0;
 
-        for (exon_start, exon_end) in &self.exons {
-            let block_len = exon_end - exon_start; // info: exon length
+        for (exon_start, exon_end) in self.exons.iter() {
+            let block_len = exon_end - exon_start; // INFO: exon length
 
             if pos < current_pos + block_len {
                 // INFO: position falls inside this exon
