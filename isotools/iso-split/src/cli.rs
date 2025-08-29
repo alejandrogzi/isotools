@@ -1,3 +1,16 @@
+//! Core module for splitting a .fa/.fq file into chunks
+//! Alejandro Gonzales-Irribarren, 2025
+//!
+//! This module contains the main function for splitting .fa/.fq files
+//! based on custom requirements in parallel.
+//!
+//! In short, the module accepts any type of .fa or .fq file
+//! and process the reads or sequences inside them in parallel
+//! when is possible. Compressed files are also accepted. The
+//! user has the ability to specify is the splitting process should
+//! be done based on specific chunk sizes or number of files, and
+//! the amount of parallelization that should be used in the process.
+
 use clap::Parser;
 use config::SplitMode;
 use std::path::PathBuf;
