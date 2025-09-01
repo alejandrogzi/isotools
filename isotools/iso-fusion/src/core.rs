@@ -814,7 +814,7 @@ fn identify_fusions(
 
         if !suffix.is_empty() {
             // INFO: append --suffix as tag :{TAG}
-            let name = format!("{}:{}", query.name, suffix);
+            let name = format!("{}{SEP}{}", query.name, suffix);
             query.modify_field(BedColumn::Name.into(), &name);
         }
 
