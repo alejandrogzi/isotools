@@ -20,7 +20,7 @@
 
 use clap::{self, Parser};
 use config::ArgCheck;
-use log::{error, info, Level};
+use log::{error, info};
 use simple_logger::init_with_level;
 
 use iso_classify::cli::{Args, SubArgs};
@@ -28,9 +28,9 @@ use iso_classify::cli::{Args, SubArgs};
 #[allow(unused_variables)]
 fn main() {
     let start = std::time::Instant::now();
-    init_with_level(Level::Info).unwrap();
 
     let args: Args = Args::parse();
+    init_with_level(args.level).unwrap();
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)

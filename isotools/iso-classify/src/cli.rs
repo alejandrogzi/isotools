@@ -36,6 +36,15 @@ pub struct Args {
         default_value_t = num_cpus::get()
     )]
     pub threads: usize,
+
+    #[arg(
+        short = 'L',
+        long = "level",
+        help = "Logging level",
+        value_name = "LEVEL",
+        default_value_t = log::Level::Info,
+    )]
+    pub level: log::Level,
 }
 
 impl Args {}
