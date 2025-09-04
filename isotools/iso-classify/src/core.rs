@@ -63,6 +63,33 @@ pub type Genome = DashMap<String, Vec<u8>>;
 ///
 /// * A `Result<PathBuf>` which is the path to the output file if the classification is successful.
 ///
+/// # Note
+///
+/// The final output has the following format, since the header is not included:
+/// # Output columns with descriptions:
+/// # chrom: Chromosome identifier
+/// # start: Start position of the intron (1-based)
+/// # end: End position of the intron (1-based)
+/// # strand: Genomic strand (+ or -)
+/// # seen: Frequency of how many reads contain this intron
+/// # spanned: Frequency of how many reads span this intron
+/// # splice_ai_donor: SpliceAI score for the donor site (probability of being a real donor)
+/// # splice_ai_acceptor: SpliceAI score for the acceptor site (probability of being a real acceptor)
+/// # max_ent_donor: MaxEntScan score for the donor site (strength prediction)
+/// # max_ent_acceptor: MaxEntScan score for the acceptor site (strength prediction)
+/// # donor_sequence: Nucleotide sequence around the donor site
+/// # acceptor_sequence: Nucleotide sequence around the acceptor site
+/// # donor_context: MaxEntScan 9-mer donor context sequence
+/// # acceptor_context: MaxEntScan 23-mer acceptor context sequence
+/// # intron_position: Classification of the intron's position according to TOGA
+/// # is_toga_supported: Boolean indicating if the intron is supported by TOGA
+/// # is_in_frame: Boolean indicating if the intron maintains the reading frame
+/// # donor_rt_context: RT-switch context sequence for the donor site
+/// # acceptor_rt_context: RT-switch context sequence for the acceptor site
+/// # is_rt_intron: Boolean indicating if the intron is an RT-switch intron
+/// # is_nag_intron: Boolean indicating if the intron is a TOGA-nag intron
+/// # support: Classification of the intron's support type
+///
 /// # Example
 ///
 /// ```rust, ignore
@@ -318,10 +345,28 @@ fn process_component(
             }
         }
 
-        acc.insert(
-            (intron_start, intron_end),
-            descriptor.fmt(&chr, &strand, intron_start, intron_end),
-        );
+        if acc.contains_key(&(intron_start, intron_end)) {
+            log::debug!("DEBUG: Found seen ({intron_start}, {intron_end}) tuple, likely NAG!");
+
+            let handle = acc.get_mut(&(intron_start, intron_end)).unwrap_or_else(|| {
+                panic!(
+                    "ERROR: could not retrieve descriptor from accumulator -> {:?}",
+                    (intron_start, intron_end)
+                )
+            });
+
+            descriptor.is_nag_intron = true;
+            descriptor.support = SupportType::Splicing; // INFO: we assume Splicing because is NAG
+
+            *handle = descriptor.fmt(&chr, &strand, intron_start, intron_end);
+        } else {
+            log::debug!("DEBUG: Inserting unseen {intron_start} {intron_end} tuple!");
+
+            acc.insert(
+                (intron_start, intron_end),
+                descriptor.fmt(&chr, &strand, intron_start, intron_end),
+            );
+        }
     }
 
     acc
@@ -567,29 +612,62 @@ fn process_nag_pattern(
     genome: &Option<Genome>,
     scan_scores: &ScanScores,
     splice_scores: Option<&SharedSpliceMap>,
-) -> String {
+    acc: &mut HashMap<(u64, u64), String>,
+) {
     let intron = (base_intron.0 as u64, (base_intron.1 as i64 + offset) as u64);
 
-    let mut new_descriptor = IntronPredStats::new();
-    get_sj_context(
-        &intron,
-        &mut new_descriptor,
-        strand,
-        chr,
-        genome,
-        scan_scores,
-    );
-    get_sj_ai_scores(&intron, &mut new_descriptor, splice_scores, strand);
-    new_descriptor.is_nag_intron = true;
-
-    let scaled_intron = match strand {
+    let (scaled_intron_start, scaled_intron_end) = match strand {
         Strand::Forward => intron,
         Strand::Reverse => ((SCALE - intron.1), (SCALE - intron.0)),
     };
 
-    // WARN: NAG-derived introns will be always SupportType::Splicing
-    new_descriptor.support = SupportType::Splicing;
-    new_descriptor.fmt(chr, strand, scaled_intron.0, scaled_intron.1)
+    if acc.contains_key(&(scaled_intron_start, scaled_intron_end)) {
+        log::debug!(
+            "DEBUG: NAG pattern already in accumulator -> {:?}",
+            (scaled_intron_start, scaled_intron_end)
+        );
+
+        let descriptor_str = acc
+            .get_mut(&(scaled_intron_start, scaled_intron_end))
+            .unwrap_or_else(|| {
+                panic!(
+                    "ERROR: could not retrieve descriptor from accumulator -> {:?}",
+                    (scaled_intron_start, scaled_intron_end)
+                )
+            });
+
+        let mut parts = descriptor_str.split("\t").collect::<Vec<&str>>();
+        parts[20] = "true";
+
+        log::debug!(
+            "DEBUG: Will replace seen intron with NAG flag -> {:?}",
+            (scaled_intron_start, scaled_intron_end)
+        );
+        *descriptor_str = parts.join("\t");
+    } else {
+        log::debug!(
+            "DEBUG: Found and insert potential NAG {:?}!",
+            (scaled_intron_start, scaled_intron_end)
+        );
+
+        let mut new_descriptor = IntronPredStats::new();
+        get_sj_context(
+            &intron,
+            &mut new_descriptor,
+            strand,
+            chr,
+            genome,
+            scan_scores,
+        );
+        get_sj_ai_scores(&intron, &mut new_descriptor, splice_scores, strand);
+        new_descriptor.is_nag_intron = true;
+
+        // WARN: NAG-derived introns will be always SupportType::Splicing
+        new_descriptor.support = SupportType::Splicing;
+        let rs = new_descriptor.fmt(chr, strand, scaled_intron_start, scaled_intron_end);
+
+        acc.insert((scaled_intron_start, scaled_intron_end), rs);
+    }
 }
 
 /// Scans for NAG patterns in the acceptor context.
@@ -629,13 +707,29 @@ fn scan_nag_repeats(
     let post_acceptor = &descriptor.acceptor_context.slice(20, 23);
 
     if NAG_PATTERNS.contains(&pre_acceptor.as_str()) {
-        let rs = process_nag_pattern(intron, -3, strand, chr, genome, scan_scores, splice_scores);
-        acc.insert((intron.0, intron.1 - 3), rs);
+        process_nag_pattern(
+            intron,
+            -3,
+            strand,
+            chr,
+            genome,
+            scan_scores,
+            splice_scores,
+            acc,
+        );
     }
 
     if NAG_PATTERNS.contains(&post_acceptor.as_str()) {
-        let rs = process_nag_pattern(intron, 3, strand, chr, genome, scan_scores, splice_scores);
-        acc.insert((intron.0, intron.1 + 3), rs);
+        process_nag_pattern(
+            intron,
+            3,
+            strand,
+            chr,
+            genome,
+            scan_scores,
+            splice_scores,
+            acc,
+        );
     }
 }
 
