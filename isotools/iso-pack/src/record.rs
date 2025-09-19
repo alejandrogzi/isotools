@@ -1069,35 +1069,24 @@ impl GenePred {
     /// ```
     #[inline(always)]
     pub fn modify_field(&mut self, field: usize, value: &str) {
-        let mut tab_indices = Vec::with_capacity(field + 2);
-        for (i, b) in self.line.bytes().enumerate() {
-            if b == b'\t' {
-                tab_indices.push(i);
-                if tab_indices.len() > field + 1 {
-                    break;
-                }
-            }
+        let mut parts: Vec<String> = self.line.split('\t').map(|s| s.to_string()).collect();
+
+        if field >= parts.len() {
+            panic!(
+                "ERROR: Field index out of bounds in {} when trying to modify field {field} wtih {value:?}",
+                self.line
+            );
         }
 
-        let start = if field == 0 {
-            0
-        } else {
-            tab_indices
-                .get(field - 1)
-                .map_or(self.line.len(), |&i| i + 1)
-        };
+        parts[field] = value.to_string();
+        assert_eq!(
+            parts.len(),
+            12,
+            "ERROR: Expected 12 fields in the line: {} and got -> {parts:?}",
+            self.line
+        );
 
-        let end = tab_indices
-            .get(field)
-            .copied()
-            .unwrap_or_else(|| self.line.len());
-
-        let mut line = String::with_capacity(self.line.len() - (end - start) + value.len());
-        line.push_str(&self.line[..start]);
-        line.push_str(value);
-        line.push_str(&self.line[end..]);
-
-        self.line = line.clone();
+        self.line = parts.join("\t");
     }
 
     /// Modifies the name field (the fourth tab-separated field, at index 3) of the
@@ -3386,6 +3375,38 @@ mod tests {
 
         assert_eq!(SCALE - predicted_cds_start.unwrap() - 3, 73093622);
         assert_eq!(SCALE - predicted_cds_end, 73212960);
+    }
+
+    #[test]
+    // 2025-09-10T11:33:47.207Z WARN  [orf::tai] WARN: translationAi predicted a non-stop ORF: "304,484,0.11812351644039154,0.1313595026731491" for GenePred { nam
+    // e: "9249", chrom: "chr7", strand: Reverse, start: 99940345148, end: 99940364371, cds_start: 99940345148, cds_end: 99940364371, exons: [(99940345148, 999403
+    // 45217), (99940350839, 99940350935), (99940354698, 99940354847), (99940361505, 99940361651), (99940362689, 99940362841), (99940363369, 99940363481), (999403
+    // 64269, 99940364371)], introns: [(99940345218, 99940350838), (99940350936, 99940354697), (99940354848, 99940361504), (99940361652, 99940362688), (9994036284
+    // 2, 99940363368), (99940363482, 99940364268)], exon_len: 826, exon_count: 7, line: "chr7\t59635629\t59654852\t9249\t60\t-\t59635629\t59654852\t43,118,219\t7
+    // \t102,112,152,146,149,96,69\t0,890,1530,2720,9524,13436,19154", is_ref: false }
+    fn test_get_pos_in_exons_reverse_refseq_tai_prediction_additional() {
+        let line = "chr7\t59635629\t59654852\t9249\t60\t-\t59635629\t59654852\t43,118,219\t7\t102,112,152,146,149,96,69\t0,890,1530,2720,9524,13436,19154";
+        let mut gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 317;
+        let orf_end = 437;
+
+        let (predicted_cds_end, predicted_cds_start) =
+            gp.map_absolute_cds(orf_start as u64, orf_end as u64);
+
+        if predicted_cds_start - 3 < gp.start {
+            log::warn!("WARN: translationAi predicted a non-stop ORF: {orf_start:?} for {gp:?}");
+        }
+
+        if predicted_cds_end + 3 > gp.end {
+            log::warn!("WARN: translationAi predicted a non-stop ORF: {orf_start:?} for {gp:?}");
+        }
+
+        dbg!(predicted_cds_start, predicted_cds_end);
+
+        assert_eq!(predicted_cds_start - 3, 59638489);
+        assert_eq!(predicted_cds_end, 59638372);
     }
 
     #[test]
