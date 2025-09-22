@@ -178,7 +178,7 @@ impl GenePred {
     ///     println!("Genomic CDS coordinates: {} - {}", cds_start, cds_end);
     /// }
     /// ```
-    pub fn map_absolute_cds(&mut self, orf_start: u64, orf_end: u64) -> (u64, u64) {
+    pub fn map_absolute_cds(&self, orf_start: u64, orf_end: u64) -> (u64, u64) {
         let (cds_start, cds_end) = self.get_cds_from_pos(orf_start, orf_end);
 
         assert!(
@@ -189,6 +189,33 @@ impl GenePred {
             cds_end > 0,
             "ERROR: {orf_end} is not bigget than 0! -> {self:?}"
         );
+
+        match self.strand {
+            Strand::Forward => {
+                assert!(
+                    cds_start > self.start,
+                    "ERROR: {cds_start} is less than {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
+                    self.start
+                );
+                assert!(
+                    cds_end < self.end,
+                    "ERROR: {cds_end} is greater than {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
+                    self.end
+                );
+            }
+            Strand::Reverse => {
+                assert!(
+                    cds_start > SCALE - self.end,
+                    "ERROR: cds_start = {cds_start} is less than tx_start = {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
+                    SCALE - self.end
+                );
+                assert!(
+                    cds_end < SCALE - self.start,
+                    "ERROR: cds_end = {cds_end} is greater than tx_end = {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
+                    SCALE - self.start
+                );
+            }
+        };
 
         (cds_start, cds_end)
     }
@@ -3241,7 +3268,7 @@ mod tests {
     #[test]
     fn test_absolute_cds_mapping_forward() {
         let line = "chr6\t8259278\t8593709\tR441_chr6__FC23#TC31#PA0#PR0#IY1000\t60\t+\t8259278\t8593709\t43,118,219\t10\t215,109,62,215,152,87,117,153,211,2165\t0,11194,114627,167692,278538,299221,313903,320308,323301,332266";
-        let mut gp = Bed12::read(line, OverlapType::Exon, false)
+        let gp = Bed12::read(line, OverlapType::Exon, false)
             .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
 
         let orf_start = 237;
@@ -3256,7 +3283,7 @@ mod tests {
     #[test]
     fn test_absolute_cds_mapping_reverse() {
         let line = "chr7\t45482351\t45520392\tR206671_chr7__FC0#TC23#PA0#PR0#IY998\t60\t-\t45482351\t45520392\t43,118,219\t13\t1162,233,188,161,232,126,154,171,210,117,620,482,1256\t0,1321,1711,20275,21300,21646,23812,24550,24947,25522,29018,33186,36785";
-        let mut gp = Bed12::read(line, OverlapType::Exon, false)
+        let gp = Bed12::read(line, OverlapType::Exon, false)
             .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
 
         let orf_start = 1284;
@@ -3386,7 +3413,7 @@ mod tests {
     // \t102,112,152,146,149,96,69\t0,890,1530,2720,9524,13436,19154", is_ref: false }
     fn test_get_pos_in_exons_reverse_refseq_tai_prediction_additional() {
         let line = "chr7\t59635629\t59654852\t9249\t60\t-\t59635629\t59654852\t43,118,219\t7\t102,112,152,146,149,96,69\t0,890,1530,2720,9524,13436,19154";
-        let mut gp = Bed12::read(line, OverlapType::Exon, false)
+        let gp = Bed12::read(line, OverlapType::Exon, false)
             .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
 
         let orf_start = 317;
@@ -3407,6 +3434,53 @@ mod tests {
 
         assert_eq!(predicted_cds_start - 3, 59638489);
         assert_eq!(predicted_cds_end, 59638372);
+    }
+
+    #[test]
+    fn test_get_pos_in_exons_reverse_bug_prediction_additional_2() {
+        let line = "scaffold_10\t60508574\t60652099\tR11900_scaffold_10__FC0#TC0#PA29#PR30#IY979#SG\t60\t-\t60508574\t60652099\t51,153,255\t4\t499,38,310,77\t0,4353,112181,143448";
+        let gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 28;
+        let orf_end = 748;
+
+        let (predicted_cds_start, predicted_cds_end) =
+            gp.map_absolute_cds(orf_start as u64, orf_end as u64);
+
+        dbg!(predicted_cds_start, predicted_cds_end);
+
+        assert_eq!(predicted_cds_start, 60508750);
+        assert_eq!(predicted_cds_end, 60652071);
+
+        let orf_start = 52;
+        let orf_end = 748;
+
+        let (predicted_cds_start, predicted_cds_end) =
+            gp.map_absolute_cds(orf_start as u64, orf_end as u64);
+
+        dbg!(predicted_cds_start, predicted_cds_end);
+
+        assert_eq!(predicted_cds_start, 60508750);
+        assert_eq!(predicted_cds_end, 60652047);
+    }
+
+    #[test]
+    fn test_get_pos_in_exons_reverse_bug_prediction_additional_3() {
+        let line = "scaffold_17\t80102749\t80103945\tR16258_scaffold_17__FC0#TC0#PA2#PR28#IY971\t0\t+\t80102749\t80103945\t43,118,219\t1\t1196\t0";
+        let gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 84;
+        let orf_end = 483;
+
+        let (predicted_cds_start, predicted_cds_end) =
+            gp.map_absolute_cds(orf_start as u64, orf_end as u64);
+
+        dbg!(predicted_cds_start, predicted_cds_end);
+
+        assert_eq!(predicted_cds_start, 80102833);
+        assert_eq!(predicted_cds_end, 80103232);
     }
 
     #[test]
