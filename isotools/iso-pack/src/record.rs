@@ -2166,7 +2166,7 @@ impl IntronBucket {
                         IntronPosition::Unknown
                     };
 
-                    let in_frame = (ref_intron.1 - ref_intron.0) % 3 == 0;
+                    let in_frame = (ref_intron.1 - ref_intron.0 + 1) % 3 == 0;
 
                     let stats = IntronPredStats {
                         seen: 1,
@@ -2222,7 +2222,7 @@ impl IntronBucket {
                     acceptor_context: Sequence::new(&[]),
                     intron_position: IntronPosition::CDS, // INFO: is always CDS -> flag
                     is_toga_supported: true,              // INFO: flag to identify TOGA introns
-                    is_in_frame: false,
+                    is_in_frame: true,                    // INFO: TOGA introns must be in-frame
                     donor_rt_context: String::new(),
                     acceptor_rt_context: String::new(),
                     is_rt_intron: false,
