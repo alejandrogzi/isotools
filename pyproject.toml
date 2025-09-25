@@ -32,8 +32,8 @@ classifiers = [
 readme = "README.md"
 
 [project.urls]
-homepage = "https://github.com/alejandrogzi/pisco"
-repository = "https://github.com/alejandrogzi/pisco"
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
 
 [tool.ruff]
 target-version = "py37"
