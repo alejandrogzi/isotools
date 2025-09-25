@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
+use packbed::record::IntronPosition;
 use packbed::{packbed, record::IntronPredStats, BedPackage, IntronBucket, PackMode};
 use rayon::prelude::*;
 
@@ -318,7 +319,11 @@ fn process_component(
         // WARN: strange TOGA supported RT introns -> s14	9965456	9968743
         if descriptor.is_rt_intron {
             if descriptor.is_toga_supported {
-                descriptor.support = SupportType::Splicing;
+                if descriptor.intron_position == IntronPosition::UTR {
+                    descriptor.support = SupportType::Unclear; // INFO: TOGA2 UTRs are not 100% reliable yet
+                } else {
+                    descriptor.support = SupportType::Splicing;
+                }
             } else {
                 descriptor.support = SupportType::RT;
             }
