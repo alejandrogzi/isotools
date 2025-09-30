@@ -7,11 +7,11 @@
 //! In short, each component of reads is subjected to any of the two modes: guided or
 //! self-guided. Guided mode is the default mode and is used when the user provides a TOGA file
 //! as input. Self-guided mode is used when the user does not provide a TOGA file as input.
-//! Both, guided and self-guided, cover an extensive amount of curated oprhan cases under
+//! Both, guided and self-guided, cover an extensive amount of curated orphan cases under
 //! the assumption that they do not represent a valid source of evidence for transcription.
 //! The process is heavily parallellized to offer fast performance on large datasets.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use crate::{
@@ -26,7 +26,7 @@ use rayon::prelude::*;
 
 pub type Components = DashMap<String, Vec<Box<dyn BedPackage>>>;
 
-/// Detects oprhans in a dataset of reads
+/// Detects orphans in a dataset of reads
 ///
 /// # Arguments
 ///
@@ -59,7 +59,7 @@ pub type Components = DashMap<String, Vec<Box<dyn BedPackage>>>;
 /// __detect_orphans(args);
 /// ```
 pub fn __detect_orphans(args: Args) {
-    log::info!("INFO: Detecting oprhans in dataset -> {:?}...", args.bed);
+    log::info!("INFO: Detecting orphans in dataset -> {:?}", args.bed);
 
     let mode = Mode::from(&args);
 
@@ -223,8 +223,10 @@ fn __process(tracks: Components, mode: &Mode, threshold: usize, outdir: PathBuf,
     pb.finish_and_clear();
     log::info!("INFO: Orphans found: {}", accumulator.num_orphans());
 
-    let orphans = format!("{}.oprhans.bed", &filename);
-    let orphan_free = format!("{}.oprhan_free.bed", filename);
+    __report_stats(&counter);
+
+    let orphan_free = format!("{}.orphan_free.bed", filename);
+    let orphans = format!("{}.orphans.bed", &filename);
 
     par_write_results(
         &accumulator,
@@ -372,7 +374,7 @@ fn guided(
         reads.sort_by(|a, b| a.exon_len.cmp(&b.exon_len));
 
         for read in reads {
-            let is_single_exon_read = read.exons.len() == 1;
+            let is_single_exon_read = read.introns.len() == 0;
 
             if is_single_exon_read {
                 if is_toga_single_exon {
@@ -390,22 +392,20 @@ fn guided(
                     // at least one CDS coordinate + all of them are within TOGA boundaries
                     //
                     // For a clearer illustration go to mm39 chr3:61,269,596-61,278,844
+                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
 
-                    for read_exon in read.exons.iter() {
-                        if ref_exons.contains(&read_exon) {
-                            log::debug!(
-                                "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA single-exon CDS -> keep!",
-                                &read,
-                            );
+                    if is_match {
+                        log::debug!(
+                            "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA single-exon CDS -> keep!",
+                            &read,
+                        );
 
-                            keep.push(read.line.clone());
-                            break;
-                        } else {
-                            log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA single-exon CDS -> oprhan!", &read);
-                            counter.inc_read_se_mc_toga_se();
+                        keep.push(read.line.clone());
+                    } else {
+                        log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA single-exon CDS -> orphan!", &read);
 
-                            orphans.push(read.line.clone());
-                        }
+                        counter.inc_read_se_mc_toga_se();
+                        orphans.push(read.line.clone());
                     }
                 } else {
                     // INFO: main question: your CDS matches exactly or partially a TOGA CDS?
@@ -423,21 +423,20 @@ fn guided(
                     //
                     // For a clearer illustration go to mm39 chr3:65,014,198-65,019,415
                     // or mm39 chr3:117,366,942-117,374,421
-                    for read_exon in read.exons.iter() {
-                        if ref_exons.contains(&read_exon) {
-                            log::debug!(
-                                "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA multi-exon CDS -> keep!",
-                                &read,
-                            );
+                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
 
-                            keep.push(read.line.clone());
-                            break;
-                        } else {
-                            log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA multi-exon CDS -> oprhan!", &read);
-                            counter.inc_read_se_mc_toga_me();
+                    if is_match {
+                        log::debug!(
+                            "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA multi-exon CDS -> keep!",
+                            &read,
+                        );
 
-                            orphans.push(read.line.clone());
-                        }
+                        keep.push(read.line.clone());
+                    } else {
+                        log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA multi-exon CDS -> orphan!", &read);
+
+                        counter.inc_read_se_mc_toga_me();
+                        orphans.push(read.line.clone());
                     }
                 }
             } else {
@@ -490,11 +489,11 @@ fn guided(
 
                 if matches <= 1 {
                     log::debug!(
-                        "DEBUG: read {:?} multi-exon in a mult-read component has less than 1 exact CDS matches -> oprhan!",
+                        "DEBUG: read {:?} multi-exon in a mult-read component has less than 1 exact CDS matches -> orphan!",
                         &read
                     );
-                    counter.inc_read_me_mc_toga_se();
 
+                    counter.inc_read_me_mc_toga_se();
                     orphans.push(read.line);
                 }
             }
@@ -508,7 +507,7 @@ fn guided(
         // INFO: weird case of TOGA-single-exon and single-read component
         if is_toga_single_exon {
             for read in reads {
-                let is_single_exon_read = read.exons.len() == 1;
+                let is_single_exon_read = read.introns.len() == 0;
 
                 if is_single_exon_read {
                     // INFO: CDS must matche once
@@ -525,23 +524,23 @@ fn guided(
                     // toga: xxxxXXXXXXxxxx
                     //         ^^|||
                     // read1: xXXXXXxxx <- likely not a supporting transcript
-                    for read_exon in read.exons.iter() {
-                        if ref_exons.contains(&read_exon) {
-                            log::debug!(
-                                "DEBUG: read: {:?} single-exon and match exactly with TOGA single-exon -> keep!",
-                                &read,
-                            );
+                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
 
-                            keep.push(read.line.clone());
-                        } else {
-                            log::debug!(
-                                "DEBUG: read: {:?} single-exon and does not match exactly with TOGA single-exon -> oprhan!",
-                                &read,
-                            );
-                            counter.inc_read_se_sc_toga_se();
+                    if is_match {
+                        log::debug!(
+                            "DEBUG: read: {:?} single-exon and match exactly with TOGA single-exon -> keep!",
+                            &read,
+                        );
 
-                            orphans.push(read.line.clone());
-                        }
+                        keep.push(read.line.clone());
+                    } else {
+                        log::debug!(
+                            "DEBUG: read: {:?} single-exon and does not match exactly with TOGA single-exon -> orphan!",
+                            &read,
+                        );
+
+                        counter.inc_read_se_sc_toga_se();
+                        orphans.push(read.line.clone());
                     }
                 } else {
                     // INFO: TOGA-single-exon CDS overlap with multi-exon single-read component
@@ -558,29 +557,29 @@ fn guided(
                     // toga: xxxxXXXXXXxxxx
                     //         ^^|||
                     // read1: xXXXXXxxx-------xxxxx <- likely not a supporting transcript
-                    for read_exon in read.exons.iter() {
-                        let read_exon_start = read_exon.0;
-                        let read_exon_end = read_exon.1;
 
-                        ref_exons.iter().for_each(|(toga_exon_start, toga_exon_end)| {
-                            if read_exon_start == *toga_exon_start || read_exon_end == *toga_exon_end {
-                                log::debug!(
-                                    "DEBUG: read: {:?} multi-exon matches at least 1 splice site with TOGA single-exon -> keep!",
-                                    &read,
-                                );
+                    let ref_exons_flat: BTreeSet<u64> =
+                        ref_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
 
-                                keep.push(read.line.clone());
-                            } else {
-                                log::debug!(
-                                    "DEBUG: read: {:?} multi-exon does not match any splice site with TOGA single-exon -> oprhan!",
-                                    &read,
-                                );
-                                counter.inc_read_me_sc_toga_se();
+                    let is_splice_match = read.exons.iter().any(|(exon_start, exon_end)| {
+                        ref_exons_flat.contains(exon_start) || ref_exons_flat.contains(exon_end)
+                    });
 
+                    if is_splice_match {
+                        log::debug!(
+                            "DEBUG: read: {:?} multi-exon matches at least 1 splice site with TOGA single-exon -> keep!",
+                            &read,
+                        );
 
-                                orphans.push(read.line.clone());
-                            }
-                        });
+                        keep.push(read.line.clone());
+                    } else {
+                        log::debug!(
+                            "DEBUG: read: {:?} multi-exon does not match any splice site with TOGA single-exon -> orphan!",
+                            &read,
+                        );
+
+                        counter.inc_read_me_sc_toga_se();
+                        orphans.push(read.line.clone());
                     }
                 }
             }
@@ -589,7 +588,7 @@ fn guided(
             // INFO: ask if CDS matches are more than 1 OR is within TOGA boundaries
 
             for read in reads {
-                let is_single_exon_read = read.exons.len() == 1;
+                let is_single_exon_read = read.introns.len() == 0;
 
                 if is_single_exon_read {
                     // CASE: single-exon read component with multi-exon TOGA refs
@@ -606,53 +605,46 @@ fn guided(
                     //
                     // Here, we ask for specific exon match otherwise would be hard
                     // to distinguish with a single-exon read component
-                    for read_exon in read.exons.iter() {
-                        if ref_exons.contains(&read_exon) {
-                            log::debug!(
-                                "DEBUG: read: {:?} single-exon in single-read component and match exactly with TOGA multi-exon -> keep!",
-                                &read,
-                            );
+                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
 
-                            keep.push(read.line.clone());
-                        } else {
-                            log::debug!(
-                                "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with TOGA multi-exon -> oprhan!",
-                                &read,
-                            );
-                            counter.inc_read_se_sc_toga_me();
+                    if is_match {
+                        log::debug!(
+                            "DEBUG: read: {:?} single-exon in single-read component and match exactly with TOGA multi-exon -> keep!",
+                            &read,
+                        );
 
-                            orphans.push(read.line.clone());
-                        }
+                        keep.push(read.line.clone());
+                    } else {
+                        log::debug!(
+                            "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with TOGA multi-exon -> orphan!",
+                            &read,
+                        );
+
+                        counter.inc_read_se_sc_toga_me();
+                        orphans.push(read.line.clone());
                     }
                 } else {
                     // CASE: multi-exon single-read component with multi-exon TOGA refs
                     //
                     // Here, we ask for at least one specific exon match otherwise would be hard
                     // to distinguish with a single-read component
-                    let mut matches = 0;
+                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
 
-                    for read_exon in read.exons.iter() {
-                        if ref_exons.contains(&read_exon) {
-                            matches += 1;
-                        }
+                    if is_match {
+                        log::debug!(
+                                "DEBUG: read: {:?} multi-exon in single-read component and match more than once exactly with TOGA multi-exon -> keep!",
+                                &read,
+                            );
 
-                        if matches > 1 {
-                            log::debug!(
-                                    "DEBUG: read: {:?} multi-exon in single-read component and match more than once exactly with TOGA multi-exon -> keep!",
+                        keep.push(read.line.clone());
+                    } else {
+                        log::debug!(
+                                    "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with TOGA multi-exon -> orphan!",
                                     &read,
                                 );
 
-                            keep.push(read.line.clone());
-                            break;
-                        } else {
-                            log::debug!(
-                                    "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with TOGA multi-exon -> oprhan!",
-                                    &read,
-                                );
-                            counter.inc_read_me_sc_toga_me();
-
-                            orphans.push(read.line.clone());
-                        }
+                        counter.inc_read_me_sc_toga_me();
+                        orphans.push(read.line.clone());
                     }
                 }
             }
@@ -873,7 +865,7 @@ fn do_self_guided_check(
                     }
                 } else {
                     log::debug!(
-                        "DEBUG: read: {:?} does not have exon: {:?} -> oprhan!",
+                        "DEBUG: read: {:?} does not have exon: {:?} -> orphan!",
                         read,
                         exon
                     );
