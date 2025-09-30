@@ -92,15 +92,6 @@ pub struct Args {
     pub non_overlapping: bool,
 
     #[arg(
-        short = 'K',
-        long = "keep",
-        help = "Writes orphan reads to a separate file (default: false)",
-        value_name = "FLAG",
-        action = ArgAction::SetTrue,
-    )]
-    pub keep_orphans: bool,
-
-    #[arg(
         short = 'm',
         long = "min-read-num",
         help = "Threshold for minimum number of reads to be considered a component when self-guided (default: 5)",
