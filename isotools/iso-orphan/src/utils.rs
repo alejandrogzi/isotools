@@ -194,6 +194,18 @@ impl ParallelCounter {
         self.components.fetch_add(count, Ordering::Relaxed);
     }
 
+    /// Return the number of components
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// assert_eq!(counter.num_components(), 0);
+    /// ```
+    pub fn num_components(&self) -> u32 {
+        self.components.load(Ordering::Relaxed)
+    }
+
     /// Increment the number of reads with single-exon multi-component TOGA single-exon
     ///
     /// # Parameters
@@ -375,4 +387,92 @@ impl ParallelCounter {
         self.read_de_novo_unsupported
             .fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Summarize the counter
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_read_se_mc_toga_se(5);
+    /// counter.inc_read_se_mc_toga_me(5);
+    /// counter.inc_read_se_sc_toga_se(5);
+    /// counter.inc_read_se_sc_toga_me(5);
+    /// counter.inc_read_me_mc_toga_se(5);
+    /// counter.inc_read_me_sc_toga_se(5);
+    /// counter.inc_read_me_sc_toga_me(5);
+    /// counter.inc_read_se_sc_no_toga(5);
+    /// counter.inc_component_less_than_threshold(5);
+    /// counter.inc_read_de_novo_unsupported(5);
+    ///
+    /// let report = counter.report_stats();
+    /// ```
+    pub fn report_stats(&self) -> String {
+        let mut report = String::new();
+
+        report.push_str(&format!(
+            "Total number of components: {}\n",
+            self.num_components()
+        ));
+
+        let inc_read_se_mc_toga_se = self.read_se_mc_toga_se.load(Ordering::Relaxed);
+        let inc_read_se_mc_toga_me = self.read_se_mc_toga_me.load(Ordering::Relaxed);
+        let inc_read_se_sc_toga_se = self.read_se_sc_toga_se.load(Ordering::Relaxed);
+        let inc_read_se_sc_toga_me = self.read_se_sc_toga_me.load(Ordering::Relaxed);
+        let inc_read_me_mc_toga_se = self.read_me_mc_toga_se.load(Ordering::Relaxed);
+        let inc_read_me_sc_toga_se = self.read_me_sc_toga_se.load(Ordering::Relaxed);
+        let inc_read_me_sc_toga_me = self.read_me_sc_toga_me.load(Ordering::Relaxed);
+        let inc_read_se_sc_no_toga = self.read_se_sc_no_toga.load(Ordering::Relaxed);
+        let inc_component_less_than_threshold =
+            self.component_less_than_threshold.load(Ordering::Relaxed);
+        let inc_read_de_novo_unsupported = self.read_de_novo_unsupported.load(Ordering::Relaxed);
+
+        report.push_str(&format!(
+            "Total number of reads with single-exon multi-component TOGA single-exon: {}\n",
+            inc_read_se_mc_toga_se
+        ));
+        report.push_str(&format!(
+            "Total number of reads with single-exon multi-component TOGA multi-exon: {}\n",
+            inc_read_se_mc_toga_me
+        ));
+        report.push_str(&format!(
+            "Total number of reads with single-exon single-component TOGA single-exon: {}\n",
+            inc_read_se_sc_toga_se
+        ));
+        report.push_str(&format!(
+            "Total number of reads with single-exon single-component TOGA multi-exon: {}\n",
+            inc_read_se_sc_toga_me
+        ));
+        report.push_str(&format!(
+            "Total number of reads with multi-exon multi-component TOGA single-exon: {}\n",
+            inc_read_me_mc_toga_se
+        ));
+        report.push_str(&format!(
+            "Total number of reads with multi-exon single-component TOGA single-exon: {}\n",
+            inc_read_me_sc_toga_se
+        ));
+        report.push_str(&format!(
+            "Total number of reads with multi-exon single-component TOGA multi-exon: {}\n",
+            inc_read_me_sc_toga_me
+        ));
+        report.push_str(&format!(
+            "Total number of reads with single-exon single-component TOGA no TOGA: {}\n",
+            inc_read_se_sc_no_toga
+        ));
+        report.push_str(&format!(
+            "Total number of reads with less than threshold: {}\n",
+            inc_component_less_than_threshold
+        ));
+        report.push_str(&format!(
+            "Total number of reads with unsupported exon: {}\n",
+            inc_read_de_novo_unsupported
+        ));
+
+        report
+    }
+}
+
+pub fn __report_stats(counter: &ParallelCounter) {
+    let stats = counter.report_stats();
+    log::info!("INFO: Reporting stats:\n{}", stats);
 }
