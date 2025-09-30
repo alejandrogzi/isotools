@@ -231,10 +231,10 @@ impl GenePred {
 pub struct RefGenePred {
     /// A vector of `GenePred` instances that are associated with the reference.
     pub reads: Vec<GenePred>,
-    /// A sorted set of exon start and end coordinates, providing a quick way to check
+    /// A sorted set of first exon start and end coordinates, providing a quick way to check
     /// for overlaps and positions.
     pub starts: BTreeSet<(u64, u64)>,
-    /// A sorted set of intron middle coordinates, used for efficient searching.
+    /// A sorted set of non-first exon coordinates, used for efficient searching.
     pub middles: BTreeSet<(u64, u64)>,
     /// A sorted set of intron start and end coordinates.
     pub introns: BTreeSet<(u64, u64)>,
