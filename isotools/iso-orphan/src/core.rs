@@ -1,0 +1,898 @@
+//! Core module for detecting orphans in a query set of reads
+//! Alejandro Gonzales-Irribarren, 2025
+//!
+//! This module contains the core functions for detecting orphans in a query set of reads
+//! and processing the components in a parallel fashion.
+//!
+//! In short, each component of reads is subjected to any of the two modes: guided or
+//! self-guided. Guided mode is the default mode and is used when the user provides a TOGA file
+//! as input. Self-guided mode is used when the user does not provide a TOGA file as input.
+//! Both, guided and self-guided, cover an extensive amount of curated oprhan cases under
+//! the assumption that they do not represent a valid source of evidence for transcription.
+//! The process is heavily parallellized to offer fast performance on large datasets.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use crate::{
+    cli::{Args, Mode},
+    utils::*,
+};
+
+use config::{get_progress_bar, par_write_results, OverlapType};
+use dashmap::DashMap;
+use packbed::{packbed, BedPackage, GenePred, RefGenePred};
+use rayon::prelude::*;
+
+pub type Components = DashMap<String, Vec<Box<dyn BedPackage>>>;
+
+/// Detects oprhans in a dataset of reads
+///
+/// # Arguments
+///
+/// * `args` - The arguments passed to the program
+///
+/// # Returns
+///
+/// None
+///
+/// # Examples
+///
+/// ```
+/// use isotools::iso_orphan::__detect_orphans;
+/// use isotools::cli::Args;
+///
+/// let args = Args {
+///     bed: vec!["tests/data/mm39.bed".into()],
+///     toga: None,
+///     all: false,
+///     overlapping: false,
+///     non_overlapping: false,
+///     keep_orphans: false,
+///     threshold: 5,
+///     outdir: "tests/data".into(),
+///     name: "test".into(),
+///     threads: 1,
+///     level: log::Level::Info,
+/// };
+///
+/// __detect_orphans(args);
+/// ```
+pub fn __detect_orphans(args: Args) {
+    log::info!("INFO: Detecting oprhans in dataset -> {:?}...", args.bed);
+
+    let mode = Mode::from(&args);
+
+    let outdir = args.outdir.join("orphans");
+    std::fs::create_dir_all(&outdir).unwrap_or_else(|_| {
+        log::error!("ERROR: Could not create output directory -> {:?}", outdir);
+        std::process::exit(1);
+    });
+
+    match mode {
+        Mode::Guided => {
+            log::info!("INFO: Running using guided mode");
+
+            let toga = args.toga.unwrap_or_else(|| {
+                log::error!("ERROR: No TOGA file provided while using reference guided mode!");
+                std::process::exit(1);
+            });
+
+            // CASE: single-exon-component reads with non-single-exon TOGA refs [SOLVED]
+            // INFO:  the following case is presented:
+            //
+            // [SOLVED: CDS overlap mode]
+            // toga:  xxx------------XXXX---
+            //        |||
+            // read1: xxx------XXXXx
+            //
+            // The above case would illustrate a component where a non-single-exon
+            // component read could repesent real transcription but not at a significant
+            // level.
+            //
+            // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769
+            //
+            // Note that the same case but with CDS overlap is not a problem and
+            // represents a case of a real transcription of a shorter isoform or a
+            // truncated one.
+            let tracks = packbed(
+                toga,
+                Some(args.bed),
+                OverlapType::CDS,
+                packbed::PackMode::Default,
+            )
+            .unwrap_or_else(|e| {
+                log::error!("ERROR: Failed to packed reads: {:?}", e);
+                std::process::exit(1);
+            });
+
+            __process(tracks, &mode, args.threshold, outdir, args.name);
+        }
+        Mode::DeNovo => {
+            log::info!("INFO: Running using non-guided mode");
+
+            // CASE: single-exon overlap non-supported UTR exon [SOLVED: CDS overlap mode]
+            // INFO: the following case is presented:
+            //
+            // read1:       xxxXXXXxxxxxxxxxx
+            // read2:      xxxxxxxxxxXXXXXxxxx
+            // read3: --------------xxx----------
+            // read4: ---------------------------
+            // read5: ---------------------------
+            //
+            // The above case would illustrate a component where single-exon
+            // reads do belong to the component by touching a non-supported
+            // additional UTR-exon. This does not represent reliable transcription.
+            //
+            // SOLVED: CDS overlap mode would make isolate read1 and read2 to their
+            // own single-exon components that, by extension, should be discarded.
+            //
+            // For a clearer illustration go to HLpteAle1A HAP1_SUPER_1:113,320,574-113,325,638
+            // or mm39 chr8:73,246,564-73,253,282 or mm39 chr8:73,318,599-73,322,867
+            //
+            // CASE: single-exon read overlaps UTR [SOLVED: CDS overlap mode]
+            // INFO: the following case is presented:
+            //
+            // read1: xxXXXXxxxx
+            // read2: -------xxxxXXXXX------XXX--
+            // read3: ---------xxXXXXX------XXX--
+            // read4: ---------xxxxxxxxxXX--XXX--
+            // read5: ----------xXXXXX-----------
+            //                   |||||      |||
+            //
+            // The above case would illustrate a component where a single-exon read
+            // overlaps with a non-single-exon read UTR.
+            //
+            // For a clearer illustration go to mm39 chr8:72,735,773-72,743,045
+            // or mm39 chr8:73,437,570-73,445,000
+            //
+            // SOLVED: CDS overlap mode would make isolate read1, then will be discarded
+            // because it is a single-exon component.
+            //
+            // or its variant:
+            //
+            // multi-exon read (likely orphan) matches exact UTR
+            //
+            // read1: xxxxx------xXXXXxx
+            // read2: xxxxx----------------XXXX-
+            // read3: xxxxx----------------XXXX-
+            // read4: xxxxx----------------XXXX-
+            // read5: xxxxx----------------XXXX-
+            //
+            // For a clearer illustration go to mm39 chr8:73,373,118-73,377,702
+            //
+            // SOLVED: CDS overlap mode would make isolate read1, then will be discarded
+            // because it is a single-exon component.
+            let tracks = packbed(args.bed, None, OverlapType::CDS, packbed::PackMode::Query)
+                .unwrap_or_else(|e| {
+                    log::error!("ERROR: Failed to packed reads: {:?}", e);
+                    std::process::exit(1);
+                });
+
+            __process(tracks, &mode, args.threshold, outdir, args.name);
+        }
+    };
+}
+
+/// Processes the components and writes the results to a file
+///
+/// # Arguments
+///
+/// * `tracks` - The components to process
+/// * `mode` - The mode to use
+/// * `threshold` - The threshold to use
+/// * `outdir` - The output directory
+/// * `filename` - The filename to use
+///
+/// # Returns
+///
+/// None
+///
+/// # Examples
+///
+/// ```
+/// use isotools::iso_orphan::__process;
+/// use isotools::cli::Mode;
+/// use isotools::utils::Components;
+///
+/// let tracks: Components = DashMap::new();
+/// let mode = Mode::Guided;
+/// let threshold = 5;
+/// let outdir = "tests/data".into();
+/// let filename = "test".into();
+///
+/// __process(tracks, &mode, threshold, outdir, filename);
+/// ```
+fn __process(tracks: Components, mode: &Mode, threshold: usize, outdir: PathBuf, filename: String) {
+    let pb = get_progress_bar(tracks.len() as u64, "Processing...");
+
+    let accumulator = ParallelAccumulator::default();
+    let counter = ParallelCounter::default();
+
+    tracks.into_par_iter().for_each(|bucket| {
+        let _chr = bucket.0;
+        let components = bucket.1;
+
+        counter.inc_components(components.len() as u32);
+
+        __process_components(components, &accumulator, &counter, mode, threshold);
+
+        pb.inc(1);
+    });
+
+    pb.finish_and_clear();
+    log::info!("INFO: Orphans found: {}", accumulator.num_orphans());
+
+    let orphans = format!("{}.oprhans.bed", &filename);
+    let orphan_free = format!("{}.oprhan_free.bed", filename);
+
+    par_write_results(
+        &accumulator,
+        vec![outdir.join(orphan_free), outdir.join(orphans)],
+        None,
+    );
+}
+
+/// Parallel processing of components
+///
+/// # Arguments
+///
+/// * `components` - The components to process
+/// * `accumulator` - The accumulator to use
+/// * `counter` - The counter to use
+/// * `mode` - The mode to use
+/// * `threshold` - The threshold to use
+///
+/// # Returns
+///
+/// None
+///
+/// # Examples
+///
+/// ```
+/// use isotools::iso_orphan::__process_components;
+/// use isotools::cli::Mode;
+/// use isotools::utils::{Components, ParallelAccumulator, ParallelCounter};
+///
+/// let components: Vec<Box<dyn BedPackage>> = vec![];
+/// let accumulator = ParallelAccumulator::default();
+/// let counter = ParallelCounter::default();
+/// let mode = Mode::Guided;
+/// let threshold = 5;
+///
+/// __process_components(components, &accumulator, &counter, &mode, threshold);
+/// ```
+fn __process_components(
+    components: Vec<Box<dyn BedPackage>>,
+    accumulator: &ParallelAccumulator,
+    counter: &ParallelCounter,
+    mode: &Mode,
+    threshold: usize,
+) {
+    components.into_par_iter().for_each(|comp| match mode {
+        Mode::Guided => {
+            let comp = comp
+                .as_any_owned()
+                .downcast::<(RefGenePred, Vec<GenePred>)>()
+                .expect("ERROR: Could not downcast to RefGenePred and GenePred!");
+
+            let (keep, orphans) = guided(comp, counter, threshold);
+            accumulator.add(keep, orphans);
+        }
+        Mode::DeNovo => {
+            let comp = comp
+                .as_any_owned()
+                .downcast::<(Vec<GenePred>, Vec<GenePred>)>()
+                .expect("ERROR: Could not downcast to GenePred and GenePred!");
+
+            let (keep, orphans) = self_guided(comp, counter, threshold);
+            accumulator.add(keep, orphans);
+        }
+    });
+}
+
+/// Guided mode
+///
+/// # Arguments
+///
+/// * `components` - The components to process
+/// * `counter` - The counter to use
+/// * `threshold` - The threshold to use
+///
+/// # Returns
+///
+/// A tuple containing the keep and orphans
+///
+/// # Examples
+///
+/// ```
+/// use isotools::iso_orphan::guided;
+/// use isotools::utils::ParallelCounter;
+///
+/// let components = Box::new((RefGenePred::default(), vec![]));
+/// let counter = ParallelCounter::default();
+/// let threshold = 5;
+///
+/// let (keep, orphans) = guided(components, &counter, threshold);
+/// ```
+fn guided(
+    components: Box<(RefGenePred, Vec<GenePred>)>,
+    counter: &ParallelCounter,
+    threshold: usize,
+) -> (Vec<String>, Vec<String>) {
+    let mut keep = Vec::new();
+    let mut orphans = Vec::new();
+
+    let toga = components.0;
+    let mut reads = components.1;
+
+    // INFO: single component reads -> no TOGA
+    if toga.reads.is_empty() {
+        // CASE: single-exon-component reads [PARTIALLY SOLVED]
+        // INFO: the following case is presented:
+        //
+        // [SOLVED: single-component reads will be just discarded]
+        // toga:  XX-----------XXX--XX---XXXX
+        // read1:    xxXXXXxx  |||  ||   ||||
+        // read2: XX-----------XXX--XX---XXXX
+        //
+        // Here, read1 is a single-exon component read that can be easily
+        // discarded because it represents a common case of background noise.
+        // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769,
+        // or mm39 chr8:72,647,487-72,650,648.
+        //
+        // or its variant [UNSOLVED]
+        //
+        // toga:  XX-----------XXX--XX---XXXX
+        // read1:    xxXXXXxx
+        // read2:    xxxxXXXxx
+        // read3:     xXXXXXXxx
+        // read4: XX-----------XXX--XX---XXXX
+        //
+        // Here, read1-3 are single-reads in a component that does not necessarilly
+        // represent a single transcript. Here, we should try CDS exact matches. If
+        // the reads do not match exactly, we should discard them.
+        //
+        // For a clearer illustration go to HLpteAle1A HAP1_SUPER_1:112,985,006-112,991,219
+        // or mm39 chr3:118,192,628-118,376,044 or mm39 chr3:141,166,307-141,389,231
+        do_self_guided_check(&mut reads, counter, threshold);
+    }
+
+    // INFO: ask if ANY TOGA is a single-exon
+    // INFO: single-exon signifies no introns
+    let is_toga_single_exon = toga
+        .reads
+        .iter()
+        .any(|projection| projection.introns.len() == 0);
+
+    let mut ref_exons = toga.starts;
+    ref_exons.extend(toga.middles);
+
+    if reads.len() > 1 {
+        reads.sort_by(|a, b| a.exon_len.cmp(&b.exon_len));
+
+        for read in reads {
+            let is_single_exon_read = read.exons.len() == 1;
+
+            if is_single_exon_read {
+                if is_toga_single_exon {
+                    // CASE: single-exon read(s) with single-exon TOGA refs
+                    // INFO: the following case is presented:
+                    //
+                    // toga: xxxxxxxxxxxxXXXXXxxxxxxx
+                    // read1:     xxxxxxxXXXXXxxxx
+                    // read2:  xxxxxxxxxxXXXXXx
+                    // read3:          xxXXXXXxxxx
+                    // read5: xxxxxXXXXXXXXXXXxxxxx
+                    //             ^^^^^^|||||
+                    //
+                    // Here, we would argue that all of the reads (being single-exon) match
+                    // at least one CDS coordinate + all of them are within TOGA boundaries
+                    //
+                    // For a clearer illustration go to mm39 chr3:61,269,596-61,278,844
+
+                    for read_exon in read.exons.iter() {
+                        if ref_exons.contains(&read_exon) {
+                            log::debug!(
+                                "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA single-exon CDS -> keep!",
+                                &read,
+                            );
+
+                            keep.push(read.line.clone());
+                            break;
+                        } else {
+                            log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA single-exon CDS -> oprhan!", &read);
+                            counter.inc_read_se_mc_toga_se();
+
+                            orphans.push(read.line.clone());
+                        }
+                    }
+                } else {
+                    // INFO: main question: your CDS matches exactly or partially a TOGA CDS?
+                    // CASE: single-exon fuzzy overlap with TOGA CDS
+                    // INFO: the following case is presented:
+                    //
+                    // toga:     xxxxxxXXXXXXX----------
+                    //               ^^||||^^^
+                    // read1: xxxxxxxXXXXXXXxxxx
+                    // read2:       xxxXXXXXXX----------
+                    // read3:     xxxxxXXXXXXX----------
+                    //
+                    // Here, read1 overlaps at the CDS level and thus is part of the component;
+                    // however, is not an exact CDS match.
+                    //
+                    // For a clearer illustration go to mm39 chr3:65,014,198-65,019,415
+                    // or mm39 chr3:117,366,942-117,374,421
+                    for read_exon in read.exons.iter() {
+                        if ref_exons.contains(&read_exon) {
+                            log::debug!(
+                                "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA multi-exon CDS -> keep!",
+                                &read,
+                            );
+
+                            keep.push(read.line.clone());
+                            break;
+                        } else {
+                            log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA multi-exon CDS -> oprhan!", &read);
+                            counter.inc_read_se_mc_toga_me();
+
+                            orphans.push(read.line.clone());
+                        }
+                    }
+                }
+            } else {
+                // INFO: means CDS TOGA overlap and not single-exon
+                // INFO: branch where most of the cases will be in
+                // INFO: could present the following case:
+                //
+                // toga:     xxxxxxXXXXXXX----XXXXX----
+                //               ^^||||^^^
+                // read1: xxxxxxxXXXXXXXXX----XXXXXxx -> shorter isoform
+                // read2:       xxxXXXXXXX----XXXXX----
+                // read3:     xxxxxXXXXXXX----XXXXX----
+                //
+                // or its variants:
+                //
+                // toga:     xxxxxxXXXXXXX----------
+                //               ^^||||^^^
+                // read1: xxxxxxxXXXXXXXXX----xxxxx
+                // read2:       xxxXXXXXXX----------
+                // read3:     xxxxxXXXXXXX----------
+                //
+                // or:
+                //
+                // toga:  xxxxXXXXX-------XXXXXXX----
+                //                               ^^
+                // read1: xxxxXXXXXxxxxxxxXXXXXXXXXxx
+                // read2: xxxxXXXXX-------XXXXXXX----
+                //
+                // Here, we will evaluate if the present read has more than 1
+                // exact CDS match.
+                //
+                // For a clearer illustration go to mm39 chr3:65,435,178-65,440,499
+
+                let mut matches = 0;
+                for read_exon in read.exons.iter() {
+                    if ref_exons.contains(&read_exon) {
+                        matches += 1;
+                    }
+
+                    if matches > 1 {
+                        log::debug!(
+                            "DEBUG: read {:?} multi-exon in a mult-read component has more than 1 exact CDS matches -> keep!",
+                            &read
+                        );
+
+                        keep.push(read.line.clone());
+                        break;
+                    }
+                }
+
+                if matches <= 1 {
+                    log::debug!(
+                        "DEBUG: read {:?} multi-exon in a mult-read component has less than 1 exact CDS matches -> oprhan!",
+                        &read
+                    );
+                    counter.inc_read_me_mc_toga_se();
+
+                    orphans.push(read.line);
+                }
+            }
+        }
+    } else {
+        if reads.is_empty() {
+            // INFO: TOGA projection without reads
+            log::debug!("DEBUG: TOGA projection without reads -> {:?}", toga.reads);
+        }
+
+        // INFO: weird case of TOGA-single-exon and single-read component
+        if is_toga_single_exon {
+            for read in reads {
+                let is_single_exon_read = read.exons.len() == 1;
+
+                if is_single_exon_read {
+                    // INFO: CDS must matche once
+                    // INFO: branch -> CDS-overlap with TOGA but single-read component
+                    //
+                    // ideal case:
+                    //
+                    // toga: xxxxXXXXXXxxxx
+                    //           ||||||
+                    // read1:  xxXXXXXXxxxx
+                    //
+                    // its counterpart:
+                    //
+                    // toga: xxxxXXXXXXxxxx
+                    //         ^^|||
+                    // read1: xXXXXXxxx <- likely not a supporting transcript
+                    for read_exon in read.exons.iter() {
+                        if ref_exons.contains(&read_exon) {
+                            log::debug!(
+                                "DEBUG: read: {:?} single-exon and match exactly with TOGA single-exon -> keep!",
+                                &read,
+                            );
+
+                            keep.push(read.line.clone());
+                        } else {
+                            log::debug!(
+                                "DEBUG: read: {:?} single-exon and does not match exactly with TOGA single-exon -> oprhan!",
+                                &read,
+                            );
+                            counter.inc_read_se_sc_toga_se();
+
+                            orphans.push(read.line.clone());
+                        }
+                    }
+                } else {
+                    // INFO: TOGA-single-exon CDS overlap with multi-exon single-read component
+                    // INFO: at least one splice site should match
+                    //
+                    // ideal case:
+                    //
+                    // toga: xxxxXXXXXXxxxx
+                    //           ||||||
+                    // read1:  xxXXXXXXxxxx-----xxxxxx
+                    //
+                    // its counterpart:
+                    //
+                    // toga: xxxxXXXXXXxxxx
+                    //         ^^|||
+                    // read1: xXXXXXxxx-------xxxxx <- likely not a supporting transcript
+                    for read_exon in read.exons.iter() {
+                        let read_exon_start = read_exon.0;
+                        let read_exon_end = read_exon.1;
+
+                        ref_exons.iter().for_each(|(toga_exon_start, toga_exon_end)| {
+                            if read_exon_start == *toga_exon_start || read_exon_end == *toga_exon_end {
+                                log::debug!(
+                                    "DEBUG: read: {:?} multi-exon matches at least 1 splice site with TOGA single-exon -> keep!",
+                                    &read,
+                                );
+
+                                keep.push(read.line.clone());
+                            } else {
+                                log::debug!(
+                                    "DEBUG: read: {:?} multi-exon does not match any splice site with TOGA single-exon -> oprhan!",
+                                    &read,
+                                );
+                                counter.inc_read_me_sc_toga_se();
+
+
+                                orphans.push(read.line.clone());
+                            }
+                        });
+                    }
+                }
+            }
+        } else {
+            // INFO: TOGA multi-exon, single-read component
+            // INFO: ask if CDS matches are more than 1 OR is within TOGA boundaries
+
+            for read in reads {
+                let is_single_exon_read = read.exons.len() == 1;
+
+                if is_single_exon_read {
+                    // CASE: single-exon read component with multi-exon TOGA refs
+                    // INFO: the following case is presented:
+                    //
+                    // toga:  xxxXXXX----XXXXX----XXXxxx
+                    //           ||||
+                    // read1: xxxXXXX
+                    //
+                    // or any of its  variants:
+                    //
+                    // toga:  xxxXXXX----XXXXX----XXXxxx
+                    // read1: xxxxxxxxxxxxxxXXXXxxxx
+                    //
+                    // Here, we ask for specific exon match otherwise would be hard
+                    // to distinguish with a single-exon read component
+                    for read_exon in read.exons.iter() {
+                        if ref_exons.contains(&read_exon) {
+                            log::debug!(
+                                "DEBUG: read: {:?} single-exon in single-read component and match exactly with TOGA multi-exon -> keep!",
+                                &read,
+                            );
+
+                            keep.push(read.line.clone());
+                        } else {
+                            log::debug!(
+                                "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with TOGA multi-exon -> oprhan!",
+                                &read,
+                            );
+                            counter.inc_read_se_sc_toga_me();
+
+                            orphans.push(read.line.clone());
+                        }
+                    }
+                } else {
+                    // CASE: multi-exon single-read component with multi-exon TOGA refs
+                    //
+                    // Here, we ask for at least one specific exon match otherwise would be hard
+                    // to distinguish with a single-read component
+                    let mut matches = 0;
+
+                    for read_exon in read.exons.iter() {
+                        if ref_exons.contains(&read_exon) {
+                            matches += 1;
+                        }
+
+                        if matches > 1 {
+                            log::debug!(
+                                    "DEBUG: read: {:?} multi-exon in single-read component and match more than once exactly with TOGA multi-exon -> keep!",
+                                    &read,
+                                );
+
+                            keep.push(read.line.clone());
+                            break;
+                        } else {
+                            log::debug!(
+                                    "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with TOGA multi-exon -> oprhan!",
+                                    &read,
+                                );
+                            counter.inc_read_me_sc_toga_me();
+
+                            orphans.push(read.line.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (keep, orphans)
+}
+
+/// Self-guided mode
+///
+/// # Arguments
+///
+/// * `components` - The components to process
+/// * `counter` - The counter to use
+/// * `threshold` - The threshold to use
+///
+/// # Returns
+///
+/// A tuple containing the keep and orphans
+///
+/// # Examples
+///
+/// ```
+/// use isotools::iso_orphan::self_guided;
+/// use isotools::utils::ParallelCounter;
+///
+/// let components = Box::new((vec![], vec![]));
+/// let counter = ParallelCounter::default();
+/// let threshold = 5;
+///
+/// let (keep, orphans) = self_guided(components, &counter, threshold);
+/// ```
+fn self_guided(
+    components: Box<(Vec<GenePred>, Vec<GenePred>)>,
+    counter: &ParallelCounter,
+    threshold: usize,
+) -> (Vec<String>, Vec<String>) {
+    let mut reads = components.0;
+    do_self_guided_check(&mut reads, counter, threshold)
+}
+
+/// Self-guided mode executor
+///
+/// # Arguments
+///
+/// * `reads` - The reads to process
+/// * `counter` - The counter to use
+/// * `threshold` - The threshold to use
+///
+/// # Returns
+///
+/// A tuple containing the keep and orphans
+///
+/// # Examples
+///
+/// ```
+/// use isotools::iso_orphan::do_self_guided_check;
+/// use isotools::utils::ParallelCounter;
+///
+/// let reads = vec![];
+/// let counter = ParallelCounter::default();
+/// let threshold = 5;
+///
+/// let (keep, orphans) = do_self_guided_check(&mut reads, &counter, threshold);
+/// ```
+fn do_self_guided_check(
+    reads: &mut Vec<GenePred>,
+    counter: &ParallelCounter,
+    threshold: usize,
+) -> (Vec<String>, Vec<String>) {
+    let mut keep = Vec::new();
+    let mut orphans = Vec::new();
+
+    let is_single_component_read = reads.len() == 1;
+
+    // CASE: single-component single-exon
+    // INFO: the following case is presented:
+    //
+    // [SOLVED: discarding single-component reads]
+    // toga:            XXX--XX---XXXX
+    // read1: xxXXXXxx  |||  ||   ||||
+    // read2:           XXX--XX---XXXX
+    //
+    // or its variants:
+    //
+    // [SOLVED: discarding single-component reads]
+    // toga:  XX-----------XXX--XX---XXXX
+    // read1:    xxXXXXxx  |||  ||   ||||
+    // read2: XX-----------XXX--XX---XXXX
+    //
+    //
+    // Here, read1 is a single-exon component read that can be easily
+    // discarded because it represents a common case of background noise.
+    // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769,
+    // or mm39 chr8:72,647,487-72,650,648.
+    //
+    // toga:                 XXX--XX---XXXX
+    // read1: xxXXXX--XXXxx  |||  ||   ||||
+    // read2:                XXX--XX---XXXX
+    //
+    // The above case would illustrate a component where a non-single-exon
+    // component read could repesent real transcription but not at a significant
+    // level.
+    //
+    // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769
+    if is_single_component_read {
+        log::debug!(
+            "DEBUG: single-component single-exon read with no TOGA refs -> {:?} -> orphan!",
+            reads
+        );
+        counter.inc_read_se_sc_no_toga();
+
+        for read in reads {
+            orphans.push(read.line.clone());
+        }
+
+        return (keep, orphans);
+    }
+
+    // CASE: multi-exon components
+    // INFO: the following case is presented:
+    //
+    // [PARTIALLY SOLVED: threshold]
+    // toga:  XX-----------XXX--XX---XXXX
+    // read1:    xxXXXXxx
+    // read2:    xxxxXXXxx
+    // read3: XX-----------XXX--XX---XXXX
+    //
+    // Here, read1 and read2 overlap and form a unique non-TOGA component
+    // with more than 1 read. Even though a threshold would be too relative
+    // to label a component as background transcription, we force any isolated
+    // component to have more than 5 reads.
+    //
+    // For a clearer illustration go to mm39 chr3:97,596,920-97,624,824
+    // or mm39 chr3:103,646,891-103,652,710
+    if reads.len() < threshold {
+        log::debug!(
+            "DEBUG: component with less than {} reads threshold -> {:?} -> orphan!",
+            threshold,
+            reads
+        );
+        counter.inc_component_less_than_threshold();
+
+        for read in reads {
+            orphans.push(read.line.clone());
+        }
+
+        return (keep, orphans);
+    }
+
+    // INFO: sorting reads by absolute exonic_len to allow group single-exons
+    // INFO: while collection information from bigger reads
+    reads.sort_by(|a, b| a.exon_len.cmp(&b.exon_len));
+
+    // INFO: establishing exonic matches from reads
+    // INFO: { exon -> matches }, then rank by matches and keep if reads with exon > 50% ocurrence
+    //
+    // CASE: single-exon reads following same/diff exonic pattern
+    // INFO: the following case is presented:
+    //
+    // read1:       xxxXXXXXXXxxx
+    // read2:      xxxxxxxxxxXXXXXxxxx
+    //
+    // Here, both reads would belong to the same component because exonic
+    // overlap (accounting for UTRs); however, their CDS structure is not consistent.
+    //
+    // read1:       xxxXXXXXXXxxx
+    // read2:      xxxxXXXXXXXxxxxxxx
+    //
+    // In contrast, the above case would illustrate a component where single-exon
+    // reads follow the same exonic pattern. This likely repesents uniform transcription.
+    //
+    // For a clearer illustration go to HLpteAle1A HAP1_SUPER_1:112,960,536-112,964,453
+    //
+    // CASE: single-exon read partially overlap CDS
+    // INFO: the following case is presented:
+    //
+    // read1: xxxxxxxxxXXXXxxx
+    // read2: -------xxxxXXXXX------XXX--
+    // read3: ---------xxXXXXX------XXX--
+    // read4: ---------xxxxxxxxxXX--XXX--
+    // read5: ----------xXXXXX-----------
+    //                   |||||      |||
+    //
+    // The above case would illustrate a component where a single-exon read
+    // CDS overlaps partially with a non-single-exon read CDS. We would argue
+    // that this read - even if it matches at the CDS level - does not follow
+    // the same transcription pattern as the other reads.
+    //
+    // For a clearer illustration go to mm39 chr8:72,042,766-72,051,539
+    // or mm39 chr8:73,174,008-73,179,856
+    let mut rank = HashMap::new();
+    for read in reads.iter() {
+        for exon in read.exons.iter() {
+            rank.entry(exon).and_modify(|e| *e += 1).or_insert(1);
+        }
+    }
+
+    let unique_exons = rank.len();
+    for (exon, matches) in rank.iter() {
+        log::debug!("DEBUG: exon: {:?} matches: {}", exon, matches);
+
+        if (*matches as f32 / unique_exons as f32) > 0.5 {
+            log::debug!(
+                "DEBUG: supported exon: {:?} with matches: {} in set of reads: {:?}",
+                exon,
+                matches,
+                reads
+            );
+
+            for read in reads.iter() {
+                if read.exons.contains(exon) {
+                    log::debug!("DEBUG: read: {:?} has exon: {:?} -> keep!", read, exon);
+
+                    if !keep.contains(&read.line) {
+                        keep.push(read.line.clone());
+                    }
+                } else {
+                    log::debug!(
+                        "DEBUG: read: {:?} does not have exon: {:?} -> oprhan!",
+                        read,
+                        exon
+                    );
+
+                    if !orphans.contains(&read.line) {
+                        counter.inc_read_de_novo_unsupported();
+                        orphans.push(read.line.clone());
+                    }
+                }
+            }
+        } else {
+            log::debug!(
+                "DEBUG: non-supported exon: {:?} with matches: {} in set of reads: {:?}",
+                exon,
+                matches,
+                reads
+            );
+        }
+    }
+
+    (keep, orphans)
+}

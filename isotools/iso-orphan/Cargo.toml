@@ -1,0 +1,17 @@
+[package]
+name = "iso-orphan"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+iso-pack = { path = "../iso-pack" }
+config.workspace = true
+dashmap.workspace = true
+rayon.workspace = true
+log.workspace = true
+clap.workspace = true
+num_cpus.workspace = true
+simple_logger.workspace = true

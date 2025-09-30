@@ -10,6 +10,7 @@ members = [
     "iso-polya",
     "iso-split",
     "iso-nmd",
+    "iso-orphan",
 ]
 resolver = "2"
 

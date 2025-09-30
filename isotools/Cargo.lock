@@ -1055,6 +1055,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "iso-orphan"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "config",
+ "dashmap",
+ "iso-pack",
+ "log",
+ "num_cpus",
+ "rayon",
+ "simple_logger",
+]
+
+[[package]]
 name = "iso-pack"
 version = "0.0.10"
 dependencies = [
@@ -1143,6 +1157,7 @@ dependencies = [
  "clap",
  "config",
  "dashmap",
+ "hashbrown 0.15.2",
  "iso-classify",
  "iso-fusion",
  "iso-intron",
@@ -1150,6 +1165,8 @@ dependencies = [
  "iso-polya",
  "iso-utr",
  "log",
+ "rayon",
+ "serde_json",
  "simple_logger",
 ]
 
