@@ -126,6 +126,7 @@ pub struct ParallelCounter {
 
     // multi-exon categories
     pub read_me_mc_toga_se: AtomicU32, // multi-comp TOGA single-exon
+    pub read_me_mc_toga_me: AtomicU32, // multi-comp TOGA multi-exon
     pub read_me_sc_toga_se: AtomicU32, // single-comp TOGA single-exon
     pub read_me_sc_toga_me: AtomicU32, // single-comp TOGA multi-exon
 
@@ -133,6 +134,11 @@ pub struct ParallelCounter {
     pub read_se_sc_no_toga: AtomicU32, // single-exon comp
     pub component_less_than_threshold: AtomicU32, // less than treshold
     pub read_de_novo_unsupported: AtomicU32, // unsupported exon
+
+    // rescue categories
+    pub rescue: AtomicU32,                   // rescue
+    pub read_no_splice_match: AtomicU32,     // no splice match
+    pub component_above_discards: AtomicU32, // component above discards
 }
 
 /// Default implementation for the parallel counter
@@ -153,11 +159,15 @@ impl Default for ParallelCounter {
             read_se_sc_toga_se: AtomicU32::new(0),
             read_se_sc_toga_me: AtomicU32::new(0),
             read_me_mc_toga_se: AtomicU32::new(0),
+            read_me_mc_toga_me: AtomicU32::new(0),
             read_me_sc_toga_se: AtomicU32::new(0),
             read_me_sc_toga_me: AtomicU32::new(0),
             read_se_sc_no_toga: AtomicU32::new(0),
             component_less_than_threshold: AtomicU32::new(0),
             read_de_novo_unsupported: AtomicU32::new(0),
+            read_no_splice_match: AtomicU32::new(0),
+            rescue: AtomicU32::new(0),
+            component_above_discards: AtomicU32::new(0),
         }
     }
 }
@@ -216,9 +226,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_mc_toga_se(5);
+    /// counter.inc_read_se_mc_toga_se();
     ///
-    /// assert_eq!(counter.read_se_mc_toga_se(), 5);
+    /// assert_eq!(counter.read_se_mc_toga_se(), 1);
     /// ```
     pub fn inc_read_se_mc_toga_se(&self) {
         self.read_se_mc_toga_se.fetch_add(1, Ordering::Relaxed);
@@ -234,9 +244,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_mc_toga_me(5);
+    /// counter.inc_read_se_mc_toga_me();
     ///
-    /// assert_eq!(counter.read_se_mc_toga_me(), 5);
+    /// assert_eq!(counter.read_se_mc_toga_me(), 1);
     /// ```
     pub fn inc_read_se_mc_toga_me(&self) {
         self.read_se_mc_toga_me.fetch_add(1, Ordering::Relaxed);
@@ -252,9 +262,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_toga_se(5);
+    /// counter.inc_read_se_sc_toga_se();
     ///
-    /// assert_eq!(counter.read_se_sc_toga_se(), 5);
+    /// assert_eq!(counter.read_se_sc_toga_se(), 1);
     /// ```
     pub fn inc_read_se_sc_toga_se(&self) {
         self.read_se_sc_toga_se.fetch_add(1, Ordering::Relaxed);
@@ -270,9 +280,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_toga_me(5);
+    /// counter.inc_read_se_sc_toga_me();
     ///
-    /// assert_eq!(counter.read_se_sc_toga_me(), 5);
+    /// assert_eq!(counter.read_se_sc_toga_me(), 1);
     /// ```
     pub fn inc_read_se_sc_toga_me(&self) {
         self.read_se_sc_toga_me.fetch_add(1, Ordering::Relaxed);
@@ -288,12 +298,30 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_mc_toga_se(5);
+    /// counter.inc_read_me_mc_toga_se();
     ///
-    /// assert_eq!(counter.read_me_mc_toga_se(), 5);
+    /// assert_eq!(counter.read_me_mc_toga_se(), 1);
     /// ```
     pub fn inc_read_me_mc_toga_se(&self) {
         self.read_me_mc_toga_se.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment the number of reads with multi-exon multi-component TOGA multi-exon
+    ///
+    /// # Parameters
+    ///
+    /// - `count`: The number of components to add.
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_read_me_mc_toga_me();
+    ///
+    /// assert_eq!(counter.read_me_mc_toga_me(), 1);
+    /// ```
+    pub fn inc_read_me_mc_toga_me(&self) {
+        self.read_me_mc_toga_me.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increment the number of reads with multi-exon single-component TOGA single-exon
@@ -306,9 +334,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_sc_toga_se(5);
+    /// counter.inc_read_me_sc_toga_se();
     ///
-    /// assert_eq!(counter.read_me_sc_toga_se(), 5);
+    /// assert_eq!(counter.read_me_sc_toga_se(), 1);
     /// ```
     pub fn inc_read_me_sc_toga_se(&self) {
         self.read_me_sc_toga_se.fetch_add(1, Ordering::Relaxed);
@@ -324,9 +352,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_sc_toga_me(5);
+    /// counter.inc_read_me_sc_toga_me();
     ///
-    /// assert_eq!(counter.read_me_sc_toga_me(), 5);
+    /// assert_eq!(counter.read_me_sc_toga_me(), 1);
     /// ```
     pub fn inc_read_me_sc_toga_me(&self) {
         self.read_me_sc_toga_me.fetch_add(1, Ordering::Relaxed);
@@ -342,9 +370,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_no_toga(5);
+    /// counter.inc_read_se_sc_no_toga();
     ///
-    /// assert_eq!(counter.read_se_sc_no_toga(), 5);
+    /// assert_eq!(counter.read_se_sc_no_toga(), 1);
     /// ```
     pub fn inc_read_se_sc_no_toga(&self) {
         self.read_se_sc_no_toga.fetch_add(1, Ordering::Relaxed);
@@ -360,9 +388,9 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_component_less_than_threshold(5);
+    /// counter.inc_component_less_than_threshold();
     ///
-    /// assert_eq!(counter.component_less_than_threshold(), 5);
+    /// assert_eq!(counter.component_less_than_threshold(), 1);
     /// ```
     pub fn inc_component_less_than_threshold(&self) {
         self.component_less_than_threshold
@@ -379,12 +407,55 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_de_novo_unsupported(5);
+    /// counter.inc_read_de_novo_unsupported();
     ///
-    /// assert_eq!(counter.read_de_novo_unsupported(), 5);
+    /// assert_eq!(counter.read_de_novo_unsupported(), 1);
     /// ```
     pub fn inc_read_de_novo_unsupported(&self) {
         self.read_de_novo_unsupported
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment the number of rescues
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_rescue();
+    ///
+    /// assert_eq!(counter.rescue(), 1);
+    /// ```
+    pub fn inc_rescue(&self) {
+        self.rescue.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment the number of reads with no splice match
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_read_no_splice_match();
+    ///
+    /// assert_eq!(counter.read_no_splice_match(), 1);
+    /// ```
+    pub fn inc_read_no_splice_match(&self) {
+        self.read_no_splice_match.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment the number of components above discards
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_component_above_discards();
+    ///
+    /// assert_eq!(counter.component_above_discards(), 1);
+    /// ```
+    pub fn inc_component_above_discards(&self) {
+        self.component_above_discards
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -394,17 +465,21 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_mc_toga_se(5);
-    /// counter.inc_read_se_mc_toga_me(5);
-    /// counter.inc_read_se_sc_toga_se(5);
-    /// counter.inc_read_se_sc_toga_me(5);
-    /// counter.inc_read_me_mc_toga_se(5);
-    /// counter.inc_read_me_sc_toga_se(5);
-    /// counter.inc_read_me_sc_toga_me(5);
-    /// counter.inc_read_se_sc_no_toga(5);
-    /// counter.inc_component_less_than_threshold(5);
-    /// counter.inc_read_de_novo_unsupported(5);
     ///
+    /// counter.inc_read_se_mc_toga_se();
+    /// counter.inc_read_se_mc_toga_me();
+    /// counter.inc_read_se_sc_toga_se();
+    /// counter.inc_read_se_sc_toga_me();
+    /// counter.inc_read_me_mc_toga_se();
+    /// counter.inc_read_me_sc_toga_se();
+    /// counter.inc_read_me_sc_toga_me();
+    /// counter.inc_read_se_sc_no_toga();
+    /// counter.inc_component_less_than_threshold();
+    /// counter.inc_read_de_novo_unsupported();
+    /// counter.inc_read_no_splice_match();
+    /// counter.inc_rescue();
+    /// counter.inc_component_above_discards();
+    //
     /// let report = counter.report_stats();
     /// ```
     pub fn report_stats(&self) -> String {
@@ -420,12 +495,16 @@ impl ParallelCounter {
         let inc_read_se_sc_toga_se = self.read_se_sc_toga_se.load(Ordering::Relaxed);
         let inc_read_se_sc_toga_me = self.read_se_sc_toga_me.load(Ordering::Relaxed);
         let inc_read_me_mc_toga_se = self.read_me_mc_toga_se.load(Ordering::Relaxed);
+        let inc_read_me_mc_toga_me = self.read_me_mc_toga_me.load(Ordering::Relaxed);
         let inc_read_me_sc_toga_se = self.read_me_sc_toga_se.load(Ordering::Relaxed);
         let inc_read_me_sc_toga_me = self.read_me_sc_toga_me.load(Ordering::Relaxed);
         let inc_read_se_sc_no_toga = self.read_se_sc_no_toga.load(Ordering::Relaxed);
         let inc_component_less_than_threshold =
             self.component_less_than_threshold.load(Ordering::Relaxed);
         let inc_read_de_novo_unsupported = self.read_de_novo_unsupported.load(Ordering::Relaxed);
+        let inc_read_no_splice_match = self.read_no_splice_match.load(Ordering::Relaxed);
+        let inc_rescue = self.rescue.load(Ordering::Relaxed);
+        let inc_component_above_discards = self.component_above_discards.load(Ordering::Relaxed);
 
         report.push_str(&format!(
             "Total number of reads with single-exon multi-component TOGA single-exon: {}\n",
@@ -448,6 +527,10 @@ impl ParallelCounter {
             inc_read_me_mc_toga_se
         ));
         report.push_str(&format!(
+            "Total number of reads with multi-exon multi-component TOGA multi-exon: {}\n",
+            inc_read_me_mc_toga_me
+        ));
+        report.push_str(&format!(
             "Total number of reads with multi-exon single-component TOGA single-exon: {}\n",
             inc_read_me_sc_toga_se
         ));
@@ -460,18 +543,55 @@ impl ParallelCounter {
             inc_read_se_sc_no_toga
         ));
         report.push_str(&format!(
-            "Total number of reads with less than threshold: {}\n",
+            "Total number of denovo reads with less than min_read_num_denovo: {}\n",
             inc_component_less_than_threshold
         ));
         report.push_str(&format!(
             "Total number of reads with unsupported exon: {}\n",
             inc_read_de_novo_unsupported
         ));
+        report.push_str(&format!(
+            "Total number of components above min_discard_percentage: {}\n",
+            inc_component_above_discards
+        ));
+        report.push_str(&format!(
+            "Total number of reads with no splice match against reference: {}\n",
+            inc_read_no_splice_match
+        ));
+        report.push_str(&format!("Total number of rescues: {}\n", inc_rescue));
 
         report
     }
 }
 
+/// Report the stats of the counter to the log
+///
+/// # Arguments
+///
+/// * `counter` - The counter to report
+///
+/// # Example
+///
+/// ```
+/// use isotools::utils::ParallelCounter;
+///
+/// let counter = ParallelCounter::new();
+/// counter.inc_read_se_mc_toga_se(5);
+/// counter.inc_read_se_mc_toga_me(5);
+/// counter.inc_read_se_sc_toga_se(5);
+/// counter.inc_read_se_sc_toga_me(5);
+/// counter.inc_read_me_mc_toga_se(5);
+/// counter.inc_read_me_sc_toga_se(5);
+/// counter.inc_read_me_sc_toga_me(5);
+/// counter.inc_read_se_sc_no_toga(5);
+/// counter.inc_component_less_than_threshold(5);
+/// counter.inc_read_de_novo_unsupported(5);
+/// counter.inc_read_no_splice_match(5);
+/// counter.inc_rescue(5);
+/// counter.inc_component_above_discards(5);
+///
+/// __report_stats(&counter);
+/// ```
 pub fn __report_stats(counter: &ParallelCounter) {
     let stats = counter.report_stats();
     log::info!("INFO: Reporting stats:\n{}", stats);

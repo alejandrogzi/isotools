@@ -93,12 +93,21 @@ pub struct Args {
 
     #[arg(
         short = 'm',
-        long = "min-read-num",
+        long = "min-read-num-denovo",
         help = "Threshold for minimum number of reads to be considered a component when self-guided (default: 5)",
         value_name = "NUM",
         default_value_t = 5
     )]
-    pub threshold: usize,
+    pub min_read_num_denovo: usize,
+
+    #[arg(
+        short = 'p',
+        long = "min-discard-percent",
+        help = "Threshold for minimum percentage of discards to apply splice match rescueing",
+        value_name = "NUM",
+        default_value_t = 0.5
+    )]
+    pub min_discard_percentage: f32,
 
     #[arg(
         short = 'o',

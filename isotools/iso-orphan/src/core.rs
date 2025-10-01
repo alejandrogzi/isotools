@@ -49,7 +49,7 @@ pub type Components = DashMap<String, Vec<Box<dyn BedPackage>>>;
 ///     overlapping: false,
 ///     non_overlapping: false,
 ///     keep_orphans: false,
-///     threshold: 5,
+///     min_read_num_denovo: 5,
 ///     outdir: "tests/data".into(),
 ///     name: "test".into(),
 ///     threads: 1,
@@ -106,7 +106,14 @@ pub fn __detect_orphans(args: Args) {
                 std::process::exit(1);
             });
 
-            __process(tracks, &mode, args.threshold, outdir, args.name);
+            __process(
+                tracks,
+                &mode,
+                args.min_read_num_denovo,
+                outdir,
+                args.name,
+                args.min_discard_percentage,
+            );
         }
         Mode::DeNovo => {
             log::info!("INFO: Running using non-guided mode");
@@ -169,7 +176,14 @@ pub fn __detect_orphans(args: Args) {
                     std::process::exit(1);
                 });
 
-            __process(tracks, &mode, args.threshold, outdir, args.name);
+            __process(
+                tracks,
+                &mode,
+                args.min_read_num_denovo,
+                outdir,
+                args.name,
+                args.min_discard_percentage,
+            );
         }
     };
 }
@@ -180,7 +194,7 @@ pub fn __detect_orphans(args: Args) {
 ///
 /// * `tracks` - The components to process
 /// * `mode` - The mode to use
-/// * `threshold` - The threshold to use
+/// * `min_read_num_denovo` - The min_read_num_denovo to use
 /// * `outdir` - The output directory
 /// * `filename` - The filename to use
 ///
@@ -197,13 +211,20 @@ pub fn __detect_orphans(args: Args) {
 ///
 /// let tracks: Components = DashMap::new();
 /// let mode = Mode::Guided;
-/// let threshold = 5;
+/// let min_read_num_denovo = 5;
 /// let outdir = "tests/data".into();
 /// let filename = "test".into();
 ///
-/// __process(tracks, &mode, threshold, outdir, filename);
+/// __process(tracks, &mode, min_read_num_denovo, outdir, filename);
 /// ```
-fn __process(tracks: Components, mode: &Mode, threshold: usize, outdir: PathBuf, filename: String) {
+fn __process(
+    tracks: Components,
+    mode: &Mode,
+    min_read_num_denovo: usize,
+    outdir: PathBuf,
+    filename: String,
+    min_discard_percentage: f32,
+) {
     let pb = get_progress_bar(tracks.len() as u64, "Processing...");
 
     let accumulator = ParallelAccumulator::default();
@@ -215,7 +236,14 @@ fn __process(tracks: Components, mode: &Mode, threshold: usize, outdir: PathBuf,
 
         counter.inc_components(components.len() as u32);
 
-        __process_components(components, &accumulator, &counter, mode, threshold);
+        __process_components(
+            components,
+            &accumulator,
+            &counter,
+            mode,
+            min_read_num_denovo,
+            min_discard_percentage,
+        );
 
         pb.inc(1);
     });
@@ -243,7 +271,7 @@ fn __process(tracks: Components, mode: &Mode, threshold: usize, outdir: PathBuf,
 /// * `accumulator` - The accumulator to use
 /// * `counter` - The counter to use
 /// * `mode` - The mode to use
-/// * `threshold` - The threshold to use
+/// * `min_read_num_denovo` - The min_read_num_denovo to use
 ///
 /// # Returns
 ///
@@ -260,16 +288,17 @@ fn __process(tracks: Components, mode: &Mode, threshold: usize, outdir: PathBuf,
 /// let accumulator = ParallelAccumulator::default();
 /// let counter = ParallelCounter::default();
 /// let mode = Mode::Guided;
-/// let threshold = 5;
+/// let min_read_num_denovo = 5;
 ///
-/// __process_components(components, &accumulator, &counter, &mode, threshold);
+/// __process_components(components, &accumulator, &counter, &mode, min_read_num_denovo);
 /// ```
 fn __process_components(
     components: Vec<Box<dyn BedPackage>>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     mode: &Mode,
-    threshold: usize,
+    min_read_num_denovo: usize,
+    min_discard_percentage: f32,
 ) {
     components.into_par_iter().for_each(|comp| match mode {
         Mode::Guided => {
@@ -278,7 +307,8 @@ fn __process_components(
                 .downcast::<(RefGenePred, Vec<GenePred>)>()
                 .expect("ERROR: Could not downcast to RefGenePred and GenePred!");
 
-            let (keep, orphans) = guided(comp, counter, threshold);
+            let (keep, orphans) =
+                guided(comp, counter, min_read_num_denovo, min_discard_percentage);
             accumulator.add(keep, orphans);
         }
         Mode::DeNovo => {
@@ -287,7 +317,7 @@ fn __process_components(
                 .downcast::<(Vec<GenePred>, Vec<GenePred>)>()
                 .expect("ERROR: Could not downcast to GenePred and GenePred!");
 
-            let (keep, orphans) = self_guided(comp, counter, threshold);
+            let (keep, orphans) = self_guided(comp, counter, min_read_num_denovo);
             accumulator.add(keep, orphans);
         }
     });
@@ -299,7 +329,7 @@ fn __process_components(
 ///
 /// * `components` - The components to process
 /// * `counter` - The counter to use
-/// * `threshold` - The threshold to use
+/// * `min_read_num_denovo` - The min_read_num_denovo to use
 ///
 /// # Returns
 ///
@@ -313,14 +343,15 @@ fn __process_components(
 ///
 /// let components = Box::new((RefGenePred::default(), vec![]));
 /// let counter = ParallelCounter::default();
-/// let threshold = 5;
+/// let min_read_num_denovo = 5;
 ///
-/// let (keep, orphans) = guided(components, &counter, threshold);
+/// let (keep, orphans) = guided(components, &counter, min_read_num_denovo);
 /// ```
 fn guided(
     components: Box<(RefGenePred, Vec<GenePred>)>,
     counter: &ParallelCounter,
-    threshold: usize,
+    min_read_num_denovo: usize,
+    min_discard_percentage: f32,
 ) -> (Vec<String>, Vec<String>) {
     let mut keep = Vec::new();
     let mut orphans = Vec::new();
@@ -357,7 +388,7 @@ fn guided(
         //
         // For a clearer illustration go to HLpteAle1A HAP1_SUPER_1:112,985,006-112,991,219
         // or mm39 chr3:118,192,628-118,376,044 or mm39 chr3:141,166,307-141,389,231
-        do_self_guided_check(&mut reads, counter, threshold);
+        do_self_guided_check(&mut reads, counter, min_read_num_denovo);
     }
 
     // INFO: ask if ANY TOGA is a single-exon
@@ -371,13 +402,16 @@ fn guided(
     ref_exons.extend(toga.middles);
 
     if reads.len() > 1 {
+        let mut discards = 0; // INFO: only in common branch
         reads.sort_by(|a, b| a.exon_len.cmp(&b.exon_len));
 
-        for read in reads {
+        for read in reads.iter() {
             let is_single_exon_read = read.introns.len() == 0;
 
             if is_single_exon_read {
                 if is_toga_single_exon {
+                    counter.inc_read_se_mc_toga_se();
+
                     // CASE: single-exon read(s) with single-exon TOGA refs
                     // INFO: the following case is presented:
                     //
@@ -399,15 +433,14 @@ fn guided(
                             "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA single-exon CDS -> keep!",
                             &read,
                         );
-
                         keep.push(read.line.clone());
                     } else {
                         log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA single-exon CDS -> orphan!", &read);
-
-                        counter.inc_read_se_mc_toga_se();
-                        orphans.push(read.line.clone());
+                        discards += 1;
                     }
                 } else {
+                    counter.inc_read_se_mc_toga_me();
+
                     // INFO: main question: your CDS matches exactly or partially a TOGA CDS?
                     // CASE: single-exon fuzzy overlap with TOGA CDS
                     // INFO: the following case is presented:
@@ -430,16 +463,19 @@ fn guided(
                             "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA multi-exon CDS -> keep!",
                             &read,
                         );
-
                         keep.push(read.line.clone());
                     } else {
-                        log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA multi-exon CDS -> orphan!", &read);
-
-                        counter.inc_read_se_mc_toga_me();
-                        orphans.push(read.line.clone());
+                        log::debug!("INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA multi-exon CDS -> orphan!", &read);
+                        discards += 1;
                     }
                 }
             } else {
+                if is_toga_single_exon {
+                    counter.inc_read_me_mc_toga_se();
+                } else {
+                    counter.inc_read_me_mc_toga_me();
+                }
+
                 // INFO: means CDS TOGA overlap and not single-exon
                 // INFO: branch where most of the cases will be in
                 // INFO: could present the following case:
@@ -470,6 +506,7 @@ fn guided(
                 //
                 // For a clearer illustration go to mm39 chr3:65,435,178-65,440,499
 
+                // WARN: not making is_toga_single_exon check because it is not needed
                 let mut matches = 0;
                 for read_exon in read.exons.iter() {
                     if ref_exons.contains(&read_exon) {
@@ -488,20 +525,65 @@ fn guided(
                 }
 
                 if matches <= 1 {
+                    discards += 1;
+
                     log::debug!(
-                        "DEBUG: read {:?} multi-exon in a mult-read component has less than 1 exact CDS matches -> orphan!",
+                        "DEBUG: read {:?} multi-exon in a mult-read component has less than 1 exact CDS matches -> increase discards!",
+                        &read
+                    );
+                    discards += 1;
+                }
+            }
+        }
+
+        // INFO: if we are discarding more than 50% of reads, perform splice site matching
+        if (discards as f32) / reads.len() as f32 >= min_discard_percentage {
+            counter.inc_component_above_discards();
+
+            let ref_exons_flat: BTreeSet<u64> =
+                ref_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
+
+            for read in reads.iter() {
+                let is_splice_match = read.exons.iter().any(|(exon_start, exon_end)| {
+                    ref_exons_flat.contains(exon_start) || ref_exons_flat.contains(exon_end)
+                });
+
+                if is_splice_match {
+                    log::debug!(
+                        "DEBUG: read {:?} from any category that was being discarded has at least 1 splice site match with reference -> rescue!",
                         &read
                     );
 
-                    counter.inc_read_me_mc_toga_se();
-                    orphans.push(read.line);
+                    counter.inc_rescue();
+                    if !keep.contains(&read.line) {
+                        keep.push(read.line.clone());
+                    }
+                } else {
+                    log::debug!(
+                        "DEBUG: read {:?} multi-exon in a mult-read component has no splice site matches with reference -> orphan confirmed!",
+                        &read
+                    );
+                    counter.inc_read_no_splice_match();
+
+                    if !orphans.contains(&read.line) {
+                        orphans.push(read.line.clone());
+                    }
+                }
+            }
+        } else {
+            // INFO: likely real drop
+            for read in reads.iter() {
+                if !orphans.contains(&read.line) && !keep.contains(&read.line) {
+                    orphans.push(read.line.clone());
+                    counter.inc_read_no_splice_match();
                 }
             }
         }
     } else {
         if reads.is_empty() {
             // INFO: TOGA projection without reads
-            log::debug!("DEBUG: TOGA projection without reads -> {:?}", toga.reads);
+            let projections = toga.reads.iter().map(|p| &p.name).collect::<Vec<&String>>();
+            log::trace!("DEBUG: TOGA projection without reads -> {:?}", projections);
         }
 
         // INFO: weird case of TOGA-single-exon and single-read component
@@ -510,6 +592,8 @@ fn guided(
                 let is_single_exon_read = read.introns.len() == 0;
 
                 if is_single_exon_read {
+                    counter.inc_read_se_sc_toga_se();
+
                     // INFO: CDS must matche once
                     // INFO: branch -> CDS-overlap with TOGA but single-read component
                     //
@@ -538,11 +622,11 @@ fn guided(
                             "DEBUG: read: {:?} single-exon and does not match exactly with TOGA single-exon -> orphan!",
                             &read,
                         );
-
-                        counter.inc_read_se_sc_toga_se();
                         orphans.push(read.line.clone());
                     }
                 } else {
+                    counter.inc_read_me_sc_toga_se();
+
                     // INFO: TOGA-single-exon CDS overlap with multi-exon single-read component
                     // INFO: at least one splice site should match
                     //
@@ -578,7 +662,6 @@ fn guided(
                             &read,
                         );
 
-                        counter.inc_read_me_sc_toga_se();
                         orphans.push(read.line.clone());
                     }
                 }
@@ -591,6 +674,8 @@ fn guided(
                 let is_single_exon_read = read.introns.len() == 0;
 
                 if is_single_exon_read {
+                    counter.inc_read_se_sc_toga_me();
+
                     // CASE: single-exon read component with multi-exon TOGA refs
                     // INFO: the following case is presented:
                     //
@@ -612,18 +697,17 @@ fn guided(
                             "DEBUG: read: {:?} single-exon in single-read component and match exactly with TOGA multi-exon -> keep!",
                             &read,
                         );
-
                         keep.push(read.line.clone());
                     } else {
                         log::debug!(
                             "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with TOGA multi-exon -> orphan!",
                             &read,
                         );
-
-                        counter.inc_read_se_sc_toga_me();
                         orphans.push(read.line.clone());
                     }
                 } else {
+                    counter.inc_read_me_sc_toga_me();
+
                     // CASE: multi-exon single-read component with multi-exon TOGA refs
                     //
                     // Here, we ask for at least one specific exon match otherwise would be hard
@@ -642,8 +726,6 @@ fn guided(
                                     "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with TOGA multi-exon -> orphan!",
                                     &read,
                                 );
-
-                        counter.inc_read_me_sc_toga_me();
                         orphans.push(read.line.clone());
                     }
                 }
@@ -660,7 +742,7 @@ fn guided(
 ///
 /// * `components` - The components to process
 /// * `counter` - The counter to use
-/// * `threshold` - The threshold to use
+/// * `min_read_num_denovo` - The min_read_num_denovo to use
 ///
 /// # Returns
 ///
@@ -674,17 +756,17 @@ fn guided(
 ///
 /// let components = Box::new((vec![], vec![]));
 /// let counter = ParallelCounter::default();
-/// let threshold = 5;
+/// let min_read_num_denovo = 5;
 ///
-/// let (keep, orphans) = self_guided(components, &counter, threshold);
+/// let (keep, orphans) = self_guided(components, &counter, min_read_num_denovo);
 /// ```
 fn self_guided(
     components: Box<(Vec<GenePred>, Vec<GenePred>)>,
     counter: &ParallelCounter,
-    threshold: usize,
+    min_read_num_denovo: usize,
 ) -> (Vec<String>, Vec<String>) {
     let mut reads = components.0;
-    do_self_guided_check(&mut reads, counter, threshold)
+    do_self_guided_check(&mut reads, counter, min_read_num_denovo)
 }
 
 /// Self-guided mode executor
@@ -693,7 +775,7 @@ fn self_guided(
 ///
 /// * `reads` - The reads to process
 /// * `counter` - The counter to use
-/// * `threshold` - The threshold to use
+/// * `min_read_num_denovo` - The min_read_num_denovo to use
 ///
 /// # Returns
 ///
@@ -707,14 +789,14 @@ fn self_guided(
 ///
 /// let reads = vec![];
 /// let counter = ParallelCounter::default();
-/// let threshold = 5;
+/// let min_read_num_denovo = 5;
 ///
-/// let (keep, orphans) = do_self_guided_check(&mut reads, &counter, threshold);
+/// let (keep, orphans) = do_self_guided_check(&mut reads, &counter, min_read_num_denovo);
 /// ```
 fn do_self_guided_check(
     reads: &mut Vec<GenePred>,
     counter: &ParallelCounter,
-    threshold: usize,
+    min_read_num_denovo: usize,
 ) -> (Vec<String>, Vec<String>) {
     let mut keep = Vec::new();
     let mut orphans = Vec::new();
@@ -752,7 +834,7 @@ fn do_self_guided_check(
     //
     // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769
     if is_single_component_read {
-        log::debug!(
+        log::trace!(
             "DEBUG: single-component single-exon read with no TOGA refs -> {:?} -> orphan!",
             reads
         );
@@ -768,23 +850,23 @@ fn do_self_guided_check(
     // CASE: multi-exon components
     // INFO: the following case is presented:
     //
-    // [PARTIALLY SOLVED: threshold]
+    // [PARTIALLY SOLVED: min_read_num_denovo]
     // toga:  XX-----------XXX--XX---XXXX
     // read1:    xxXXXXxx
     // read2:    xxxxXXXxx
     // read3: XX-----------XXX--XX---XXXX
     //
     // Here, read1 and read2 overlap and form a unique non-TOGA component
-    // with more than 1 read. Even though a threshold would be too relative
+    // with more than 1 read. Even though a min_read_num_denovo would be too relative
     // to label a component as background transcription, we force any isolated
     // component to have more than 5 reads.
     //
     // For a clearer illustration go to mm39 chr3:97,596,920-97,624,824
     // or mm39 chr3:103,646,891-103,652,710
-    if reads.len() < threshold {
+    if reads.len() < min_read_num_denovo {
         log::debug!(
-            "DEBUG: component with less than {} reads threshold -> {:?} -> orphan!",
-            threshold,
+            "DEBUG: component with less than {} reads min_read_num_denovo -> {:?} -> orphan!",
+            min_read_num_denovo,
             reads
         );
         counter.inc_component_less_than_threshold();
