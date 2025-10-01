@@ -34,16 +34,16 @@
 //! ```
 
 use clap::{self, Parser};
-use log::{info, Level};
+use log::info;
 use simple_logger::init_with_level;
 
 use iso_orphan::{cli::Args, core::__detect_orphans};
 
 fn main() {
     let start = std::time::Instant::now();
-    init_with_level(Level::Info).unwrap();
 
     let args: Args = Args::parse();
+    init_with_level(args.level).unwrap();
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
