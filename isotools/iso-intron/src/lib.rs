@@ -21,8 +21,6 @@ pub mod utils;
 
 pub fn lib_iso_intron(args: Arc<Vec<String>>) -> DashMap<String, Box<dyn ModuleMap>> {
     let args = cli::Args::from(args);
-    let descriptor = crate::core::detect_intron_retentions(args)
-        .expect("ERROR: Failed to detect intron retentions");
-
-    return descriptor;
+    crate::core::detect_intron_retentions(args)
+        .unwrap_or_else(|e| panic!("ERROR: Failed to detect intron retentions -> {e}"))
 }

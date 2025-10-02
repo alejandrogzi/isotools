@@ -98,7 +98,7 @@ impl ArgCheck for Args {
 
 impl Args {
     pub fn from(args: Arc<Vec<String>>) -> Self {
-        let drop = vec!["--toga", "--aparent", "--bigwig", "--twobit"];
+        let drop = ["--toga", "--aparent", "--bigwig", "--twobit"];
 
         let mut local_args = Vec::new();
         let mut iter = args.iter().peekable();

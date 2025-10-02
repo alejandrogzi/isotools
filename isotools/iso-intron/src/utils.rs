@@ -298,7 +298,7 @@ impl ParallelAccumulator {
 ///
 /// assert!(result.is_some());
 /// ```
-pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
+pub fn unpack_blacklist(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
     if paths.is_empty() {
         return None;
     }

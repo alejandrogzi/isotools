@@ -12,7 +12,6 @@
 //! parallelized to offer fast performance on large datasets.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -89,7 +88,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<DashMap<String, Box<dyn Mo
 
         write_descriptor(&accumulator.descriptor, INTRON_RETENTION_DESCRIPTOR);
 
-        let prefix = args.prefix.clone().unwrap_or_else(PathBuf::new);
+        let prefix = args.prefix.clone().unwrap_or_default();
 
         par_write_results(
             &accumulator,
@@ -304,11 +303,9 @@ pub fn process_component(
             .ok();
     });
 
-    if recover {
-        if ratio > RETENTION_RATIO_THRESHOLD {
-            let review = recover_component(&mut keep, &mut discard, reads, &mut descriptor);
-            return (keep, discard, Some(review), descriptor);
-        }
+    if recover && ratio > RETENTION_RATIO_THRESHOLD {
+        let review = recover_component(&mut keep, &mut discard, reads, &mut descriptor);
+        return (keep, discard, Some(review), descriptor);
     }
 
     (keep, discard, None, descriptor)
@@ -365,7 +362,7 @@ fn recover_component(
             .ok();
     });
 
-    return review;
+    review
 }
 
 /// RetentionSchema struct
@@ -757,7 +754,6 @@ fn detect_retention(
 
                         match stats.stats.intron_position {
                             IntronPosition::CDS => {
-                                // INFO: if intron in frame keep read --> splice variant producing a longer protein
                                 // INFO: else do not annotate read (exon structure is flawed)
                                 if !stats.stats.is_in_frame {
                                     if stats.stats.support == config::SupportType::Unclear {
@@ -771,6 +767,12 @@ fn detect_retention(
                                         must_discard = true;
                                         action = IntronModuleReadAction::Discard;
                                     }
+                                }
+                                // DEPRECATED: if intron in frame keep read --> splice variant producing a longer protein
+                                else {
+                                    // INFO: if intron is in frame -> clearly retaining a true intron
+                                    // INFO: for a clearer example see mm39 chr11:3,198,396-3,217,905
+                                    action = IntronModuleReadAction::Discard; // INFO: will solve some bugs
                                 }
 
                                 schema
