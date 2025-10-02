@@ -158,6 +158,7 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
             &genome,
             &accumulator,
             args.nag,
+            args.rt_freq_threshold,
         );
 
         pb.inc(1);
@@ -211,6 +212,7 @@ impl Default for ParallelAccumulator {
 /// distribute(components, banned, &splice_map, &scan_scores, &genome, &accumulator, nag);
 /// ```
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn distribute(
     components: Vec<Box<dyn BedPackage>>,
     banned: &HashSet<(u64, u64)>,
@@ -219,6 +221,7 @@ fn distribute(
     genome: &Option<Genome>,
     accumulator: &ParallelAccumulator,
     nag: bool,
+    rt_frequency_threshold: f64,
 ) {
     components.into_par_iter().for_each(|mut comp| {
         let comp = comp
@@ -226,7 +229,15 @@ fn distribute(
             .downcast_mut::<IntronBucket>()
             .expect("ERROR: Could not downcast to IntronPred!");
 
-        let info = process_component(comp, banned, splice_map, scan_scores, genome, nag);
+        let info = process_component(
+            comp,
+            banned,
+            splice_map,
+            scan_scores,
+            genome,
+            nag,
+            rt_frequency_threshold,
+        );
 
         info.into_iter().for_each(|(_, intron_descriptor)| {
             if !intron_descriptor.is_empty() {
@@ -254,7 +265,7 @@ fn distribute(
 /// # Returns
 ///
 /// * A `HashMap<(u64, u64), String>`
-///     where the key is the intron coordinates and the value is a formatted string of its classification descriptor.
+///   where the key is the intron coordinates and the value is a formatted string of its classification descriptor.
 ///
 /// # Example
 ///
@@ -262,6 +273,8 @@ fn distribute(
 /// let classified_introns = process_component(&mut component, &banned, &splice_map, &scan_scores, &genome, nag);
 /// ```
 #[inline(always)]
+#[allow(clippy::collapsible_else_if)]
+#[allow(clippy::if_same_then_else)]
 fn process_component(
     component: &mut IntronBucket,
     banned: &HashSet<(u64, u64)>,
@@ -269,6 +282,7 @@ fn process_component(
     scan_scores: &ScanScores,
     genome: &Option<Genome>,
     nag: bool,
+    rt_frequency_threshold: f64,
 ) -> HashMap<(u64, u64), String> {
     let chr = component.chrom.clone();
     let strand = component.strand.clone();
@@ -286,8 +300,8 @@ fn process_component(
     };
 
     for (intron, descriptor) in component.introns.iter_mut() {
-        let intron_start = intron.0 as u64;
-        let intron_end = intron.1 as u64;
+        let intron_start = intron.0;
+        let intron_end = intron.1;
 
         if banned.contains(&(intron_start, intron_end)) {
             continue;
@@ -325,7 +339,13 @@ fn process_component(
                     descriptor.support = SupportType::Splicing;
                 }
             } else {
-                descriptor.support = SupportType::RT;
+                // INFO: if we see that RT intron in more than args.rt_freq_threshold we assume
+                // its likely something real -> Unclear
+                if (descriptor.seen as f64 / descriptor.spanned as f64) >= rt_frequency_threshold {
+                    descriptor.support = SupportType::Unclear;
+                } else {
+                    descriptor.support = SupportType::RT;
+                }
             }
         } else {
             if descriptor.is_toga_supported
@@ -405,8 +425,8 @@ fn get_sj_context(
     genome: &Option<Genome>,
     scan_scores: &ScanScores,
 ) {
-    let intron_start = intron.0 as u64;
-    let intron_end = intron.1 as u64;
+    let intron_start = intron.0;
+    let intron_end = intron.1;
 
     if let Some(genome) = genome {
         match strand {
@@ -510,7 +530,7 @@ fn get_sj_max_entropy(descriptor: &mut IntronPredStats, scan_scores: &ScanScores
 
         let donor_score = donor_score_map
             .get(donor_max_ent_context)
-            .and_then(|r| r.get(0))
+            .and_then(|r| r.first())
             .unwrap_or(&0.0);
 
         descriptor.max_ent_donor = *donor_score as f32;
@@ -546,8 +566,8 @@ fn get_sj_ai_scores(
     splice_scores: Option<&SharedSpliceMap>,
     strand: &Strand,
 ) {
-    let intron_start = intron.0 as u64;
-    let intron_end = intron.1 as u64;
+    let intron_start = intron.0;
+    let intron_end = intron.1;
 
     if let Some(splice_scores) = splice_scores {
         if let Some(donor_score_map) = splice_scores.0.as_ref() {
@@ -609,6 +629,7 @@ fn get_sj_ai_scores(
 /// ```rust, ignore
 /// let nag_descriptor = process_nag_pattern(&intron, -3, &strand, &chr, &genome, &scan_scores, splice_scores);
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn process_nag_pattern(
     base_intron: &(u64, u64),
     offset: i64,
@@ -619,7 +640,7 @@ fn process_nag_pattern(
     splice_scores: Option<&SharedSpliceMap>,
     acc: &mut HashMap<(u64, u64), String>,
 ) {
-    let intron = (base_intron.0 as u64, (base_intron.1 as i64 + offset) as u64);
+    let intron = (base_intron.0, (base_intron.1 as i64 + offset) as u64);
 
     let (scaled_intron_start, scaled_intron_end) = match strand {
         Strand::Forward => intron,
@@ -697,6 +718,7 @@ fn process_nag_pattern(
 /// ```rust, ignore
 /// scan_nag_repeats(&intron, &mut descriptor, &strand, &chr, &genome, &scan_scores, splice_scores, &mut acc);
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn scan_nag_repeats(
     intron: &(u64, u64),
     descriptor: &mut IntronPredStats,
@@ -905,8 +927,8 @@ fn wiggle_splice_sites(
         process_intron(
             acc,
             ref_introns,
-            intron.0 as u64 - wiggle as u64,
-            intron.1 as u64 - wiggle as u64,
+            intron.0 - wiggle as u64,
+            intron.1 - wiggle as u64,
             strand,
         );
 
@@ -914,8 +936,8 @@ fn wiggle_splice_sites(
         process_intron(
             acc,
             ref_introns,
-            intron.0 as u64 + wiggle as u64,
-            intron.1 as u64 + wiggle as u64,
+            intron.0 + wiggle as u64,
+            intron.1 + wiggle as u64,
             strand,
         );
     }

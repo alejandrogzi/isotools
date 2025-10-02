@@ -147,6 +147,17 @@ pub struct IntronArgs {
     pub nag: bool,
 
     #[arg(
+        long = "rt_freq_threshold",
+        required = false,
+        value_name = "FLOAT",
+        num_args = 1,
+        help = "RT intron frequency threshold",
+        default_value_t = 0.5,
+        default_missing_value("0.5")
+    )]
+    pub rt_freq_threshold: f64,
+
+    #[arg(
         long = "outdir",
         required = false,
         value_name = "PATH",

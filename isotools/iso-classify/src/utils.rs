@@ -108,7 +108,7 @@ pub fn make_splice_map<T: AsRef<std::path::Path> + std::fmt::Debug>(
 /// ```
 fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
     bigwigs: Vec<T>,
-    chrs: &Vec<String>,
+    chrs: &[String],
 ) -> Vec<DashMap<String, DashMap<usize, f32>>> {
     let total_count = AtomicU32::new(0);
     let rs = Mutex::new(vec![DashMap::new(), DashMap::new()]);
@@ -120,7 +120,7 @@ fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
         .for_each(|(bigwig, site)| {
             let acc = DashMap::new();
 
-            let bwread = BigWigRead::open_file(&bigwig).expect("ERROR: Cannot open BigWig file");
+            let bwread = BigWigRead::open_file(bigwig).expect("ERROR: Cannot open BigWig file");
             let chroms: Vec<_> = bwread.chroms().to_vec();
 
             chroms.into_par_iter().for_each(|chr| {
@@ -228,7 +228,7 @@ pub fn create_splice_map(
     let get_splice_values = |splices: &[DashMap<String, DashMap<usize, f32>>]| {
         (
             splices
-                .get(0)
+                .first()
                 .and_then(|s| s.get(chr).map(|v| v.value().clone())),
             splices
                 .get(1)
@@ -260,7 +260,7 @@ pub fn create_splice_map(
 /// ```rust,ignore
 /// let blacklist = unpack_blacklist(paths).unwrap_or_default();
 /// ```
-pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
+pub fn unpack_blacklist(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
     if paths.is_empty() {
         return None;
     }
@@ -403,26 +403,20 @@ where
         .par_lines()
         .filter(|row| !row.starts_with("#"))
         .filter_map(|row| K::parse(row).ok())
-        .fold(
-            || HashMap::new(),
-            |mut acc: SpliceScoreMap, splice_site| {
-                let entry = acc.entry(splice_site.get_sequence()).or_default();
-                entry.extend(splice_site.get_scores());
+        .fold(HashMap::new, |mut acc: SpliceScoreMap, splice_site| {
+            let entry = acc.entry(splice_site.get_sequence()).or_default();
+            entry.extend(splice_site.get_scores());
 
-                pb.inc(1);
-                acc
-            },
-        )
-        .reduce(
-            || HashMap::new(),
-            |mut acc, map| {
-                for (k, v) in map {
-                    let acc_v = acc.entry(k).or_insert(Vec::new());
-                    acc_v.extend(v);
-                }
-                acc
-            },
-        );
+            pb.inc(1);
+            acc
+        })
+        .reduce(HashMap::new, |mut acc, map| {
+            for (k, v) in map {
+                let acc_v = acc.entry(k).or_insert(Vec::new());
+                acc_v.extend(v);
+            }
+            acc
+        });
 
     pb.finish_and_clear();
     info!("Records parsed: {}", tracks.values().flatten().count());
@@ -448,15 +442,19 @@ pub fn load_scan_scores() -> Option<(SpliceScoreMap, SpliceScoreMap)> {
     let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CLASSIFY_ASSETS);
 
     let acceptor_scores = parse_tsv::<AcceptorScores>(
-        reader(assets.join(MAXENTSCAN_ACCEPTOR_DB)).expect(
-            format!(
+        reader(assets.join(MAXENTSCAN_ACCEPTOR_DB)).unwrap_or_else(|_| {
+            panic!(
                 "ERROR: Cannot read acceptor scores from {:?}!",
                 assets.join(MAXENTSCAN_ACCEPTOR_DB)
             )
-            .as_str(),
-        ),
+        }),
     )
-    .expect("ERROR: Could not parse acceptor scores!");
+    .unwrap_or_else(|e| {
+        panic!(
+            "ERROR: Could not parse acceptor scores from {:?}! -> {e}",
+            assets.join(MAXENTSCAN_ACCEPTOR_DB)
+        )
+    });
 
     let donor_scores = parse_tsv::<DonorScores>(
         reader(assets.join(MAXENTSCAN_DONOR_DB)).expect("ERROR: Cannot read donor scores!"),
@@ -562,8 +560,8 @@ pub fn score_max_ent(seq: &Sequence, tables: &SpliceScoreMap) -> f64 {
     let seq = seq.skip(18, 20);
 
     let binding = vec![0.0];
-    let scores = vec![
-        tables.get(&seq.slice(0, 7)).unwrap_or(&binding).get(0),
+    let scores = [
+        tables.get(&seq.slice(0, 7)).unwrap_or(&binding).first(),
         tables.get(&seq.slice(7, 14)).unwrap_or(&binding).get(1),
         tables.get(&seq.slice(14, 21)).unwrap_or(&binding).get(2),
         tables.get(&seq.slice(4, 11)).unwrap_or(&binding).get(3),
@@ -589,9 +587,7 @@ pub fn score_max_ent(seq: &Sequence, tables: &SpliceScoreMap) -> f64 {
     let num: f64 = scores[..5].iter().map(|s| s.unwrap_or(&0.0)).product();
     let den: f64 = scores[5..].iter().map(|s| s.unwrap_or(&0.0)).product();
 
-    let me_score = num / den;
-
-    me_score
+    num / den
 }
 
 /// Calculates the consensus sequence score for an acceptor splice site.
@@ -674,7 +670,7 @@ mod tests {
             .0
             .get(&seq)
             .expect("ERROR: Could not get donor scores!")
-            .get(0)
+            .first()
             .expect("ERROR: Could not get donor scores!");
 
         assert_eq!(score, &0.192);
