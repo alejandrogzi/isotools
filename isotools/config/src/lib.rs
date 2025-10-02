@@ -277,7 +277,7 @@ pub trait TsvParser {
 ///   }
 /// }
 ///
-/// fn main() {
+/// fn test() {
 ///   let accumulator = ParallelAccumulator {
 ///     retentions: vec!["item1".to_string()],
 ///     non_retentions: vec!["item2".to_string()],
@@ -1028,6 +1028,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.to_string(), String::from("ATCG"));
     /// ```
+    #[allow(clippy::inherent_to_string_shadow_display)]
     pub fn to_string(&self) -> String {
         self.seq.clone()
     }

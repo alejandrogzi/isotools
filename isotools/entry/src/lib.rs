@@ -39,10 +39,12 @@ pub fn lib(mut args: Vec<String>) {
 
     // WARN: will expect to always have outdir as last argument [ last 2 ]
     // INFO: fmt -> '[--arg1, <VALUE>, --arg2, <VALUE>]'
-    let outdir = args.pop().expect(&format!(
-        "ERROR: Missing output directory argument, you had: {:?}",
-        args
-    ));
+    let outdir = args.pop().unwrap_or_else(|| {
+        panic!(
+            "ERROR: Missing output directory argument, you had: {:?}",
+            args
+        )
+    });
     let mut args = args[..args.len() - 1].to_vec(); // INFO: dropping --outdir
 
     args.extend(vec![
@@ -68,8 +70,6 @@ pub fn lib(mut args: Vec<String>) {
         &global_descriptor,
         format!("{}/{}", outdir, GLOBAL_DESCRIPTOR).as_str(),
     );
-
-    // descriptor_to_bed(global_descriptor, outdir, args[1].clone());
 }
 
 /// Check if all required arguments are present
@@ -97,7 +97,7 @@ pub fn lib(mut args: Vec<String>) {
 ///
 /// lib::lib(args);
 /// ```
-fn __check_args(args: &Vec<String>) {
+fn __check_args(args: &[String]) {
     for key in KEYS.iter() {
         if !args.contains(&key.to_string()) {
             log::error!("Missing required argument: {}", key);
