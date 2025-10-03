@@ -373,6 +373,15 @@ pub struct SegmentArgs {
         default_value("")
     )]
     pub batch: String,
+
+    #[arg(
+        short = 'S',
+        long = "singleton",
+        help = "Flag to add singleton (SG) tag to read",
+        value_name = "FLAG",
+        action = ArgAction::SetTrue,
+    )]
+    pub singleton: bool,
 }
 
 impl SegmentArgs {

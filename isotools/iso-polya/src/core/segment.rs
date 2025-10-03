@@ -57,7 +57,15 @@ pub fn segment(args: SegmentArgs) -> Result<(), String> {
             .for_each(|result| match result {
                 Ok(record) => {
                     track += 1;
-                    process_record(record, &header, track, chr, &args, &accumulator);
+                    process_record(
+                        record,
+                        &header,
+                        track,
+                        chr,
+                        &args,
+                        &accumulator,
+                        args.singleton,
+                    );
                 }
                 Err(_) => {}
             });
@@ -321,6 +329,7 @@ fn process_record(
     chr: &String,
     args: &SegmentArgs,
     accumulator: &ParallelAccumulator,
+    singleton: bool,
 ) {
     let mut read = Read::from(&record);
 
@@ -332,11 +341,9 @@ fn process_record(
 
     let hmm = HMM::init(args.p2p, args.emit_a);
 
-    if read.three_clip > 0 {
-        if !read.has_hard_clip_three {
-            let clipped_seq = read.get_rev_clipped_seq_sized();
-            read.set_polya_len(predict_tail(clipped_seq, &hmm));
-        }
+    if read.three_clip > 0 && !read.has_hard_clip_three {
+        let clipped_seq = read.get_rev_clipped_seq_sized();
+        read.set_polya_len(predict_tail(clipped_seq, &hmm));
     }
 
     if args.tail_suffix > 0 {
@@ -357,7 +364,7 @@ fn process_record(
         .unwrap_or_else(|err| panic!("ERROR: failed to convert record: {err:?}"));
 
     if args.tag {
-        *record.name_mut() = Some(read.tag_read(track, chr, &args.batch).into());
+        *record.name_mut() = Some(read.tag_read(track, chr, &args.batch, singleton).into());
     }
 
     if read.identity >= args.identity
@@ -656,6 +663,7 @@ fn predict_tail(sequence: Vec<usize>, hmm: &HMM) -> usize {
 ///
 /// assert_eq!(polya_len, 5);
 /// ```
+#[allow(clippy::upper_case_acronyms)]
 struct HMM {
     model: Model,
 }
@@ -1340,8 +1348,8 @@ impl Read {
     ///
     /// assert_eq!(read.name, "R1_chr1::FC5:TC24:PA45:PR65:IY98");
     /// ```
-    fn tag_read(&self, index: u64, chr: &String, batch: &String) -> String {
-        format!(
+    fn tag_read(&self, index: u64, chr: &String, batch: &String, singleton: bool) -> String {
+        let mut name = format!(
             "R{}{}_{chr}{BIG_SEP}FC{}{SEP}TC{}{SEP}PA{}{SEP}PR{}{SEP}IY{}",
             index,
             batch,
@@ -1350,6 +1358,12 @@ impl Read {
             self.polya_len,
             self.polya_read_len,
             (self.identity * 10.0) as u64
-        )
+        );
+
+        if singleton {
+            name = format!("{name}{SEP}SG");
+        }
+
+        name
     }
 }
