@@ -190,6 +190,7 @@ fn make_buckets(
 /// assert_eq!(accumulator.num_retentions(), 0);
 /// assert_eq!(counter.num_components(), 0);
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn process_components(
     components: Vec<Box<dyn BedPackage>>,
     banned: &HashSet<String>,
@@ -599,7 +600,7 @@ fn process_component(
 
     if recover {
         // INFO: if the fusion ratio in the component is above the threshold,
-        // INFO: mark all queries as dirty and submit them for revie
+        // INFO: mark all queries as dirty and submit them for review
         if counter.get_real_ratio() >= FUSION_RATIO_THRESHOLD {
             let review = recover_component(&mut queries, &mut descriptor);
             return Some((vec![], vec![], vec![], Some(review), descriptor, true));
@@ -631,7 +632,7 @@ fn process_component(
 /// assert_eq!(review, vec!["line1"]);
 /// ```
 fn recover_component(
-    queries: &mut Vec<GenePred>,
+    queries: &mut [GenePred],
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
 ) -> Vec<String> {
     let mut review = vec![];
@@ -684,7 +685,7 @@ fn recover_component(
 /// assert_eq!(descriptor.len(), 1);
 /// ```
 fn fill_schema(
-    reads: &Vec<GenePred>,
+    reads: &[GenePred],
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
     no_fusions: &mut Vec<String>,
     genes: usize,
@@ -781,9 +782,10 @@ fn fill_schema(
 /// assert_eq!(fusions.len(), 0);
 /// assert_eq!(fake_fusions.len(), 0);
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn identify_fusions(
     refs: &RefGenePred,
-    reads: &mut Vec<GenePred>,
+    reads: &mut [GenePred],
     descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
     counter: &mut LocalCounter,
     no_fusions: &mut Vec<String>,
@@ -799,8 +801,8 @@ fn identify_fusions(
     let ref_exons = refs.smash_exons_by_name();
     let ref_introns = refs.smash_introns_by_name();
 
-    let color = colorize.unwrap_or(String::new());
-    let suffix = suffix.unwrap_or(String::new());
+    let color = colorize.unwrap_or_default();
+    let suffix = suffix.unwrap_or_default();
 
     reads.iter_mut().for_each(|query| {
         if banned.contains(&query.name) {
