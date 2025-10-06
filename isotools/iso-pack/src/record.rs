@@ -193,24 +193,24 @@ impl GenePred {
         match self.strand {
             Strand::Forward => {
                 assert!(
-                    cds_start > self.start,
+                    cds_start >= self.start,
                     "ERROR: {cds_start} is less than {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
                     self.start
                 );
                 assert!(
-                    cds_end < self.end,
+                    cds_end <= self.end,
                     "ERROR: {cds_end} is greater than {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
                     self.end
                 );
             }
             Strand::Reverse => {
                 assert!(
-                    cds_start > SCALE - self.end,
+                    cds_start >= SCALE - self.end,
                     "ERROR: cds_start = {cds_start} is less than tx_start = {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
                     SCALE - self.end
                 );
                 assert!(
-                    cds_end < SCALE - self.start,
+                    cds_end <= SCALE - self.start,
                     "ERROR: cds_end = {cds_end} is greater than tx_end = {}! Mapped ORF values {orf_start} - {orf_end} -> {self:?}",
                     SCALE - self.start
                 );
