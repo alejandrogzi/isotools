@@ -1453,12 +1453,20 @@ impl Sequence {
             let amino_acid = Self::translate_codon(codon);
 
             if amino_acid == "X" {
-                panic!(
+                log::warn!(
+                    "WARN: codon -> {:?} is not a valid codon, sequence out-of-frame!",
+                    std::str::from_utf8(codon).unwrap(),
+                );
+
+                log::debug!(
                     "ERROR: codon -> {:?} is not a valid codon from sequence -> {:?}!",
                     std::str::from_utf8(codon).unwrap(),
                     self.seq
                 );
+
+                continue;
             }
+
             aa.push_str(amino_acid);
         }
 
