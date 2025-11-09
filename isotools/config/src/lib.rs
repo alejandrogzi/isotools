@@ -1446,7 +1446,7 @@ impl Sequence {
     ///
     /// let aa = translate(&sequence);
     /// ```
-    fn translate(&self) -> String {
+    pub fn translate(&self) -> String {
         let mut aa = String::new();
 
         for codon in self.as_bytes().chunks(3) {
@@ -1487,7 +1487,7 @@ impl Sequence {
     ///
     /// let amino_acid = translate_codon(codon);
     /// ```
-    fn translate_codon(codon: &[u8]) -> &'static str {
+    pub fn translate_codon(codon: &[u8]) -> &'static str {
         for (table_codon, amino_acid) in &CODON_TABLE {
             if codon == *table_codon {
                 return amino_acid;
