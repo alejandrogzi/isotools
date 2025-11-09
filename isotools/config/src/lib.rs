@@ -117,6 +117,94 @@ pub const COMPLEMENT: [u8; 128] = {
     nt
 };
 
+pub const CODON_TABLE: [(&[u8], &str); 64] = [
+    // Phenylalanine (F)
+    (b"TTT", "F"),
+    (b"TTC", "F"),
+    // Leucine (L)
+    (b"TTA", "L"),
+    (b"TTG", "L"),
+    (b"CTA", "L"),
+    (b"CTC", "L"),
+    (b"CTG", "L"),
+    (b"CTT", "L"),
+    // Isoleucine (I)
+    (b"ATT", "I"),
+    (b"ATC", "I"),
+    (b"ATA", "I"),
+    // Methionine (M) - Start codon
+    (b"ATG", "M"),
+    // Valine (V)
+    (b"GTA", "V"),
+    (b"GTC", "V"),
+    (b"GTG", "V"),
+    (b"GTT", "V"),
+    // Serine (S)
+    (b"TCA", "S"),
+    (b"TCC", "S"),
+    (b"TCG", "S"),
+    (b"TCT", "S"),
+    (b"AGT", "S"),
+    (b"AGC", "S"),
+    // Proline (P)
+    (b"CCA", "P"),
+    (b"CCC", "P"),
+    (b"CCG", "P"),
+    (b"CCT", "P"),
+    // Threonine (T)
+    (b"ACA", "T"),
+    (b"ACC", "T"),
+    (b"ACG", "T"),
+    (b"ACT", "T"),
+    // Alanine (A)
+    (b"GCA", "A"),
+    (b"GCC", "A"),
+    (b"GCG", "A"),
+    (b"GCT", "A"),
+    // Tyrosine (Y)
+    (b"TAT", "Y"),
+    (b"TAC", "Y"),
+    // Stop codons (*)
+    (b"TAA", "*"),
+    (b"TAG", "*"),
+    (b"TGA", "*"),
+    // Histidine (H)
+    (b"CAT", "H"),
+    (b"CAC", "H"),
+    // Glutamine (Q)
+    (b"CAA", "Q"),
+    (b"CAG", "Q"),
+    // Asparagine (N)
+    (b"AAT", "N"),
+    (b"AAC", "N"),
+    // Lysine (K)
+    (b"AAA", "K"),
+    (b"AAG", "K"),
+    // Aspartic acid (D)
+    (b"GAT", "D"),
+    (b"GAC", "D"),
+    // Glutamic acid (E)
+    (b"GAA", "E"),
+    (b"GAG", "E"),
+    // Cysteine (C)
+    (b"TGT", "C"),
+    (b"TGC", "C"),
+    // Tryptophan (W)
+    (b"TGG", "W"),
+    // Arginine (R)
+    (b"CGA", "R"),
+    (b"CGC", "R"),
+    (b"CGG", "R"),
+    (b"CGT", "R"),
+    (b"AGA", "R"),
+    (b"AGG", "R"),
+    // Glycine (G)
+    (b"GGA", "G"),
+    (b"GGC", "G"),
+    (b"GGG", "G"),
+    (b"GGT", "G"),
+];
+
 pub const BGD: [f64; 128] = {
     let mut bgd = [0.0; 128];
     bgd[b'A' as usize] = 0.27;
@@ -1334,6 +1422,79 @@ impl Sequence {
             .rev()
             .filter_map(|b| Self::__encode_base_2(*b))
             .collect::<Vec<u8>>()
+    }
+
+    /// Translates a sequence into amino acids.
+    ///
+    /// # Arguments
+    ///
+    /// * `sequence` - The sequence to translate.
+    ///
+    /// # Returns
+    ///
+    /// The translated sequence as a string.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if:
+    /// - A codon is not a valid codon.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let sequence = vec![b'A', b'T', b'G', b'C'];
+    ///
+    /// let aa = translate(&sequence);
+    /// ```
+    fn translate(&self) -> String {
+        let mut aa = String::new();
+
+        for codon in self.as_bytes().chunks(3) {
+            let amino_acid = Self::translate_codon(codon);
+
+            if amino_acid == "X" {
+                panic!(
+                    "ERROR: codon -> {:?} is not a valid codon from sequence -> {:?}!",
+                    std::str::from_utf8(codon).unwrap(),
+                    self.seq
+                );
+            }
+            aa.push_str(amino_acid);
+        }
+
+        aa
+    }
+
+    /// Translates a codon into an amino acid.
+    ///
+    /// # Arguments
+    ///
+    /// * `codon` - The codon to translate.
+    ///
+    /// # Returns
+    ///
+    /// The amino acid corresponding to the given codon.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if:
+    /// - The codon is not a valid codon.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let codon = vec![b'A', b'T', b'G'];
+    ///
+    /// let amino_acid = translate_codon(codon);
+    /// ```
+    fn translate_codon(codon: &[u8]) -> &'static str {
+        for (table_codon, amino_acid) in &CODON_TABLE {
+            if codon == *table_codon {
+                return amino_acid;
+            }
+        }
+
+        "X" // INFO: unknown codon
     }
 }
 
