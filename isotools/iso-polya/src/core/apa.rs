@@ -204,7 +204,8 @@ fn chunk_writer(accumulator: &ParallelAccumulator, outdir: PathBuf) -> &Parallel
 /// assert_eq!(std::fs::metadata("joblist").is_ok(), true);
 /// ```
 fn submit_jobs(accumulator: &ParallelAccumulator, _: bool) {
-    let mem = CHUNK_SIZE as f32 * RAM_PER_SITE * 1024.0;
+    // let mem = CHUNK_SIZE as f32 * RAM_PER_SITE * 1024.0;
+    let mem = 4000.0;
     let joblist = create_joblist(accumulator);
 
     let code = std::process::Command::new(PARA)
