@@ -347,6 +347,7 @@ fn __process_components(
 ///
 /// let (keep, orphans) = guided(components, &counter, min_read_num_denovo);
 /// ```
+#[allow(clippy::boxed_local)]
 fn guided(
     components: Box<(RefGenePred, Vec<GenePred>)>,
     counter: &ParallelCounter,
@@ -396,7 +397,7 @@ fn guided(
     let is_toga_single_exon = toga
         .reads
         .iter()
-        .any(|projection| projection.introns.len() == 0);
+        .any(|projection| projection.introns.is_empty());
 
     let mut ref_exons = toga.starts;
     ref_exons.extend(toga.middles);
@@ -406,7 +407,7 @@ fn guided(
         reads.sort_by(|a, b| a.exon_len.cmp(&b.exon_len));
 
         for read in reads.iter() {
-            let is_single_exon_read = read.introns.len() == 0;
+            let is_single_exon_read = read.introns.is_empty();
 
             if is_single_exon_read {
                 if is_toga_single_exon {
@@ -509,7 +510,7 @@ fn guided(
                 // WARN: not making is_toga_single_exon check because it is not needed
                 let mut matches = 0;
                 for read_exon in read.exons.iter() {
-                    if ref_exons.contains(&read_exon) {
+                    if ref_exons.contains(read_exon) {
                         matches += 1;
                     }
 
@@ -589,7 +590,7 @@ fn guided(
         // INFO: weird case of TOGA-single-exon and single-read component
         if is_toga_single_exon {
             for read in reads {
-                let is_single_exon_read = read.introns.len() == 0;
+                let is_single_exon_read = read.introns.is_empty();
 
                 if is_single_exon_read {
                     counter.inc_read_se_sc_toga_se();
@@ -671,7 +672,7 @@ fn guided(
             // INFO: ask if CDS matches are more than 1 OR is within TOGA boundaries
 
             for read in reads {
-                let is_single_exon_read = read.introns.len() == 0;
+                let is_single_exon_read = read.introns.is_empty();
 
                 if is_single_exon_read {
                     counter.inc_read_se_sc_toga_me();
@@ -760,6 +761,7 @@ fn guided(
 ///
 /// let (keep, orphans) = self_guided(components, &counter, min_read_num_denovo);
 /// ```
+#[allow(clippy::boxed_local)]
 fn self_guided(
     components: Box<(Vec<GenePred>, Vec<GenePred>)>,
     counter: &ParallelCounter,
