@@ -147,6 +147,15 @@ pub struct IntronArgs {
     pub nag: bool,
 
     #[arg(
+        short = 'I',
+        long = "iic",
+        required = false,
+        value_name = "FLAG",
+        help = "Path to intron intronIC .fa for intron type classification [U2, U12]"
+    )]
+    pub iic: Option<PathBuf>,
+
+    #[arg(
         long = "rt_freq_threshold",
         required = false,
         value_name = "FLOAT",

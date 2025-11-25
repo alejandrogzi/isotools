@@ -28,7 +28,7 @@ use packbed::{packbed, record::IntronPredStats, BedPackage, IntronBucket, PackMo
 use rayon::prelude::*;
 
 use config::{
-    get_progress_bar, write_objs, Sequence, SharedSpliceMap, Strand, SupportType,
+    get_progress_bar, write_objs, Sequence, SharedSpliceMap, Strand, SupportType, CLASSIFY_ASSETS,
     INTRON_CLASSIFICATION, INTRON_FREQUENCY_RECOVERY_THRESHOLD, MAX_ENT_SCORE_RECOVERY_THRESHOLD,
     SCALE, SPLICE_AI_SCORE_RECOVERY_THRESHOLD,
 };
@@ -100,6 +100,14 @@ pub type Genome = DashMap<String, Vec<u8>>;
 /// ```
 pub fn classify_introns(args: Args) -> Result<PathBuf> {
     log::info!("INFO: Classifying introns...");
+
+    let spliceosome = if let Some(iic) = args.iic {
+        log::info!("INFO: Running intronIC...");
+        run_intron_ic(iic)
+            .unwrap_or_else(|_| panic!("ERROR: Could not run intronIC for {:?}!", iic));
+    } else {
+        None
+    };
 
     let isoseqs = packbed(
         args.iso,
@@ -941,4 +949,20 @@ fn wiggle_splice_sites(
             strand,
         );
     }
+}
+
+fn run_intron_ic(iic: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(iic) = iic {
+        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CLASSIFY_ASSETS);
+
+        let mut cmd = format!(
+            "uv venv {target} && source {venv} && uv pip install {assets} && intronIC -q {introns} -n intron_type --no_plot -p 8 --no_sequence_output --no_ignore_nc_dnts",
+            target = assets.join(".venv").display(),
+            venv = assets.join(".venv/bin/activate").display(),
+            assets = assets.display(),
+            introns = iic.display(),
+        );
+    }
+
+    None
 }
