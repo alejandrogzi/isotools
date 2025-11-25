@@ -1,0 +1,19 @@
+[project]
+name = "iso-classify"
+version = "0.0.1"
+description = "iso-classify local environment"
+authors = [
+    { name = "Alejandro Gonzales-Irribarren", email = "alejandrxgzi@gmail.com" },
+]
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    "numpy==2.1.2",
+    "scikit-learn==1.5.2",
+    "matplotlib==3.9.2",
+    "scipy==1.14.1",
+    "biogl",
+    "intronIC",
+    "setuptools"
+]
