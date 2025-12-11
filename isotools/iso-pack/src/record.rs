@@ -330,6 +330,16 @@ pub enum USpliceType {
     Unknown,
 }
 
+impl std::fmt::Display for USpliceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            USpliceType::U2 => write!(f, "U2"),
+            USpliceType::U12 => write!(f, "U12"),
+            USpliceType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
 /// BedParser implementation for IntronPred
 impl BedParser for IntronPred {
     fn parse(
@@ -735,7 +745,7 @@ impl IntronPredStats {
     ///
     pub fn fmt(&self, chr: &String, strand: &Strand, start: u64, end: u64) -> String {
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             chr,
             start,
             end,
@@ -757,6 +767,7 @@ impl IntronPredStats {
             self.acceptor_rt_context,
             self.is_rt_intron,
             self.is_nag_intron,
+            self.splice_u_type,
             self.support
         )
     }
