@@ -350,11 +350,17 @@ fn process_component(
             component.strand
         );
         let splice_u_type = spliceosome.get(&key).unwrap_or_else(|| {
-            panic!(
-                "ERROR: Could not find splice type for intron -> {:?} using {:?}",
-                (intron_start, intron_end),
-                key
-            )
+            if descriptor.is_toga_supported {
+                &USpliceType::Unknown
+            } else {
+                panic!(
+                    "ERROR: Could not find splice type for intron -> {:?} using {:?} with metadata -> {:?}",
+                    (intron_start, intron_end),
+                    key,
+                    descriptor
+                )
+            }
+
         });
         descriptor.splice_u_type = splice_u_type.clone();
 
