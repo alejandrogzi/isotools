@@ -232,7 +232,7 @@ fn distribute(
     accumulator: &ParallelAccumulator,
     nag: bool,
     rt_frequency_threshold: f64,
-    spliceosome: &HashMap<(u64, u64), USpliceType>,
+    spliceosome: &HashMap<String, USpliceType>,
 ) {
     components.into_par_iter().for_each(|mut comp| {
         let comp = comp
@@ -295,7 +295,7 @@ fn process_component(
     genome: &Option<Genome>,
     nag: bool,
     rt_frequency_threshold: f64,
-    spliceosome: &HashMap<(u64, u64), USpliceType>,
+    spliceosome: &HashMap<String, USpliceType>,
 ) -> HashMap<(u64, u64), String> {
     let chr = component.chrom.clone();
     let strand = component.strand.clone();
@@ -342,14 +342,16 @@ fn process_component(
             Strand::Reverse => ((SCALE - intron_end), (SCALE - intron_start)),
         };
 
-        let splice_u_type = spliceosome
-            .get(&(intron_start, intron_end))
-            .unwrap_or_else(|| {
-                panic!(
-                    "ERROR: Could not find splice type for intron -> {:?}",
-                    (intron_start, intron_end)
-                )
-            });
+        let key = format!(
+            "{}:{}-{}({})",
+            chr, intron_start, intron_end, component.strand
+        );
+        let splice_u_type = spliceosome.get(&key).unwrap_or_else(|| {
+            panic!(
+                "ERROR: Could not find splice type for intron -> {:?}",
+                (intron_start, intron_end)
+            )
+        });
         descriptor.splice_u_type = splice_u_type.clone();
 
         // INFO: not including NAG-derived introns bc they are already Splicing
@@ -983,7 +985,7 @@ fn wiggle_splice_sites(
 /// ```rust, ignore
 /// run_intron_ic(iic);
 /// ```
-fn run_intron_ic(iic: PathBuf) -> HashMap<(u64, u64), USpliceType> {
+fn run_intron_ic(iic: PathBuf) -> HashMap<String, USpliceType> {
     let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CLASSIFY_ASSETS);
     let outdir = iic
         .parent()
@@ -1021,33 +1023,32 @@ fn run_intron_ic(iic: PathBuf) -> HashMap<(u64, u64), USpliceType> {
     table
 }
 
-pub fn read_iic(table: PathBuf) -> HashMap<(u64, u64), USpliceType> {
-    // INFO: format iic -> 1st and 13th columns (id, type)
+pub fn read_iic(path: PathBuf) -> HashMap<String, USpliceType> {
+    // INFO: format intronIC output:
+    // chr10:75482935-75483890(-)  -90.0   GT-AG ...  .   .   u2  .
+    // INFO: we are interested in the first and n-1 columns [coords, type]
     let reader = BufReader::new(
-        File::open(table)
+        File::open(&path)
             .unwrap_or_else(|e| panic!("ERROR: Could not open intronIC output file -> {e}!")),
     );
 
-    log::debug!("DEBUG: opened intronIC output file -> {table:?}!");
+    log::debug!("DEBUG: opened intronIC output file -> {path:?}!");
 
     let mut table = HashMap::new();
 
     for line in reader.lines() {
-        let line = line.unwrap_or_else(|e| {
-            panic!("ERROR: Could not read intronIC output line {line:?} -> {e}!")
-        });
+        let record =
+            line.unwrap_or_else(|e| panic!("ERROR: Could not read intronIC output line -> {e}!",));
 
-        let mut fields = line.split('\t');
+        let mut fields = record.split('\t');
 
         let id = fields
             .next()
-            .unwrap_or_else(|| panic!("ERROR: Could not read intronIC id from {line:?}"));
+            .unwrap_or_else(|| panic!("ERROR: Could not read intronIC id from {:?}", &record))
+            .to_string();
         let splice_type = fields
             .nth(11)
-            .unwrap_or_else(|| panic!("ERROR: Could not read intronIC type from {line:?}!"));
-
-        // INFO: label format -> {species}@{id}
-        // let coords =
+            .unwrap_or_else(|| panic!("ERROR: Could not read intronIC type from {:?}!", &record));
 
         let splice_type = match splice_type {
             "U2" => USpliceType::U2,
