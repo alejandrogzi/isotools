@@ -344,7 +344,10 @@ fn process_component(
 
         let key = format!(
             "{}:{}-{}({})",
-            chr, intron_start, intron_end, component.strand
+            chr,
+            intron_start - 1,
+            intron_end + 1,
+            component.strand
         );
         let splice_u_type = spliceosome.get(&key).unwrap_or_else(|| {
             panic!(
