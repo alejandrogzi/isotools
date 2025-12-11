@@ -995,7 +995,7 @@ fn run_intron_ic(iic: PathBuf) -> HashMap<String, USpliceType> {
     log::debug!("DEBUG: IntronIC outdir: {:?}", outdir);
 
     let cmd = format!(
-            "uv venv {target} && source {venv} && uv pip install {assets} && intronIC -q {introns} -n intron_type --no_plot -p 8 --no_sequence_output --no_ignore_nc_dnts --outdir {outdir}",
+            "uv venv -p 3.10 {target} && source {venv} && uv pip install {assets} && intronIC -q {introns} -n intron_type --no_plot -p 8 --no_sequence_output --no_ignore_nc_dnts --outdir {outdir}",
             target = assets.join(".venv").display(),
             venv = assets.join(".venv/bin/activate").display(),
             assets = assets.display(),
