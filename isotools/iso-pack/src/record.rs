@@ -319,6 +319,15 @@ pub struct IntronPredStats {
     pub is_nag_intron: bool,
     /// A classification of the intron's support type.
     pub support: SupportType,
+    /// A classification of the intron's splice type.
+    pub splice_u_type: USpliceType,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum USpliceType {
+    U2,
+    U12,
+    Unknown,
 }
 
 /// BedParser implementation for IntronPred
@@ -594,6 +603,7 @@ impl IntronPredStats {
             is_rt_intron: false,
             is_nag_intron: false,
             support: SupportType::Unclear,
+            splice_u_type: USpliceType::Unknown,
         }
     }
 
@@ -703,6 +713,7 @@ impl IntronPredStats {
             is_rt_intron,
             is_nag_intron,
             support,
+            splice_u_type: USpliceType::Unknown, // INFO: placeholder, mutated in place
         }
     }
 
@@ -2187,6 +2198,7 @@ impl IntronBucket {
                         is_rt_intron: false,
                         is_nag_intron: false,
                         support: SupportType::Unclear,
+                        splice_u_type: USpliceType::Unknown, // INFO: placeholder, mutated in-place
                     };
 
                     introns.insert(ref_intron.clone(), stats);
@@ -2229,6 +2241,7 @@ impl IntronBucket {
                     is_nag_intron: false,
                     // WARN: inside iso-intron this will be interpreted as SPLICED because of TOGA
                     support: SupportType::Unclear, // INFO: flag to identify TOGA introns
+                    splice_u_type: USpliceType::Unknown, // INFO: placeholder, mutated in-place
                 };
 
                 introns.insert(toga_intron, stats);
@@ -3147,18 +3160,9 @@ mod tests {
 
         assert_eq!(
             exons,
-            [(15, 20), (30, 40), (50, 60), (70, 80), (90, 95)]
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
+            [(15, 20), (30, 40), (50, 60), (70, 80), (90, 95)].to_vec()
         );
-        assert_eq!(
-            introns,
-            [(21, 29), (41, 49), (61, 69), (81, 89)]
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(introns, [(21, 29), (41, 49), (61, 69), (81, 89)].to_vec());
     }
 
     #[test]
@@ -3195,9 +3199,7 @@ mod tests {
                 (99999999960, 99999999970),
                 (99999999980, 99999999985)
             ]
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
+            .to_vec()
         );
         assert_eq!(
             introns,
@@ -3206,9 +3208,7 @@ mod tests {
                 (99999999951, 99999999959),
                 (99999999971, 99999999979)
             ]
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
+            .to_vec()
         );
     }
 
@@ -3405,13 +3405,14 @@ mod tests {
     }
 
     #[test]
-    // 2025-09-10T11:33:47.207Z WARN  [orf::tai] WARN: translationAi predicted a non-stop ORF: "304,484,0.11812351644039154,0.1313595026731491" for GenePred { nam
-    // e: "9249", chrom: "chr7", strand: Reverse, start: 99940345148, end: 99940364371, cds_start: 99940345148, cds_end: 99940364371, exons: [(99940345148, 999403
-    // 45217), (99940350839, 99940350935), (99940354698, 99940354847), (99940361505, 99940361651), (99940362689, 99940362841), (99940363369, 99940363481), (999403
-    // 64269, 99940364371)], introns: [(99940345218, 99940350838), (99940350936, 99940354697), (99940354848, 99940361504), (99940361652, 99940362688), (9994036284
-    // 2, 99940363368), (99940363482, 99940364268)], exon_len: 826, exon_count: 7, line: "chr7\t59635629\t59654852\t9249\t60\t-\t59635629\t59654852\t43,118,219\t7
-    // \t102,112,152,146,149,96,69\t0,890,1530,2720,9524,13436,19154", is_ref: false }
     fn test_get_pos_in_exons_reverse_refseq_tai_prediction_additional() {
+        // 2025-09-10T11:33:47.207Z WARN  [orf::tai] WARN: translationAi predicted a non-stop ORF: "304,484,0.11812351644039154,0.1313595026731491" for GenePred { nam
+        // e: "9249", chrom: "chr7", strand: Reverse, start: 99940345148, end: 99940364371, cds_start: 99940345148, cds_end: 99940364371, exons: [(99940345148, 999403
+        // 45217), (99940350839, 99940350935), (99940354698, 99940354847), (99940361505, 99940361651), (99940362689, 99940362841), (99940363369, 99940363481), (999403
+        // 64269, 99940364371)], introns: [(99940345218, 99940350838), (99940350936, 99940354697), (99940354848, 99940361504), (99940361652, 99940362688), (9994036284
+        // 2, 99940363368), (99940363482, 99940364268)], exon_len: 826, exon_count: 7, line: "chr7\t59635629\t59654852\t9249\t60\t-\t59635629\t59654852\t43,118,219\t7
+        // \t102,112,152,146,149,96,69\t0,890,1530,2720,9524,13436,19154", is_ref: false }
+
         let line = "chr7\t59635629\t59654852\t9249\t60\t-\t59635629\t59654852\t43,118,219\t7\t102,112,152,146,149,96,69\t0,890,1530,2720,9524,13436,19154";
         let gp = Bed12::read(line, OverlapType::Exon, false)
             .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
@@ -3513,5 +3514,25 @@ mod tests {
 
         assert_eq!(predicted_cds_start, 83116811);
         assert_eq!(predicted_cds_end, 83118717);
+    }
+
+    #[test]
+    fn dummy() {
+        // tmp_chunk_scaffold_10:0.bed:scaffold_10 60508574        60652099        R12162_scaffold_10__FC0#TC0#PA29#PR30#IY979#SG  60      -       60508574        60652099        43,118,219      4       499,38,310,77   0,4353,112181,143448
+        //tai/tmp_chunk_scaffold_10:0.fmt.result:scaffold_10      60508750        60833466        R12162_scaffold_10.p1   -       0.99251467      0.9964998       28      748     ATG     TAG  1
+        let line = "scaffold_10\t60508574\t60652099\tR12162_scaffold_10__FC0#TC0#PA29#PR30#IY979#SG\t60\t-\t60508574\t60652099\t43,118,219\t4\t499,38,310,77\t0,4353,112181,143448";
+        let gp = Bed12::read(line, OverlapType::Exon, false)
+            .unwrap_or_else(|e| panic!("ERROR: could not parse line into GenePred: {e}"));
+
+        let orf_start = 28;
+        let orf_end = 748;
+
+        let (predicted_cds_start, predicted_cds_end) = gp.get_cds_from_pos(orf_start, orf_end);
+
+        dbg!(predicted_cds_start, predicted_cds_end);
+        // dbg!(predicted_cds_end);
+
+        // assert_eq!(predicted_cds_start, 31409103);
+        // assert_eq!(predicted_cds_end, 31410346);
     }
 }

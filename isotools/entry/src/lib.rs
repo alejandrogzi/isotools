@@ -106,6 +106,7 @@ fn __check_args(args: &[String]) {
     }
 }
 
+#[deprecated]
 pub fn descriptor_to_bed(
     descriptor: dashmap::DashMap<String, Box<dyn ModuleMap>>,
     outdir: String,
@@ -212,6 +213,7 @@ pub fn descriptor_to_bed(
     }
 }
 
+#[deprecated]
 pub enum ReadCategory {
     Clean,
     Intrapriming,
@@ -220,6 +222,7 @@ pub enum ReadCategory {
     Trash,
 }
 
+#[deprecated]
 fn extract_from_bed(
     collection: DashSet<String>, // INFO: key is read name!
     outdir: PathBuf,

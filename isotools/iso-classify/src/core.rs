@@ -18,12 +18,14 @@
 //! of introns, enabling deeper insights into alternative splicing and
 //! RNA processing.
 
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
 use anyhow::Result;
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
-use packbed::record::IntronPosition;
+use packbed::record::{IntronPosition, USpliceType};
 use packbed::{packbed, record::IntronPredStats, BedPackage, IntronBucket, PackMode};
 use rayon::prelude::*;
 
@@ -104,9 +106,8 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
     let spliceosome = if let Some(iic) = args.iic {
         log::info!("INFO: Running intronIC...");
         run_intron_ic(iic)
-            .unwrap_or_else(|_| panic!("ERROR: Could not run intronIC for {:?}!", iic));
     } else {
-        None
+        HashMap::new()
     };
 
     let isoseqs = packbed(
@@ -167,6 +168,7 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
             &accumulator,
             args.nag,
             args.rt_freq_threshold,
+            &spliceosome,
         );
 
         pb.inc(1);
@@ -230,6 +232,7 @@ fn distribute(
     accumulator: &ParallelAccumulator,
     nag: bool,
     rt_frequency_threshold: f64,
+    spliceosome: &HashMap<(u64, u64), USpliceType>,
 ) {
     components.into_par_iter().for_each(|mut comp| {
         let comp = comp
@@ -245,6 +248,7 @@ fn distribute(
             genome,
             nag,
             rt_frequency_threshold,
+            spliceosome,
         );
 
         info.into_iter().for_each(|(_, intron_descriptor)| {
@@ -291,6 +295,7 @@ fn process_component(
     genome: &Option<Genome>,
     nag: bool,
     rt_frequency_threshold: f64,
+    spliceosome: &HashMap<(u64, u64), USpliceType>,
 ) -> HashMap<(u64, u64), String> {
     let chr = component.chrom.clone();
     let strand = component.strand.clone();
@@ -336,6 +341,16 @@ fn process_component(
             Strand::Forward => (intron_start, intron_end),
             Strand::Reverse => ((SCALE - intron_end), (SCALE - intron_start)),
         };
+
+        let splice_u_type = spliceosome
+            .get(&(intron_start, intron_end))
+            .unwrap_or_else(|| {
+                panic!(
+                    "ERROR: Could not find splice type for intron -> {:?}",
+                    (intron_start, intron_end)
+                )
+            });
+        descriptor.splice_u_type = splice_u_type.clone();
 
         // INFO: not including NAG-derived introns bc they are already Splicing
         // WARN: strange TOGA supported RT introns -> s14	9965456	9968743
@@ -951,18 +966,97 @@ fn wiggle_splice_sites(
     }
 }
 
-fn run_intron_ic(iic: Option<PathBuf>) -> Option<PathBuf> {
-    if let Some(iic) = iic {
-        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CLASSIFY_ASSETS);
+/// Runs intronIC on a given intron file.
+///
+/// This function runs intronIC on a given intron file and returns the path to the output file.
+///
+/// # Arguments
+///
+/// * `iic`: An `Option` containing the path to the intron file.
+///
+/// # Returns
+///
+/// * An `Option` containing the path to the output file.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// run_intron_ic(iic);
+/// ```
+fn run_intron_ic(iic: PathBuf) -> HashMap<(u64, u64), USpliceType> {
+    let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CLASSIFY_ASSETS);
+    let outdir = iic
+        .parent()
+        .unwrap_or_else(|| panic!("ERROR: Could not find parent dir for {:?}!", iic));
 
-        let mut cmd = format!(
-            "uv venv {target} && source {venv} && uv pip install {assets} && intronIC -q {introns} -n intron_type --no_plot -p 8 --no_sequence_output --no_ignore_nc_dnts",
+    log::debug!("DEBUG: IntronIC assets: {:?}", assets);
+    log::debug!("DEBUG: IntronIC outdir: {:?}", outdir);
+
+    let cmd = format!(
+            "uv venv {target} && source {venv} && uv pip install {assets} && intronIC -q {introns} -n intron_type --no_plot -p 8 --no_sequence_output --no_ignore_nc_dnts --outdir {outdir}",
             target = assets.join(".venv").display(),
             venv = assets.join(".venv/bin/activate").display(),
             assets = assets.display(),
             introns = iic.display(),
+            outdir = outdir.display(),
         );
+
+    log::info!("INFO: Running intronIC with command: {:?}", cmd);
+
+    let status = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(cmd)
+        .status()
+        .unwrap_or_else(|e| panic!("ERROR: Could not run intronIC -> {e}!"));
+
+    if !status.success() {
+        log::error!("ERROR: intronIC failed -> {status}!");
+        std::process::exit(1);
     }
 
-    None
+    // WARN: need to check if abbreviation in iic disrupts this name
+    let output = outdir.join("intron_type.meta.iic");
+    let table = read_iic(output);
+
+    table
+}
+
+pub fn read_iic(table: PathBuf) -> HashMap<(u64, u64), USpliceType> {
+    // INFO: format iic -> 1st and 13th columns (id, type)
+    let reader = BufReader::new(
+        File::open(table)
+            .unwrap_or_else(|e| panic!("ERROR: Could not open intronIC output file -> {e}!")),
+    );
+
+    log::debug!("DEBUG: opened intronIC output file -> {table:?}!");
+
+    let mut table = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line.unwrap_or_else(|e| {
+            panic!("ERROR: Could not read intronIC output line {line:?} -> {e}!")
+        });
+
+        let mut fields = line.split('\t');
+
+        let id = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not read intronIC id from {line:?}"));
+        let splice_type = fields
+            .nth(11)
+            .unwrap_or_else(|| panic!("ERROR: Could not read intronIC type from {line:?}!"));
+
+        // INFO: label format -> {species}@{id}
+        // let coords =
+
+        let splice_type = match splice_type {
+            "U2" => USpliceType::U2,
+            "U12" => USpliceType::U12,
+            _ => panic!("ERROR: Unknown intronIC type -> {splice_type}!"),
+        };
+
+        table.insert(id, splice_type);
+    }
+
+    table
 }
