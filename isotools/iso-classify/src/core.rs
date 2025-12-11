@@ -1051,8 +1051,8 @@ pub fn read_iic(path: PathBuf) -> HashMap<String, USpliceType> {
             .unwrap_or_else(|| panic!("ERROR: Could not read intronIC type from {:?}!", &record));
 
         let splice_type = match splice_type {
-            "U2" => USpliceType::U2,
-            "U12" => USpliceType::U12,
+            "u2" => USpliceType::U2,
+            "u12" => USpliceType::U12,
             _ => panic!("ERROR: Unknown intronIC type -> {splice_type}!"),
         };
 
