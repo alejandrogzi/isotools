@@ -351,8 +351,9 @@ fn process_component(
         );
         let splice_u_type = spliceosome.get(&key).unwrap_or_else(|| {
             panic!(
-                "ERROR: Could not find splice type for intron -> {:?}",
-                (intron_start, intron_end)
+                "ERROR: Could not find splice type for intron -> {:?} using {:?}",
+                (intron_start, intron_end),
+                key
             )
         });
         descriptor.splice_u_type = splice_u_type.clone();
