@@ -45,7 +45,7 @@ pub fn lib(mut args: Vec<String>) {
             args
         )
     });
-    let mut args = args[..args.len() - 1].to_vec(); // INFO: dropping --outdir
+    let mut args = args[..args.len() - 3].to_vec(); // INFO: dropping --outdir + <IIC> + --iic
 
     args.extend(vec![
         "--introns".to_string(),
