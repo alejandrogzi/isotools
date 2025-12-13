@@ -353,12 +353,13 @@ fn process_component(
             if descriptor.is_toga_supported {
                 &USpliceType::Unknown
             } else {
-                panic!(
-                    "ERROR: Could not find splice type for intron -> {:?} using {:?} with metadata -> {:?}",
+                log::warn!(
+                    "WARN: Could not find splice type for intron -> {:?} using {:?} with metadata -> {:?}. Likely was omitted! We are setting this to UNKNOWN",
                     (intron_start, intron_end),
                     key,
                     descriptor
-                )
+                );
+                &USpliceType::Unknown
             }
 
         });
