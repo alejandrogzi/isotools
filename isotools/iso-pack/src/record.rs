@@ -317,10 +317,10 @@ pub struct IntronPredStats {
     pub is_rt_intron: bool,
     /// A boolean indicating if the intron is a TOGA-nag intron.
     pub is_nag_intron: bool,
-    /// A classification of the intron's support type.
-    pub support: SupportType,
     /// A classification of the intron's splice type.
     pub splice_u_type: USpliceType,
+    /// A classification of the intron's support type.
+    pub support: SupportType,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -336,6 +336,19 @@ impl std::fmt::Display for USpliceType {
             USpliceType::U2 => write!(f, "U2"),
             USpliceType::U12 => write!(f, "U12"),
             USpliceType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+impl std::str::FromStr for USpliceType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "U2" => Ok(USpliceType::U2),
+            "U12" => Ok(USpliceType::U12),
+            "Unknown" => Ok(USpliceType::Unknown),
+            _ => Err(format!("ERROR: Unknown splice type -> {s}")),
         }
     }
 }
@@ -457,6 +470,7 @@ impl IntronPred {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            splice_u_type,
             support,
         ) = (
             data.next()
@@ -504,6 +518,8 @@ impl IntronPred {
             data.next()
                 .unwrap_or_else(|| panic!("ERROR: Cannot parse is_nag_intron -> {:?}", data)),
             data.next()
+                .unwrap_or_else(|| panic!("ERROR: Cannot parse splice_u_type -> {:?}", data)),
+            data.next()
                 .unwrap_or_else(|| panic!("ERROR: Cannot parse support -> {:?}", data)),
         );
 
@@ -540,6 +556,7 @@ impl IntronPred {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            splice_u_type,
             support,
         ]);
 
@@ -612,8 +629,8 @@ impl IntronPredStats {
             acceptor_rt_context: String::new(),
             is_rt_intron: false,
             is_nag_intron: false,
-            support: SupportType::Unclear,
             splice_u_type: USpliceType::Unknown,
+            support: SupportType::Unclear,
         }
     }
 
@@ -654,6 +671,7 @@ impl IntronPredStats {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            splice_u_type,
             support,
         ) = (
             data[0]
@@ -700,6 +718,9 @@ impl IntronPredStats {
                 .parse::<bool>()
                 .unwrap_or_else(|_| panic!("ERROR: Cannot parse is_nag_intron -> {:?}", data)),
             data[17]
+                .parse::<USpliceType>()
+                .unwrap_or_else(|_| panic!("ERROR: Cannot parse splice_u_type -> {:?}", data)),
+            data[18]
                 .parse::<SupportType>()
                 .unwrap_or_else(|_| panic!("ERROR: Cannot parse support -> {:?}", data)),
         );
@@ -722,8 +743,8 @@ impl IntronPredStats {
             acceptor_rt_context,
             is_rt_intron,
             is_nag_intron,
+            splice_u_type,
             support,
-            splice_u_type: USpliceType::Unknown, // INFO: placeholder, mutated in place
         }
     }
 
