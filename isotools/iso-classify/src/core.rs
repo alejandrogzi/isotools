@@ -1032,8 +1032,8 @@ fn run_intron_ic(iic: PathBuf) -> HashMap<String, USpliceType> {
         .unwrap_or_else(|e| panic!("ERROR: Could not run intronIC -> {e}!"));
 
     if !status.success() {
-        log::error!("ERROR: intronIC failed -> {status}!");
-        std::process::exit(1);
+        log::warn!("WARN: intronIC failed -> {status}. Will not abort, splice type will be filled up with UNKNOWN!");
+        return HashMap::new();
     }
 
     // WARN: need to check if abbreviation in iic disrupts this name
