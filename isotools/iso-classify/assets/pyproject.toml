@@ -9,11 +9,11 @@ license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10,<3.13"
 
 dependencies = [
-    "numpy==2.1.2",
-    "scikit-learn==1.5.2",
+    "numpy>=1.19.0",
+    "scikit-learn>=0.22,<2.0",
     "matplotlib==3.9.2",
-    "scipy==1.14.1",
+    "scipy>=1.5.0",
     "biogl",
-    "intronIC@git+https://github.com/alejandrogzi/intronIC"
-    "setuptools"
+    "intronIC@git+https://github.com/alejandrogzi/intronIC",
+    "setuptools",
 ]
