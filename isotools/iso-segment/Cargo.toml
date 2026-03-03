@@ -1,0 +1,20 @@
+[package]
+name = "iso-segment"
+version = "0.0.1"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bio.workspace = true
+ndarray.workspace = true
+noodles-bam.workspace = true
+noodles-core.workspace = true
+noodles-sam.workspace = true
+dashmap.workspace = true
+rayon.workspace = true
+log.workspace = true
+clap.workspace = true
+num_cpus.workspace = true
+simple_logger.workspace = true
