@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "config",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "iso-segment"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bio",
  "clap",

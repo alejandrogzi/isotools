@@ -130,6 +130,24 @@ pub struct Args {
     pub bed: bool,
 
     #[arg(
+        short = 'X',
+        long = "split",
+        help = "Split output files by chromosome",
+        value_name = "FLAG",
+        action = ArgAction::SetTrue,
+    )]
+    pub split: bool,
+
+    #[arg(
+        short = 'd',
+        long = "delimiter",
+        help = "Delimiter inserted between chromosome and prefix in split output names (only used with --split)",
+        value_name = "DELIMITER",
+        default_value = "@"
+    )]
+    pub delimiter: String,
+
+    #[arg(
         long = "outdir",
         short = 'o',
         required = false,

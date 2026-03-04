@@ -9,6 +9,7 @@
 //! tail using a two-state HMM model.
 
 use std::{
+    collections::HashMap,
     fmt::Write as FmtWrite,
     fs::File,
     hash::{Hash, Hasher},
@@ -147,6 +148,92 @@ fn write_output(
     }
 }
 
+#[inline(always)]
+fn build_output_path(
+    outdir: &PathBuf,
+    prefix: &PathBuf,
+    split: bool,
+    delimiter: &str,
+    chromosome: Option<&str>,
+    quality_suffix: &str,
+    extension: &str,
+) -> PathBuf {
+    let stem = if split {
+        chromosome
+            .map(|chr| format!("{chr}{delimiter}{}", prefix.display()))
+            .unwrap_or_else(|| prefix.display().to_string())
+    } else {
+        prefix.display().to_string()
+    };
+
+    outdir.join(format!("{stem}.{quality_suffix}.{extension}"))
+}
+
+fn spawn_bam_writer(
+    output_path: PathBuf,
+    records: Vec<Arc<RecordBuf>>,
+    header: Arc<Header>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut writer = Builder
+            .build_from_path(&output_path)
+            .unwrap_or_else(|_| panic!("ERROR: could not create file: {}", output_path.display()));
+
+        writer
+            .write_header(&header)
+            .expect("ERROR: failed to write header");
+
+        for record in records {
+            writer
+                .write_alignment_record(&header, record.as_ref())
+                .expect("ERROR: failed to write record");
+        }
+
+        writer
+            .finish(&header)
+            .expect("ERROR: failed to finish writing BAM file");
+    })
+}
+
+fn spawn_bed_writer(output_path: PathBuf, lines: Vec<String>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut writer = BufWriter::new(
+            File::create(&output_path)
+                .unwrap_or_else(|e| panic!("ERROR: could not create file: {e}")),
+        );
+
+        let joined = lines.join("\n");
+        writer
+            .write_all(joined.as_bytes())
+            .expect("ERROR: failed to write BED lines");
+    })
+}
+
+fn group_bam_records_by_chromosome(
+    records: DashSet<HashedRecord>,
+    refs: &noodles_sam::header::ReferenceSequences,
+) -> HashMap<String, Vec<Arc<RecordBuf>>> {
+    let pairs: Vec<(String, Arc<RecordBuf>)> = records
+        .into_iter()
+        .par_bridge()
+        .map(|record| {
+            let bam_record = record.0;
+            let chr = bam_record
+                .reference_sequence_id()
+                .and_then(|id| refs.get_index(id).map(|(name, _)| name.to_string()))
+                .unwrap_or_else(|| "unmapped".to_string());
+            (chr, bam_record)
+        })
+        .collect();
+
+    let mut grouped: HashMap<String, Vec<Arc<RecordBuf>>> = HashMap::new();
+    for (chr, record) in pairs {
+        grouped.entry(chr).or_default().push(record);
+    }
+
+    grouped
+}
+
 /// Writes a BAM file from a ParallelAccumulator
 ///
 /// # Arguments
@@ -164,39 +251,82 @@ fn write_bams(accumulator: ParallelAccumulator, args: &Args, header: &Header) {
     log::info!("INFO: Writing BAM files from filtered records!");
 
     let header = Arc::new(header.clone());
-    let prefix = &args.prefix;
+    let ParallelAccumulator { accept, reject } = accumulator;
 
-    let accept = args.outdir.join(format!("{}.good.bam", prefix.display()));
-    let reject = args.outdir.join(format!("{}.bad.bam", prefix.display()));
+    if args.split {
+        let refs = header.reference_sequences();
+        let accept_by_chr = group_bam_records_by_chromosome(accept, refs);
+        let reject_by_chr = group_bam_records_by_chromosome(reject, refs);
 
-    let spawn_writer =
-        |output_path: PathBuf, records: DashSet<HashedRecord>, header: Arc<Header>| {
-            std::thread::spawn(move || {
-                let mut writer = Builder.build_from_path(&output_path).unwrap_or_else(|_| {
-                    panic!("ERROR: could not create file: {}", output_path.display())
-                });
+        let mut handles = Vec::with_capacity(accept_by_chr.len() + reject_by_chr.len());
 
-                writer
-                    .write_header(&header)
-                    .expect("ERROR: failed to write header");
+        for (chr, records) in accept_by_chr {
+            let output = build_output_path(
+                &args.outdir,
+                &args.prefix,
+                args.split,
+                &args.delimiter,
+                Some(&chr),
+                PASS_PREFIX,
+                "bam",
+            );
+            handles.push(spawn_bam_writer(output, records, Arc::clone(&header)));
+        }
 
-                for record in records {
-                    let record = Arc::try_unwrap(record.0).unwrap_or_else(|arc| (*arc).clone());
-                    writer
-                        .write_alignment_record(&header, &record)
-                        .expect("ERROR: failed to write record");
-                }
+        for (chr, records) in reject_by_chr {
+            let output = build_output_path(
+                &args.outdir,
+                &args.prefix,
+                args.split,
+                &args.delimiter,
+                Some(&chr),
+                FAIL_PREFIX,
+                "bam",
+            );
+            handles.push(spawn_bam_writer(output, records, Arc::clone(&header)));
+        }
 
-                writer.finish(&header)
-            })
-        };
+        for handle in handles {
+            handle
+                .join()
+                .expect("ERROR: could not join a split BAM writer");
+        }
+    } else {
+        let accept_records: Vec<Arc<RecordBuf>> =
+            accept.into_iter().map(|record| record.0).collect();
+        let reject_records: Vec<Arc<RecordBuf>> =
+            reject.into_iter().map(|record| record.0).collect();
 
-    let _ = spawn_writer(accept, accumulator.accept, Arc::clone(&header))
-        .join()
-        .expect("ERROR: could not join acceptance writer!");
-    let _ = spawn_writer(reject, accumulator.reject, Arc::clone(&header))
-        .join()
-        .expect("ERROR: could not join rejection writer");
+        let accept_output = build_output_path(
+            &args.outdir,
+            &args.prefix,
+            args.split,
+            &args.delimiter,
+            None,
+            PASS_PREFIX,
+            "bam",
+        );
+
+        let reject_output = build_output_path(
+            &args.outdir,
+            &args.prefix,
+            args.split,
+            &args.delimiter,
+            None,
+            FAIL_PREFIX,
+            "bam",
+        );
+
+        let accept_handle = spawn_bam_writer(accept_output, accept_records, Arc::clone(&header));
+        let reject_handle = spawn_bam_writer(reject_output, reject_records, Arc::clone(&header));
+
+        accept_handle
+            .join()
+            .expect("ERROR: could not join acceptance BAM writer");
+        reject_handle
+            .join()
+            .expect("ERROR: could not join rejection BAM writer");
+    }
 }
 
 /// Writes a BED file from a ParallelAccumulator of BAM/SAM records
@@ -217,39 +347,78 @@ fn write_beds(
     args: &Args,
     refs: Arc<noodles_sam::header::ReferenceSequences>,
 ) {
-    let prefix = &args.prefix;
-
-    let accept = args
-        .outdir
-        .join(format!("{}.{PASS_PREFIX}.bed", prefix.display()));
-    let reject = args
-        .outdir
-        .join(format!("{}.{FAIL_PREFIX}.bed", prefix.display()));
+    let ParallelAccumulator { accept, reject } = accumulator;
 
     log::info!("INFO: Converting BAM records into BED12 lines!");
-    let accept_lines = convert(&accumulator.accept, Arc::clone(&refs), RGB_ACCEPT);
-    let reject_lines = convert(&accumulator.reject, Arc::clone(&refs), RGB_REJECT);
 
-    fn spawn_writer(output_path: PathBuf, lines: Vec<String>) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(move || {
-            let mut writer = BufWriter::new(
-                File::create(&output_path)
-                    .unwrap_or_else(|e| panic!("ERROR: could not create file: {e}")),
+    if args.split {
+        let accept_by_chr = convert_grouped(accept, Arc::clone(&refs), RGB_ACCEPT);
+        let reject_by_chr = convert_grouped(reject, Arc::clone(&refs), RGB_REJECT);
+
+        let mut handles = Vec::with_capacity(accept_by_chr.len() + reject_by_chr.len());
+
+        for (chr, lines) in accept_by_chr {
+            let output = build_output_path(
+                &args.outdir,
+                &args.prefix,
+                args.split,
+                &args.delimiter,
+                Some(&chr),
+                PASS_PREFIX,
+                "bed",
             );
+            handles.push(spawn_bed_writer(output, lines));
+        }
 
-            let joined = lines.join("\n");
-            writer.write_all(joined.as_bytes()).unwrap();
-        })
+        for (chr, lines) in reject_by_chr {
+            let output = build_output_path(
+                &args.outdir,
+                &args.prefix,
+                args.split,
+                &args.delimiter,
+                Some(&chr),
+                FAIL_PREFIX,
+                "bed",
+            );
+            handles.push(spawn_bed_writer(output, lines));
+        }
+
+        for handle in handles {
+            handle
+                .join()
+                .expect("ERROR: failed to write a split BED file");
+        }
+    } else {
+        let accept_lines = convert(&accept, Arc::clone(&refs), RGB_ACCEPT);
+        let reject_lines = convert(&reject, Arc::clone(&refs), RGB_REJECT);
+
+        log::info!("INFO: Writing BED files from filtered records!");
+
+        let accept_output = build_output_path(
+            &args.outdir,
+            &args.prefix,
+            args.split,
+            &args.delimiter,
+            None,
+            PASS_PREFIX,
+            "bed",
+        );
+        let reject_output = build_output_path(
+            &args.outdir,
+            &args.prefix,
+            args.split,
+            &args.delimiter,
+            None,
+            FAIL_PREFIX,
+            "bed",
+        );
+
+        let accept_handle = spawn_bed_writer(accept_output, accept_lines);
+        let reject_handle = spawn_bed_writer(reject_output, reject_lines);
+
+        accept_handle.join().expect("ERROR: failed to write hq.bed");
+        reject_handle.join().expect("ERROR: failed to write lq.bed");
     }
-
-    log::info!("INFO: Writing BED files from filtered records!");
-
-    spawn_writer(accept, accept_lines)
-        .join()
-        .expect("ERROR: failed to write hq.bed");
-    spawn_writer(reject, reject_lines)
-        .join()
-        .expect("ERROR: failed to write lq.bed");
 }
 
 /// Reads a BAM file and returns the chromosome names,
@@ -638,6 +807,33 @@ fn convert(
             record.to_bed(&chr, rgb)
         })
         .collect()
+}
+
+#[inline(always)]
+fn convert_grouped(
+    records: DashSet<HashedRecord>,
+    refs: Arc<noodles_sam::header::ReferenceSequences>,
+    rgb: &str,
+) -> HashMap<String, Vec<String>> {
+    let pairs: Vec<(String, String)> = records
+        .into_iter()
+        .par_bridge()
+        .filter_map(|record| {
+            let chr = refs
+                .get_index(record.0.reference_sequence_id()?)
+                .map(|(name, _)| name.to_string())?;
+
+            let line = record.to_bed(&chr, rgb)?;
+            Some((chr, line))
+        })
+        .collect();
+
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+    for (chr, line) in pairs {
+        grouped.entry(chr).or_default().push(line);
+    }
+
+    grouped
 }
 
 /// Predict the length of the polyA tail
@@ -1341,6 +1537,12 @@ impl Read {
     /// assert_eq!(read.name, "R1_chr1::FC5:TC24:PA45:PR65:IY98");
     /// ```
     fn tag_read(&self, index: u64, chr: &String, batch: &String, singleton: bool) -> String {
+        let batch = if !batch.is_empty() {
+            format!("@{batch}")
+        } else {
+            String::new()
+        };
+
         let mut name = format!(
             "R{}{}_{chr}{BIG_SEP}FC{}{SEP}TC{}{SEP}PA{}{SEP}PR{}{SEP}IY{}",
             index,
@@ -1854,5 +2056,55 @@ impl Sequence {
 impl std::fmt::Display for Sequence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.seq)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_output_path_ignores_chromosome_when_split_disabled() {
+        let output = build_output_path(
+            &PathBuf::from("out"),
+            &PathBuf::from("sample"),
+            false,
+            "@",
+            Some("chr1"),
+            PASS_PREFIX,
+            "bam",
+        );
+
+        assert_eq!(output, PathBuf::from("out/sample.hq.bam"));
+    }
+
+    #[test]
+    fn build_output_path_prefixes_chromosome_when_split_enabled() {
+        let output = build_output_path(
+            &PathBuf::from("out"),
+            &PathBuf::from("sample"),
+            true,
+            "@",
+            Some("chr10"),
+            FAIL_PREFIX,
+            "bed",
+        );
+
+        assert_eq!(output, PathBuf::from("out/chr10@sample.lq.bed"));
+    }
+
+    #[test]
+    fn build_output_path_honors_custom_delimiter_when_split_enabled() {
+        let output = build_output_path(
+            &PathBuf::from("out"),
+            &PathBuf::from("sample"),
+            true,
+            ":",
+            Some("chrM"),
+            PASS_PREFIX,
+            "bam",
+        );
+
+        assert_eq!(output, PathBuf::from("out/chrM:sample.hq.bam"));
     }
 }
