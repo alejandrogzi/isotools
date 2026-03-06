@@ -12,30 +12,28 @@
 //! marked as such. The results are written to a set of files.
 
 use anyhow::Result;
-use config::{
-    exonic_overlap, get_progress_bar, par_write_results, splice_site_overlap, tsv_to_map,
-    write_descriptor, write_objs, BedColumn, FusionDetectionValue, MatchType, ModuleDescriptor,
-    ModuleMap, ModuleType, FUSIONS, FUSION_DESCRIPTOR, FUSION_FAKES, FUSION_FREE,
-    FUSION_RATIO_THRESHOLD, FUSION_REVIEW, REVIEW_RGB, SCALE, SEP,
-};
 use dashmap::DashMap;
+use genepred::{Bed12, GenePred};
 use hashbrown::{HashMap, HashSet};
 use log::info;
-use packbed::{
-    buckerize, combine, packbed, par_reader, parse_tracks, unpack, BedPackage, GenePred,
-    RefGenePred,
-};
+use packbed::{pack, OverlapType, Role};
 use rayon::prelude::*;
-use serde_json::Value;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::cli::Args;
-use crate::utils::{
-    prepare_refs, unpack_blacklist, IsoformParser, ParallelAccumulator, ParallelCounter,
-};
+use crate::utils::*;
+
+pub const FUSIONS: &str = "fusions.bed";
+pub const FUSION_FREE: &str = "fusions.free.bed";
+pub const FUSION_REVIEW: &str = "fusions.review.bed";
+pub const FUSION_FAKES: &str = "fusions.fakes.bed";
+pub const FUSION_DESCRIPTOR: &str = "fusions.tsv";
+
+// tag separators
+pub const SEP: &str = "#"; // WARN: should change to ':' -> breaks ORF caller [translationai hdf5]
+pub const BIG_SEP: &str = "__"; // WARN: should change to '::' -> breaks ORF caller [translationai hdf5]
 
 /// Detects fusions in a query set of reads
 ///
@@ -53,43 +51,35 @@ use crate::utils::{
 /// let args = Args::new();
 /// detect_fusions(args).unwrap();
 /// ```
-pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>> {
+pub fn detect_fusions(args: Args) {
     info!("Preparing files for fusion detection...");
 
-    let buckets = make_buckets(args.refs, args.query).expect("ERROR: Failed to make buckets!");
-    let blacklist =
-        unpack_blacklist(args.blacklist, config::OverlapType::Exon, false).unwrap_or_default();
+    let (buckets, reference_map) =
+        make_buckets(args.refs, args.query, args.separator, args.parent_index)
+            .expect("ERROR: Failed to make buckets!");
     let match_type = MatchType::from(args.intron_match);
 
-    let pb = get_progress_bar(buckets.len() as u64, "Detecting fusions...");
+    info!("Detected {} reference transcripts", reference_map.len());
+    info!("Detected {} query transcripts", buckets.len());
 
     let counter = ParallelCounter::default();
     let accumulator = ParallelAccumulator::default();
 
-    buckets.into_par_iter().for_each(|bucket| {
-        let chr = bucket.0;
-        let components = bucket.1;
-
+    buckets.into_par_iter().for_each(|(_chr, components)| {
         counter.inc_comp(components.len() as u32);
-
-        let binding = HashSet::new();
-        let banned = blacklist.get(&chr).unwrap_or(&binding);
 
         process_components(
             components,
-            banned,
+            &reference_map,
             &accumulator,
             &counter,
             args.recover,
             match_type,
             args.colorize.clone(),
-            args.tag.clone(),
+            args.threshold,
+            args.tag,
         );
-
-        pb.inc(1);
     });
-
-    pb.finish_and_clear();
 
     info!("Detected fusions: {}", accumulator.fusions.len());
     info!("Fusion-free reads: {}", accumulator.passes.len());
@@ -102,24 +92,20 @@ pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>>
         );
     }
 
-    if !args.in_memory {
-        if args.descriptor {
-            write_descriptor(&accumulator.descriptor, FUSION_DESCRIPTOR);
-        }
-
-        par_write_results(
-            &accumulator,
-            vec![
-                args.prefix.join(FUSIONS),
-                args.prefix.join(FUSION_FREE),
-                args.prefix.join(FUSION_REVIEW),
-                args.prefix.join(FUSION_FAKES),
-            ],
-            None,
-        );
+    if args.descriptor {
+        write_descriptor(&accumulator.descriptor, args.prefix.join(FUSION_DESCRIPTOR));
     }
 
-    Ok(accumulator.descriptor)
+    par_write_results(
+        &accumulator,
+        vec![
+            args.prefix.join(FUSIONS),
+            args.prefix.join(FUSION_FREE),
+            args.prefix.join(FUSION_REVIEW),
+            args.prefix.join(FUSION_FAKES),
+        ],
+        None,
+    );
 }
 
 /// Create a per-chromosome bucket of tracks for fusion detection
@@ -142,22 +128,24 @@ pub fn detect_fusions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>>
 /// assert_eq!(buckets.len(), 1);
 /// ```
 fn make_buckets(
-    refs: Vec<PathBuf>,
+    mut refs: Vec<PathBuf>,
     query: Vec<PathBuf>,
-) -> Result<DashMap<String, Vec<Box<dyn BedPackage>>>> {
-    let ref_str = prepare_refs(refs)?;
-    let refs = parse_tracks::<GenePred>(ref_str.as_str(), config::OverlapType::Exon, true)?; // INFO: OverlapType does not matter with TOGA
-    let query = unpack(query, config::OverlapType::Exon, false)?;
+    separator: char,
+    parent_index: usize,
+) -> Result<(
+    DashMap<String, Vec<Vec<GenePred>>>,
+    DashMap<String, ReferenceMap>,
+)> {
+    let ref_map = create_ref_map(refs.clone(), separator, parent_index)?;
 
-    let (tracks, n) = combine(refs, query);
-    let buckets = buckerize(
-        tracks,
-        config::OverlapType::Exon, // INFO: needs to be exonic to account for fused UTRs
-        n,
-        packbed::PackMode::Default,
-    );
+    let mut modes = Vec::new();
+    modes.extend(std::iter::repeat(Role::Reference).take(refs.len()));
+    modes.extend(std::iter::repeat(Role::Query).take(query.len()));
 
-    Ok(buckets)
+    refs.extend(query);
+    let tracks = pack(refs, modes, OverlapType::Exon)
+        .unwrap_or_else(|_| panic!("ERROR: Failed to pack reference transcripts!"));
+    Ok((tracks, ref_map))
 }
 
 /// Processes the components of reads in parallel
@@ -192,28 +180,37 @@ fn make_buckets(
 /// ```
 #[allow(clippy::too_many_arguments)]
 fn process_components(
-    components: Vec<Box<dyn BedPackage>>,
-    banned: &HashSet<String>,
+    components: Vec<Vec<GenePred>>,
+    reference_map: &DashMap<String, ReferenceMap>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     recover: bool,
     match_type: MatchType,
-    colorize: Option<String>,
-    suffix: Option<String>,
+    _colorize: Option<String>,
+    threshold: f32,
+    tag: bool,
 ) {
-    components.into_par_iter().for_each(|comp| {
-        let comp = comp
-            .as_any_owned()
-            .downcast::<(RefGenePred, Vec<GenePred>)>()
-            .expect("ERROR: Failed to downcast to RefGenePred");
+    components.into_iter().for_each(|comp| {
+        let (reference_regions, query_regions): (Vec<_>, Vec<_>) =
+            comp.into_iter().partition(|region| {
+                let role = region
+                    .get_extra("role".as_bytes())
+                    .unwrap_or_else(|| panic!("ERROR: role not found for region: {region:?}"))
+                    .clone()
+                    .into_scalar()
+                    .unwrap_or_else(|| panic!("ERROR: role not found for region: {region:?}"));
+
+                matches!(role.as_slice(), b"reference")
+            });
 
         let (fusions, no_fusions, fake_fusions, review, descriptor, is_dirty) = process_component(
-            comp,
-            banned,
+            reference_regions,
+            query_regions,
+            reference_map,
             recover,
             match_type,
-            colorize.clone(),
-            suffix.clone(),
+            threshold,
+            tag,
         )
         .unwrap_or_default();
 
@@ -223,283 +220,6 @@ fn process_components(
             counter.inc_dirty(1);
         }
     });
-}
-
-/// FusionSchema struct
-///
-///
-/// This struct is used to store the fusion schema for a read.
-/// Mimics FusionDetectionValue enum and fields of FusionDetectionDescriptor
-///
-/// # Fields
-///
-/// * `is_fused_read` - Indicates if the read is a fusion read
-/// * `is_fusion_supported` - Indicates if the fusion is supported
-/// * `component_size` - The size of the component
-/// * `ref_component_size` - The size of the reference component
-/// * `query_component_size` - The size of the query component
-/// * `whole_component_fusion_ratio` - The ratio of the whole component that is fused
-/// * `real_component_fusion_ratio` - The ratio of the real component that is fused
-/// * `fake_component_fusion_ratio` - The ratio of the fake component that is fused
-/// * `is_dirty_component` - Indicates if the component is dirty
-/// * `location_of_fusion` - The location of the fusion
-/// * `fusion_in_frame` - Indicates if the fusion is in frame
-///
-pub struct FusionSchema {
-    is_fused_read: Value,
-    ref_component_size: Value,
-    query_component_size: Value,
-    whole_component_fusion_ratio: Value,
-    real_component_fusion_ratio: Value,
-    fake_component_fusion_ratio: Value,
-    is_dirty_component: Value,
-    location_of_fusion: Value,
-    fusion_in_frame: Value,
-}
-
-impl FusionSchema {
-    /// Fills up the descriptor with the values from the schema
-    ///
-    /// # Arguments
-    ///
-    /// * `descriptor` - The descriptor to fill up
-    /// * `read` - The read to fill up the descriptor with
-    ///
-    /// # Returns
-    ///
-    /// * None
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let mut descriptor = HashMap::new();
-    /// let read = GenePred::new();
-    ///
-    /// schema.difuse(&mut descriptor, &read);
-    /// ```
-    fn diffuse(&self, descriptor: &mut HashMap<String, Box<dyn ModuleMap>>, read: &GenePred) {
-        descriptor.insert(
-            read.name.clone(),
-            ModuleDescriptor::with_schema(ModuleType::FusionDetection),
-        );
-        let handle = descriptor.get_mut(&read.name).unwrap();
-
-        for (field, value) in self.as_vals() {
-            handle.set_value(Box::new(field), value).ok();
-        }
-    }
-
-    /// Converts the schema into an iterable collection
-    ///
-    /// # Returns
-    ///
-    /// * Vec<(FusionDetectionValue, Value)> - The vector of tuples
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let schema = FusionSchema::default();
-    ///
-    /// let vals = schema.as_vals();
-    ///
-    /// for (field, value) in vals {
-    ///     println!("{}: {}", field, value);
-    /// }
-    /// ```
-    fn as_vals(&self) -> Vec<(FusionDetectionValue, Value)> {
-        vec![
-            (
-                FusionDetectionValue::IsFusedRead,
-                self.is_fused_read.clone(),
-            ),
-            (
-                FusionDetectionValue::RefFusionComponentSize,
-                self.ref_component_size.clone(),
-            ),
-            (
-                FusionDetectionValue::QueryFusionComponentSize,
-                self.query_component_size.clone(),
-            ),
-            (
-                FusionDetectionValue::WholeComponentFusionRatio,
-                self.whole_component_fusion_ratio.clone(),
-            ),
-            (
-                FusionDetectionValue::RealComponentFusionRatio,
-                self.real_component_fusion_ratio.clone(),
-            ),
-            (
-                FusionDetectionValue::FakeComponentFusionRatio,
-                self.fake_component_fusion_ratio.clone(),
-            ),
-            (
-                FusionDetectionValue::IsDirtyFusionComponent,
-                self.is_dirty_component.clone(),
-            ),
-            (
-                FusionDetectionValue::LocationOfFusion,
-                self.location_of_fusion.clone(),
-            ),
-            (
-                FusionDetectionValue::FusionInFrame,
-                self.fusion_in_frame.clone(),
-            ),
-        ]
-    }
-}
-
-/// Implements the Default trait for FusionSchema
-///
-/// # Example
-///
-/// ```rust, no_run
-/// let schema = FusionSchema::default();
-///
-/// assert_eq!(schema.is_fused_read, Value::Null);
-/// assert_eq!(schema.is_fusion_supported, Value::Null);
-/// assert_eq!(schema.ref_component_size, Value::Null);
-/// ```
-impl Default for FusionSchema {
-    fn default() -> Self {
-        FusionSchema {
-            is_fused_read: Value::Bool(false),
-            ref_component_size: Value::Number(0.into()),
-            query_component_size: Value::Number(0.into()),
-            whole_component_fusion_ratio: Value::Null,
-            real_component_fusion_ratio: Value::Null,
-            fake_component_fusion_ratio: Value::Null,
-            is_dirty_component: Value::Bool(false),
-            location_of_fusion: Value::Null,
-            fusion_in_frame: Value::Bool(false),
-        }
-    }
-}
-
-/// LocalCounter struct
-///
-/// This struct is used to count the number
-/// of real and fake fusions
-///
-/// # Fields
-///
-/// * `real_fusion_count` - The count of real fusions
-/// * `fake_fusion_count` - The count of fake fusions
-/// * `totals` - The total number of reads
-///
-/// # Example
-///
-/// ```rust, no_run
-/// let counter = LocalCounter::new(100);
-///
-/// assert_eq!(counter.real_fusion_count, 0.0);
-/// assert_eq!(counter.fake_fusion_count, 0.0);
-/// assert_eq!(counter.totals, 100.0);
-/// ```
-struct LocalCounter {
-    real_fusion_count: f32,
-    fake_fusion_count: f32,
-    totals: f32,
-}
-
-impl LocalCounter {
-    /// Creates a new LocalCounter
-    ///
-    /// # Arguments
-    ///
-    /// * `totals` - The total number of reads
-    ///
-    /// # Returns
-    ///
-    /// * Self - The new LocalCounter
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = LocalCounter::new(100);
-    ///
-    /// assert_eq!(counter.real_fusion_count, 0.0);
-    /// assert_eq!(counter.fake_fusion_count, 0.0);
-    /// assert_eq!(counter.totals, 100.0);
-    /// ```
-    fn new(totals: usize) -> Self {
-        LocalCounter {
-            real_fusion_count: 0.0,
-            fake_fusion_count: 0.0,
-            totals: totals as f32,
-        }
-    }
-
-    /// Increments the real fusion count
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let mut counter = LocalCounter::new(100);
-    ///
-    /// counter.inc_real();
-    /// assert_eq!(counter.real_fusion_count, 1.0);
-    /// ```
-    fn inc_real(&mut self) {
-        self.real_fusion_count += 1.0;
-    }
-
-    /// Increments the fake fusion count
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let mut counter = LocalCounter::new(100);
-    ///
-    /// counter.inc_fake();
-    /// assert_eq!(counter.fake_fusion_count, 1.0);
-    /// ```
-    fn inc_fake(&mut self) {
-        self.fake_fusion_count += 1.0;
-    }
-
-    /// Gets the ratios of fusions
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = LocalCounter::new(100);
-    ///
-    /// let ratios = counter.get_ratios();
-    /// assert_eq!(ratios.0, 0.0);
-    /// assert_eq!(ratios.1, 0.0);
-    /// assert_eq!(ratios.2, 0.0);
-    ///
-    /// counter.inc_real();
-    /// counter.inc_fake();
-    ///
-    /// let ratios = counter.get_ratios();
-    /// assert_eq!(ratios.0, 0.01);
-    /// assert_eq!(ratios.1, 0.01);
-    /// assert_eq!(ratios.2, 0.0);
-    /// ```
-    fn get_ratios(&self) -> (f32, f32, f32) {
-        let whole_ratio = (self.real_fusion_count + self.fake_fusion_count) / self.totals;
-        let real_ratio = self.real_fusion_count / self.totals;
-        let fake_ratio = self.fake_fusion_count / self.totals;
-
-        (whole_ratio, real_ratio, fake_ratio)
-    }
-
-    /// Gets the ratio of real fusions
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = LocalCounter::new(100);
-    ///
-    /// counter.inc_real();
-    ///
-    /// let ratio = counter.get_real_ratio();
-    /// assert_eq!(ratio, 0.01);
-    /// ```
-    fn get_real_ratio(&self) -> f32 {
-        self.real_fusion_count / self.totals
-    }
 }
 
 /// Processes a component of reads
@@ -537,22 +257,23 @@ impl LocalCounter {
 /// );
 /// ```
 fn process_component(
-    component: Box<(RefGenePred, Vec<GenePred>)>,
-    banned: &HashSet<String>,
+    reference_regions: Vec<GenePred>,
+    mut query_regions: Vec<GenePred>,
+    reference_map: &DashMap<String, ReferenceMap>,
     recover: bool,
     match_type: MatchType,
-    colorize: Option<String>,
-    suffix: Option<String>,
+    threshold: f32,
+    tag: bool,
 ) -> Option<(
     Vec<String>,
     Vec<String>,
     Vec<String>,
     Option<Vec<String>>,
-    HashMap<String, Box<dyn ModuleMap>>,
+    HashMap<String, FusionSchema>,
     bool,
 )> {
     // INFO: skipping early if no reads in component
-    if component.1.is_empty() {
+    if query_regions.is_empty() {
         return None;
     }
 
@@ -562,36 +283,62 @@ fn process_component(
     let mut fake_fusions = Vec::new();
     let mut no_fusions = Vec::new();
 
-    let refs = component.0;
-    let mut queries = component.1;
+    let mut genes = HashSet::new();
+    let mut reference_exons = HashMap::new();
+    let mut reference_introns = HashMap::new();
+    for r in reference_regions.iter() {
+        let name = unsafe { std::str::from_utf8_unchecked(r.name().unwrap()) };
+        let gene_name = reference_map
+            .get(name)
+            .unwrap_or_else(|| panic!("ERROR: Failed to get reference map for gene: {name:?}"))
+            .name
+            .clone();
 
-    let genes = refs.get_names_split();
+        if !genes.contains(&gene_name) {
+            genes.insert(gene_name.clone());
+        }
 
-    let mut counter = LocalCounter::new(queries.len());
+        // INFO: build reference_exons and reference_introns
+        // extends collection if name in map, otherwise inserts
+        reference_exons
+            .entry(gene_name.clone())
+            .or_insert(BTreeSet::new())
+            .extend(reference_map.get(name).unwrap().exons.iter().cloned());
+        reference_introns
+            .entry(gene_name)
+            .or_insert(BTreeSet::new())
+            .extend(reference_map.get(name).unwrap().introns.iter().cloned());
+    }
+
+    let reference_exons = reference_exons.into_values().collect();
+    let reference_introns = reference_introns.into_values().collect();
+
+    let mut counter = LocalCounter::new(query_regions.len());
 
     // INFO: if genes is empty the follwing occurs
     // INFO: species-specific gene | intergenic region | missing gene in refs
     // INFO: if genes len = 1, we have a single gene in the component
     if genes.len() > 1 {
+        let query_len = query_regions.len();
         identify_fusions(
-            &refs,
-            &mut queries,
+            &mut query_regions,
+            query_len,
+            reference_exons,
+            reference_introns,
             &mut descriptor,
             &mut counter,
             &mut no_fusions,
             &mut fusions,
             &mut fake_fusions,
-            banned,
             match_type,
-            colorize,
-            suffix,
+            tag,
         );
     }
 
     // INFO: second pass for seen reads
     // INFO: first pass for non-fusions
     fill_schema(
-        &queries,
+        &query_regions,
         &mut descriptor,
         &mut no_fusions,
         genes.len(),
@@ -601,13 +348,11 @@ fn process_component(
     if recover {
         // INFO: if the fusion ratio in the component is above the threshold,
         // INFO: mark all queries as dirty and submit them for review
-        if counter.get_real_ratio() >= FUSION_RATIO_THRESHOLD {
-            let review = recover_component(&mut queries, &mut descriptor);
+        if counter.get_real_ratio() >= threshold {
+            let review = recover_component(&mut query_regions, &mut descriptor);
             return Some((vec![], vec![], vec![], Some(review), descriptor, true));
         }
     }
-
-    // dbg!(&descriptor);
 
     Some((fusions, no_fusions, fake_fusions, None, descriptor, false))
 }
@@ -633,27 +378,24 @@ fn process_component(
 /// ```
 fn recover_component(
     queries: &mut [GenePred],
-    descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
+    descriptor: &mut HashMap<String, FusionSchema>,
 ) -> Vec<String> {
     let mut review = vec![];
 
     for query in queries.iter_mut() {
         // INFO: append :RW tag to read name
-        let name = format!("{}{SEP}RW", query.name);
-        query.modify_field(BedColumn::Name.into(), &name);
+        let query_name =
+            unsafe { std::str::from_utf8_unchecked(query.name().unwrap()) }.to_string();
+        query.set_name(Some(format!("{}{SEP}RW", query_name).as_bytes().to_vec()));
+        let query_line =
+            unsafe { std::str::from_utf8_unchecked(&query.to_bed::<Bed12>()) }.to_string();
 
-        // INFO: change color for review reads!
-        query.modify_field(BedColumn::ItemRgb.into(), REVIEW_RGB);
+        review.push(query_line);
+        let handle = descriptor.get_mut(&query_name).unwrap_or_else(|| {
+            panic!("ERROR: Failed to get descriptor for read: {query_name:?}, this is a bug!")
+        });
 
-        review.push(query.line.clone());
-        let handle = descriptor.get_mut(&query.name).unwrap();
-
-        handle
-            .set_value(
-                Box::new(FusionDetectionValue::IsDirtyFusionComponent),
-                Value::Bool(true),
-            )
-            .ok();
+        handle.is_dirty_component = true;
     }
 
     review
@@ -686,54 +428,42 @@ fn recover_component(
 /// ```
 fn fill_schema(
     reads: &[GenePred],
-    descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
+    descriptor: &mut HashMap<String, FusionSchema>,
     no_fusions: &mut Vec<String>,
     genes: usize,
     counter: &mut LocalCounter,
 ) {
     reads.iter().for_each(|read| {
         let (whole, real, fake) = counter.get_ratios();
+        let read_name = unsafe { std::str::from_utf8_unchecked(read.name().unwrap()) }.to_string();
 
         // INFO: read already exists in the descriptor -> fill descriptor directly
-        if descriptor.contains_key(&read.name) {
-            let handle = descriptor
-                .get_mut(&read.name)
-                .expect("ERROR: Failed to get descriptor, this is a bug!");
+        if descriptor.contains_key(&read_name) {
+            let handle = descriptor.get_mut(&read_name).unwrap_or_else(|| {
+                panic!("ERROR: Failed to get descriptor for read: {read_name:?}, this is a bug!")
+            });
 
-            handle
-                .set_value(
-                    Box::new(FusionDetectionValue::WholeComponentFusionRatio),
-                    serde_json::json!(whole),
-                )
-                .ok();
-            handle
-                .set_value(
-                    Box::new(FusionDetectionValue::RealComponentFusionRatio),
-                    serde_json::json!(real),
-                )
-                .ok();
-            handle
-                .set_value(
-                    Box::new(FusionDetectionValue::FakeComponentFusionRatio),
-                    serde_json::json!(fake),
-                )
-                .ok();
+            handle.whole_component_fusion_ratio = whole;
+            handle.real_component_fusion_ratio = real;
+            handle.fake_component_fusion_ratio = fake;
         } else {
             // INFO: read does not exist in the descriptor
             // INFO: and it is not a fusion
-            no_fusions.push(read.line.clone());
+            let read_line =
+                unsafe { std::str::from_utf8_unchecked(&read.to_bed::<Bed12>()) }.to_string();
+            no_fusions.push(read_line);
 
             let mut schema = FusionSchema::default();
 
-            schema.is_fused_read = Value::Bool(false);
-            schema.ref_component_size = Value::Number(genes.into());
-            schema.query_component_size = Value::Number(reads.len().into());
-            schema.whole_component_fusion_ratio = serde_json::json!(whole);
-            schema.real_component_fusion_ratio = serde_json::json!(real);
-            schema.fake_component_fusion_ratio = serde_json::json!(fake);
-            schema.is_dirty_component = Value::Bool(false);
+            schema.is_fused_read = false;
+            schema.ref_component_size = genes as u32;
+            schema.query_component_size = reads.len() as u32;
+            schema.whole_component_fusion_ratio = whole;
+            schema.real_component_fusion_ratio = real;
+            schema.fake_component_fusion_ratio = fake;
+            schema.is_dirty_component = false;
 
-            schema.diffuse(descriptor, read);
+            descriptor.insert(read_name, schema);
         }
     });
 }
@@ -784,54 +514,38 @@ fn fill_schema(
 /// ```
 #[allow(clippy::too_many_arguments)]
 fn identify_fusions(
-    refs: &RefGenePred,
-    reads: &mut [GenePred],
-    descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
+    query_regions: &mut Vec<GenePred>,
+    query_len: usize,
+    reference_exons: Vec<BTreeSet<(u64, u64)>>,
+    reference_introns: Vec<BTreeSet<(u64, u64)>>,
+    descriptor: &mut HashMap<String, FusionSchema>,
     counter: &mut LocalCounter,
     no_fusions: &mut Vec<String>,
     fusions: &mut Vec<String>,
     fake_fusions: &mut Vec<String>,
-    banned: &HashSet<String>,
     match_type: MatchType,
-    colorize: Option<String>,
-    suffix: Option<String>,
+    tag: bool,
 ) {
-    // INFO: fusion loci [more than one gene in component]
-    // INFO: we create a per-gene collection of exons
-    let ref_exons = refs.smash_exons_by_name();
-    let ref_introns = refs.smash_introns_by_name();
-
-    let color = colorize.unwrap_or_default();
-    let suffix = suffix.unwrap_or_default();
-
-    reads.iter_mut().for_each(|query| {
-        if banned.contains(&query.name) {
-            no_fusions.push(query.line.clone());
-            return;
-        }
-
-        if !color.is_empty() {
-            query.modify_field(BedColumn::ItemRgb.into(), &color);
-        }
-
-        if !suffix.is_empty() {
-            // INFO: append --suffix as tag :{TAG}
-            let name = format!("{}{SEP}{}", query.name, suffix);
-            query.modify_field(BedColumn::Name.into(), &name);
-        }
+    query_regions.iter_mut().for_each(|query| {
+        let query_name =
+            unsafe { std::str::from_utf8_unchecked(query.name().unwrap()) }.to_string();
+        let query_exons = query.exons().clone();
+        let query_introns = query.introns().clone();
 
         let mut schema = FusionSchema::default();
         let mut count = 0;
 
         // INFO: check if query read overlaps any of the gene exon collections
         // WARN: we are not keeping track of gene names here
-        for r_exons in ref_exons.iter() {
-            if exonic_overlap(&query.exons, r_exons) {
+        for r_exons in reference_exons.iter() {
+            if exonic_overlap(&query_exons, r_exons) {
                 count += 1;
             }
         }
 
-        schema.is_dirty_component = Value::Bool(false);
+        schema.is_dirty_component = false;
+        schema.ref_component_size = reference_exons.len() as u32;
+        schema.query_component_size = query_len as u32;
 
         // INFO: query read overlaps more than one gene exon collection
         if count > 1 {
@@ -846,292 +560,43 @@ fn identify_fusions(
             // INFO: should be catalogued as fusions!
 
             let mut splicing_overlaps = 0_f32;
-            for r_introns in ref_introns.iter() {
-                if splice_site_overlap(&query.introns, r_introns, match_type) {
+            for r_introns in reference_introns.iter() {
+                if splice_site_overlap(&query_introns, r_introns, match_type) {
                     splicing_overlaps += 1.0;
                 }
             }
 
             if splicing_overlaps > 1.0 {
-                let location = match query.strand {
-                    config::Strand::Forward => {
-                        format!("{}:{}-{}", query.chrom, query.start, query.end)
-                    }
-                    config::Strand::Reverse => {
-                        format!(
-                            "{}:{}-{}",
-                            query.chrom,
-                            SCALE - query.end,
-                            SCALE - query.start
-                        )
-                    }
-                };
-
                 // counter.real_fusion_count += 1.0;
                 counter.inc_real();
-                fusions.push(query.line.clone());
+                let query_line =
+                    unsafe { std::str::from_utf8_unchecked(&query.to_bed::<Bed12>()) }.to_string();
+                fusions.push(query_line);
 
-                schema.is_fused_read = Value::Bool(true);
-                schema.fusion_in_frame = Value::Bool((query.cds_end - query.cds_start) % 3 == 0);
-                schema.location_of_fusion = Value::String(location);
+                schema.is_fused_read = true;
             } else {
                 counter.inc_fake();
                 // fake_fusion_count += 1.0;
                 // INFO: append fake tag to read {:FK}
-                let name = format!("{}{SEP}FK", query.name);
-                query.modify_field(BedColumn::Name.into(), &name);
 
-                fake_fusions.push(query.line.clone());
-                schema.is_fused_read = Value::Bool(false);
+                if tag {
+                    let name = format!("{}{SEP}FK", query_name);
+                    query.set_name(Some(name.as_bytes().to_vec()));
+                }
+
+                let query_line =
+                    unsafe { std::str::from_utf8_unchecked(&query.to_bed::<Bed12>()) }.to_string();
+
+                fake_fusions.push(query_line);
+                schema.is_fused_read = false;
             }
         } else {
-            no_fusions.push(query.line.clone());
-            schema.is_fused_read = Value::Bool(false);
+            let query_line =
+                unsafe { std::str::from_utf8_unchecked(&query.to_bed::<Bed12>()) }.to_string();
+            no_fusions.push(query_line);
+            schema.is_fused_read = false;
         }
 
-        schema.diffuse(descriptor, query);
+        descriptor.insert(query_name, schema);
     });
-}
-
-/// Detect fusions using mapping data
-///
-/// # Arguments
-///
-/// * `args` - A struct containing the command line arguments
-///
-/// # Example
-///
-/// ```rust, no_run
-/// use iso_fusion::cli::Args;
-/// use iso_fusion::core::detect_fusions_with_mapping;
-///
-/// let args = Args {
-///     refs: vec!["path/to/isoforms.tsv".to_string()],
-///     query: "path/to/mapping.bed".to_string(),
-///     overlap_type: "exon".to_string(),
-/// };
-///
-/// detect_fusions_with_mapping(args);
-/// ```
-pub fn detect_fusions_with_mapping(args: Args) -> Result<()> {
-    let contents = par_reader(args.refs).expect("ERROR: Failed to read isoform file(s)!");
-    let refs = tsv_to_map::<IsoformParser, String>(Arc::new(contents), 1, 0) // INFO: gene/ttranscript to transcript->gene Hash
-        .expect("ERROR: Failed to parse isoform file(s)!");
-
-    let buckets = packbed(
-        args.query,
-        None,
-        args.overlap_type,
-        packbed::PackMode::Paired,
-    )
-    .expect("ERROR: Failed to pack query reads!");
-
-    let pb = get_progress_bar(buckets.len() as u64, "Detecting fusions in mapping mode...");
-
-    let counter = ParallelCounter::default();
-    let acc = ParallelAccumulator::default();
-
-    let match_type = MatchType::from(args.intron_match);
-
-    buckets.par_iter().for_each(|bucket| {
-        let _ = bucket.key();
-        let components = bucket.value().to_owned();
-        counter.inc_comp(components.len() as u32);
-
-        components.into_par_iter().for_each(|comp| {
-            let comp = comp
-                .as_any()
-                .downcast_ref::<(Vec<GenePred>, Vec<GenePred>)>()
-                .expect("ERROR: Failed to downcast to RefGenePred");
-
-            let (fusions, no_fusions) = process_mapping_component(comp, &refs, match_type);
-
-            acc.add_passes(no_fusions);
-
-            if let Some(f) = fusions {
-                acc.add_fusions(f);
-            }
-        });
-
-        pb.inc(1);
-    });
-
-    pb.finish_and_clear();
-
-    info!("Detected fusions: {}", acc.fusions.len());
-    info!("Fusion-free reads: {}", acc.passes.len());
-
-    [&acc.fusions, &acc.passes]
-        .par_iter()
-        .zip([FUSIONS, FUSION_FREE].par_iter())
-        .for_each(|(rx, path)| write_objs(&rx, path));
-
-    Ok(())
-}
-
-/// Receives a component of mapping data and returns fusions and non-fusions
-///
-/// # Arguments
-///
-/// * `component` - A tuple containing two vectors of GenePred structs
-/// * `isoforms` - A HashMap containing isoform data
-/// * `match_type` - A MatchType enum
-///
-/// # Example
-///
-/// ```rust, no_run
-/// use iso_fusion::core::process_mapping_component;
-/// use iso_fusion::config::MatchType;
-/// use std::collections::HashMap;
-/// use packbed::GenePred;
-///
-/// let component = (
-///    vec![GenePred::default()],
-///    vec![GenePred::default()]
-/// );
-///
-/// let isoforms = HashMap::new();
-///
-/// let match_type = MatchType::Exact;
-///
-/// process_mapping_component(
-///    &component,
-///    &isoforms,
-///    match_type
-/// );
-/// ```
-fn process_mapping_component(
-    component: &(Vec<GenePred>, Vec<GenePred>),
-    isoforms: &HashMap<String, Vec<String>>,
-    match_type: MatchType,
-) -> (Option<Vec<String>>, Vec<String>) {
-    let query: &Vec<GenePred> = component.0.as_ref(); // INFO: treating refs back to queries, discarding fake queries
-
-    let mut genes = HashMap::new();
-
-    query.iter().for_each(|q| {
-        // INFO: getting gene name from transcript name
-        let tx_to_gene = isoforms
-            .get(&q.name)
-            .expect("ERROR: Failed to get isoforms!")
-            .get(0) // WARN: should be safe to get the first element
-            .expect("ERROR: Failed to get gene name!");
-
-        // INFO: fills a hashmap with genes as keys and exons as values
-        let exons = genes.entry(tx_to_gene).or_insert_with(BTreeSet::new);
-        exons.extend(q.exons.iter().cloned());
-    });
-
-    return get_fusions_from_component(query, genes, match_type);
-}
-
-/// Single-component handler for fusions
-///
-/// # Arguments
-///
-/// * `component` - A vector of GenePred structs
-/// * `genes` - A HashMap containing gene names and exons
-/// * `match_type` - A MatchType enum
-///
-/// # Example
-///
-/// ```rust, no_run
-/// use iso_fusion::core::get_fusions_from_component;
-/// use iso_fusion::config::MatchType;
-/// use std::collections::{BTreeSet, HashMap};
-/// use packbed::GenePred;
-///
-/// let component = vec![GenePred::default()];
-///
-/// let genes = HashMap::new();
-///
-/// let match_type = MatchType::Exact;
-///
-/// get_fusions_from_component(
-///   &component,
-///   genes,
-///   match_type
-/// );
-/// ```
-fn get_fusions_from_component(
-    component: &Vec<GenePred>,
-    genes: HashMap<&String, BTreeSet<(u64, u64)>>,
-    match_type: MatchType,
-) -> (Option<Vec<String>>, Vec<String>) {
-    // INFO: if at any point names is > 1, we have a fusion loci
-    if genes.len() > 1 {
-        let mut fusions = vec![];
-        let mut no_fusions = vec![];
-
-        let ref_introns = get_intron_coords_from_gene_map(&genes);
-
-        component.iter().for_each(|query| {
-            let mut count = 0;
-
-            for (_, exons) in genes.iter() {
-                if exonic_overlap(&query.exons, exons) {
-                    count += 1;
-                }
-            }
-
-            // INFO: query read overlaps more than one gene exon collection
-            // INFO: we need to pass again to prove that query shares splice sites
-            // INFO: with more than one gene
-            if count > 1 {
-                let mut splicing_overlaps = 0_f32;
-                for r_introns in ref_introns.iter() {
-                    if splice_site_overlap(&query.introns, r_introns, match_type) {
-                        splicing_overlaps += 1.0;
-                    }
-                }
-
-                if splicing_overlaps > 1.0 {
-                    fusions.push(query.line.clone());
-                }
-            } else {
-                no_fusions.push(query.line.clone());
-            }
-        });
-
-        return (Some(fusions), no_fusions);
-    }
-
-    return (None, component.iter().map(|q| q.line.clone()).collect());
-}
-
-/// Get intron coordinates from gene map
-///
-/// # Arguments
-///
-/// * `genes` - A HashMap containing gene names and exons
-///
-/// # Example
-///
-/// ```rust, no_run
-/// use iso_fusion::core::get_intron_coords_from_gene_map;
-/// use std::collections::HashMap;
-///
-/// let genes = HashMap::new();
-///
-/// get_intron_coords_from_gene_map(&genes);
-/// ```
-fn get_intron_coords_from_gene_map(
-    genes: &HashMap<&String, BTreeSet<(u64, u64)>>,
-) -> Vec<HashSet<(u64, u64)>> {
-    let mut introns = vec![];
-
-    for (_, exons) in genes.iter() {
-        let mut intron = HashSet::new();
-        let mut exons = exons.iter().peekable();
-
-        while let Some(exon) = exons.next() {
-            if let Some(next_exon) = exons.peek() {
-                intron.insert((exon.1 + 1, next_exon.0 - 1));
-            }
-        }
-
-        introns.push(intron);
-    }
-
-    introns
 }

@@ -754,6 +754,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "genepred"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f159c120fafdabbd7ebbb601a2b785ffbbb40e370a30e7662a76a51832dd5f3d"
+dependencies = [
+ "memchr",
+ "memmap2",
+ "rayon",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1041,17 +1052,18 @@ dependencies = [
 
 [[package]]
 name = "iso-fusion"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "clap",
  "config",
  "dashmap",
+ "genepred",
  "hashbrown 0.16.1",
- "iso-pack",
  "log",
  "num-traits",
  "num_cpus",
+ "packbed",
  "rand",
  "rayon",
  "serde",
@@ -1098,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "config",
@@ -1660,6 +1672,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2c1f9f56e534ac6a9b8a4600bdf0f530fb393b5f393e7b4d03489c3cf0c3f01"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "packbed"
+version = "0.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "959c91efd4ada383d7e9b5daff9141b7155b6adaa269c47414304e15ad6870da"
+dependencies = [
+ "clap",
+ "dashmap",
+ "genepred",
+ "num_cpus",
+ "rayon",
 ]
 
 [[package]]

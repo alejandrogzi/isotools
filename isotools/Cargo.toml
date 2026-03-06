@@ -20,7 +20,7 @@ authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70.0"
-version = "0.0.2"
+version = "0.0.3"
 
 [workspace.dependencies]
 dashmap = { version = "6", features = ["rayon"] }
@@ -50,6 +50,8 @@ noodles-sam = "0.75.0"
 memchr = "2.7.4"
 memmap2 = "0.9.4"
 flate2 = "1.0.20"
+genepred = "0.0.10"
+packbed = { version = "0.0.11", features = ["dashmap"] }
 
 [profile.release]
 lto = true
