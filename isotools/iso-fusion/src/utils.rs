@@ -56,7 +56,7 @@ pub fn create_ref_map<P: AsRef<Path> + Debug + Sync + Send>(
     let mut modes = Vec::new();
     modes.extend(std::iter::repeat(Role::Reference).take(refs.len()));
     let tracks = pack(refs, modes, OverlapType::Exon)
-        .unwrap_or_else(|_| panic!("ERROR: Failed to pack reference transcripts!"));
+        .unwrap_or_else(|e| panic!("ERROR: Failed to pack reference transcripts {:?}", e));
     let acc = DashMap::new();
 
     let _ = tracks.into_par_iter().for_each(|(_chrom, components)| {

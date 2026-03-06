@@ -60,7 +60,6 @@ pub fn detect_fusions(args: Args) {
     let match_type = MatchType::from(args.intron_match);
 
     info!("Detected {} reference transcripts", reference_map.len());
-    info!("Detected {} query transcripts", buckets.len());
 
     let counter = ParallelCounter::default();
     let accumulator = ParallelAccumulator::default();
