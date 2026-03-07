@@ -1094,17 +1094,16 @@ dependencies = [
 
 [[package]]
 name = "iso-nmd"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "config",
  "dashmap",
+ "genepred",
  "hashbrown 0.16.1",
- "iso-pack",
  "log",
  "num_cpus",
  "rayon",
- "serde_json",
  "simple_logger",
 ]
 

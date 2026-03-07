@@ -12,18 +12,14 @@
 //! with the latter group tagged and color-coded for easy visualization.
 
 use dashmap::DashSet;
+use genepred::{Bed12, Bed4, GenePred};
 use hashbrown::{HashMap, HashSet};
 use log::info;
-use packbed::{packbed, par_reader, record::Bed4, BedPackage, GenePred};
 use rayon::prelude::*;
 
+use std::io::BufWriter;
 use std::path::PathBuf;
-use std::sync::Arc;
-
-use config::{
-    bed_to_map, get_progress_bar, par_write_results, BedColumn, CoordType, OverlapType,
-    ParallelCollector, NMD_FREE_READS, NMD_READS, SEP,
-};
+use std::{fs::File, io::Write};
 
 use crate::cli::Args;
 
@@ -32,6 +28,14 @@ pub const STRONG_NMD: &str = "SN";
 pub const WEAK_NMD: &str = "WN";
 pub const SN_COLOR: &str = "125,40,40"; // dark-red
 pub const WN_COLOR: &str = "213,67,67"; // red
+pub const SCALE: u64 = 100_000_000_000; // 100Gb
+
+pub const NMD_FREE_READS: &str = "reads.bed";
+pub const NMD_READS: &str = "nmd.bed";
+
+// tag separators
+pub const SEP: &str = "#"; // WARN: should change to ':' -> breaks ORF caller [translationai hdf5]
+pub const BIG_SEP: &str = "__"; // WARN: should change to '::' -> breaks ORF caller [translationai hdf5]
 
 /// Classifies transcript reads as having strong, weak, or no nonsense-mediated decay (NMD) potential.
 ///
@@ -58,43 +62,38 @@ pub const WN_COLOR: &str = "213,67,67"; // red
 /// * `Result<(), String>` - Returns `Ok(())` on successful execution.
 ///   Returns an `Err` with a descriptive string if any step, such as file packing or
 ///   parallel processing, fails.
-pub fn classify_nmd(args: Args) -> Result<(), String> {
+pub fn classify_nmd(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     info!("INFO: Classifying NMD classes...");
 
-    let tracks = packbed(
-        args.refs.clone(),
-        None,
-        OverlapType::Exon,
-        packbed::PackMode::Paired,
-    )
-    .unwrap_or_else(|e| panic!("ERROR: failed to pack records in {:?} -> {e}", &args.refs));
-
-    let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
-
-    let pb = get_progress_bar(tracks.len() as u64, "Processing...");
     let accumulator = ParallelAccumulator::default();
+    let blacklist = if let Some(path) = args.blacklist {
+        unpack_blacklist(path).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
 
-    tracks.into_par_iter().for_each(|bucket| {
-        let chr = bucket.0;
-        let components = bucket.1;
+    genepred::Reader::<Bed12>::from_mmap(args.bed)?
+        .par_records()?
+        .for_each(|record| {
+            let record = record.expect("Error reading record");
 
-        let binding = HashSet::new();
-        let banned = blacklist.get(&chr).unwrap_or(&binding);
+            let chrom =
+                std::str::from_utf8(&record.chrom).expect("ERROR: could not convert chrom to str");
 
-        process_components(
-            components,
-            banned,
-            args.nmd_distance,
-            args.weak_nmd_distance,
-            args.atg_distance,
-            args.big_exon_dist_to_ej,
-            &accumulator,
-        );
+            let binding = HashSet::new();
+            let banned = blacklist.get(chrom).unwrap_or(&binding);
 
-        pb.inc(1);
-    });
+            process_read(
+                record,
+                banned,
+                args.nmd_distance,
+                args.weak_nmd_distance,
+                args.atg_distance,
+                args.big_exon_dist_to_ej,
+                &accumulator,
+            );
+        });
 
-    pb.finish_and_clear();
     info!("Reads categorized as NMDs: {}", accumulator.num_nmds());
 
     let (no_nmd, nmd) = if let Some(prefix) = args.prefix {
@@ -117,61 +116,6 @@ pub fn classify_nmd(args: Args) -> Result<(), String> {
     par_write_results(&accumulator, vec![no_nmd, nmd], Some(args.outdir));
 
     Ok(())
-}
-
-/// Processes a collection of `BedPackage` components in parallel to classify them for NMD.
-///
-/// This function is the parallel workhorse of the NMD classification. It takes a vector of
-/// `BedPackage` objects (representing genomic regions and their associated transcripts) and
-/// processes each one concurrently.
-///
-/// It downcasts each `BedPackage` to a specific type, `(Vec<GenePred>, Vec<GenePred>)`, which
-/// is expected to contain the transcript and intron predictions for a given genomic locus.
-/// It then calls `process_component` for each individual component to perform the actual
-/// NMD classification. The results from each parallel task are accumulated in a thread-safe
-/// `ParallelAccumulator`.
-///
-/// # Arguments
-///
-/// * `components` - A `Vec` of `Box<dyn BedPackage>`, where each box contains a set of
-///   genomic features (e.g., transcripts) for a specific locus.
-/// * `banned` - A `HashSet` of genomic coordinates representing blacklisted regions or reads
-///   to be excluded from the analysis.
-/// * `nmd_distance` - A `u64` representing the distance threshold for strong NMD classification.
-/// * `weak_nmd_distance` - An `i64` for the distance threshold for weak NMD classification.
-/// * `atg_distance` - A `u64` for the ATG distance threshold used in weak NMD classification.
-/// * `big_exon_dist_to_ej` - A `u64` for the big exon distance threshold to the exon-exon junction,
-///   used in weak NMD classification.
-/// * `accumulator` - A reference to a `ParallelAccumulator` to store the classified reads
-///   from all parallel tasks.
-fn process_components(
-    components: Vec<Box<dyn BedPackage>>,
-    banned: &HashSet<(u64, u64)>,
-    nmd_distance: u64,
-    weak_nmd_distance: i64,
-    atg_distance: u64,
-    big_exon_dist_to_ej: u64,
-    accumulator: &ParallelAccumulator,
-) {
-    components.into_par_iter().for_each(|comp| {
-        let (no_nmd, nmd) = {
-            let comp = comp
-                .as_any_owned()
-                .downcast::<(Vec<GenePred>, Vec<GenePred>)>()
-                .expect("ERROR: Could not downcast to IntronPred and GenePred!");
-
-            process_component(
-                comp,
-                banned,
-                nmd_distance,
-                weak_nmd_distance,
-                atg_distance,
-                big_exon_dist_to_ej,
-            )
-        };
-
-        accumulator.add(no_nmd, nmd);
-    });
 }
 
 /// Classifies a single genomic component (a set of transcripts) for NMD potential.
@@ -206,140 +150,164 @@ fn process_components(
 /// * `(Vec<String>, Vec<String>)` - A tuple containing two vectors of strings. The first vector
 ///   holds the lines of reads classified as having no NMD potential, and the second
 ///   contains the lines of reads with NMD potential (both strong and weak).
-fn process_component(
-    component: Box<(Vec<GenePred>, Vec<GenePred>)>,
+fn process_read(
+    mut read: GenePred,
     banned: &HashSet<(u64, u64)>,
     nmd_distance: u64,
     weak_nmd_distance: i64,
     atg_distance: u64,
     big_exon_dist_to_ej: u64,
-) -> (Vec<String>, Vec<String>) {
-    let reads = component.0;
+    accumulator: &ParallelAccumulator,
+) {
     let mut nmd = Vec::new();
     let mut no_nmd = Vec::new();
 
-    for mut read in reads {
-        // INFO: skip blacklisted reads
-        if banned.contains(&(read.start, read.end)) {
-            continue;
+    // INFO: skip blacklisted reads
+    if banned.contains(&(read.start, read.end)) {
+        return;
+    }
+
+    let mut cds_start = read
+        .thick_start()
+        .unwrap_or_else(|| panic!("ERROR: thick_start is None for read {:?}", read));
+
+    let mut cds_end = read
+        .thick_end()
+        .unwrap_or_else(|| panic!("ERROR: thick_end is None for read {:?}", read));
+
+    // INFO: noncoding transcripts
+    if cds_start == cds_end {
+        // INFO: label = "noNMD", ex_ex_junction_utr = 0, bpUTRtoLastEEJ = 0
+        return;
+    }
+
+    let mut nmd_count: i64 = -1;
+    let mut _ex_ex_junction_utr: i64 = -1;
+    let mut dist_stop_to_next_sj = 0; // INFO: for big exon test
+    let mut in_utr = false;
+    let mut utr_len = 0;
+    let mut cds_len = 0;
+    let mut bp_utr_to_last_ex_ex_jct = 0;
+
+    let mut exons = read.exons(); // INFO: already in ascending order
+
+    exons = match read.strand() {
+        Some(genepred::Strand::Forward) => exons,
+        Some(genepred::Strand::Reverse) => {
+            cds_start = SCALE - cds_start;
+            cds_end = SCALE - cds_end;
+            // INFO: we scale the coordinates and then sort them
+            // INFO: this is equivalent to reversing the exons and reversing the coordinates
+            let mut exons = exons
+                .iter()
+                .map(|(start, end)| (SCALE - end, SCALE - start))
+                .collect::<Vec<(u64, u64)>>();
+
+            exons.sort_by(|a, b| a.0.cmp(&b.0));
+            exons
+        }
+        Some(genepred::Strand::Unknown) | None => {
+            panic!("ERROR: unexpected strand value: {:?}", read.strand())
+        }
+    };
+
+    for (i, exon) in exons.iter().enumerate() {
+        let exon_start = exon.0;
+        let exon_end = exon.1;
+
+        // INFO: Count EEJs in 3'UTR
+        if exon_end >= cds_end {
+            _ex_ex_junction_utr += 1;
+
+            // INFO: first exon containing stop codon
+            if dist_stop_to_next_sj == 0 {
+                dist_stop_to_next_sj = exon_end - cds_end;
+            }
+
+            if !in_utr {
+                utr_len += exon_end - cds_end;
+                in_utr = true;
+            } else {
+                utr_len += exon_end - exon_start;
+            }
+
+            if utr_len >= nmd_distance {
+                nmd_count += 1;
+            }
+
+            // If last exon, compute bpUTRtoLastEEJ
+            if i == exons.len() - 1 {
+                bp_utr_to_last_ex_ex_jct = utr_len as i64 - (exon_end as i64 - exon_start as i64);
+            }
         }
 
-        // INFO: noncoding transcripts
-        if read.cds_start == read.cds_end {
-            // INFO: label = "noNMD", ex_ex_junction_utr = 0, bpUTRtoLastEEJ = 0
-            continue;
+        // INFO: CDS length accumulation
+        if exon_end < cds_start || exon_start > cds_end {
+            continue; // INFO: skip pure UTR exons
         }
 
-        let cds_start = read.cds_start;
-        let cds_end = read.cds_end;
-        let mut nmd_count: i64 = -1;
-        let mut _ex_ex_junction_utr: i64 = -1;
-        let mut dist_stop_to_next_sj = 0; // INFO: for big exon test
-        let mut in_utr = false;
-        let mut utr_len = 0;
-        let mut cds_len = 0;
-        let mut bp_utr_to_last_ex_ex_jct = 0;
-
-        let exons = read.get_exons(); // INFO: already in ascending order
-
-        for (i, exon) in exons.iter().enumerate() {
-            let exon_start = exon.0;
-            let exon_end = exon.1;
-
-            // INFO: Count EEJs in 3'UTR
+        // INFO: first coding exon
+        if exon_end >= cds_start && cds_start >= exon_start {
             if exon_end >= cds_end {
-                _ex_ex_junction_utr += 1;
-
-                // INFO: first exon containing stop codon
-                if dist_stop_to_next_sj == 0 {
-                    dist_stop_to_next_sj = exon_end - cds_end;
-                }
-
-                if !in_utr {
-                    utr_len += exon_end - cds_end;
-                    in_utr = true;
-                } else {
-                    utr_len += exon_end - exon_start;
-                }
-
-                if utr_len >= nmd_distance {
-                    nmd_count += 1;
-                }
-
-                // If last exon, compute bpUTRtoLastEEJ
-                if i == exons.len() - 1 {
-                    bp_utr_to_last_ex_ex_jct =
-                        utr_len as i64 - (exon_end as i64 - exon_start as i64);
-                }
-            }
-
-            // INFO: CDS length accumulation
-            if exon_end < cds_start || exon_start > cds_end {
-                continue; // INFO: skip pure UTR exons
-            }
-
-            // INFO: first coding exon
-            if exon_end >= cds_start && cds_start >= exon_start {
-                if exon_end >= cds_end {
-                    cds_len += cds_end - cds_start;
-                } else {
-                    cds_len += exon_end - cds_start;
-                }
-            }
-            // INFO: internal coding exon
-            else if exon_start > cds_start && exon_end < cds_end {
-                cds_len += exon_end - exon_start;
-            }
-            // INFO: last coding exon
-            else if exon_start > cds_start && exon_end >= cds_end {
-                cds_len += cds_end - exon_start;
+                cds_len += cds_end - cds_start;
+            } else {
+                cds_len += exon_end - cds_start;
             }
         }
-
-        // INFO: final classification -> tag [NN: no_nmd, SN: strong_nmd, WN: weak_nmd]
-        let tag = if nmd_count == 0 || nmd_count == -1 {
-            NO_NMD.to_string()
-        } else {
-            let mut lbl = format!("{STRONG_NMD}{}", nmd_count);
-            if bp_utr_to_last_ex_ex_jct <= weak_nmd_distance
-                || dist_stop_to_next_sj >= big_exon_dist_to_ej
-                || cds_len <= atg_distance
-            {
-                lbl = format!("{WEAK_NMD}{}", nmd_count);
-            }
-            lbl
-        };
-
-        // INFO: append tags to read name
-        match &tag[..2] {
-            NO_NMD => {
-                // INFO: send to accumulator no_nmd
-                no_nmd.push(read.line);
-            }
-            STRONG_NMD => {
-                let name = format!("{}{SEP}{tag}", read.name);
-
-                read.modify_field(BedColumn::Name.into(), &name);
-                read.modify_field(BedColumn::ItemRgb.into(), SN_COLOR);
-
-                nmd.push(read.line);
-            }
-            WEAK_NMD => {
-                let name = format!("{}{SEP}{tag}", read.name);
-
-                read.modify_field(BedColumn::Name.into(), &name);
-                read.modify_field(BedColumn::ItemRgb.into(), WN_COLOR);
-
-                nmd.push(read.line);
-            }
-            _ => {
-                log::error!("ERROR: unrecognized tag detected {tag} -> this is a bug");
-                std::process::exit(1);
-            }
+        // INFO: internal coding exon
+        else if exon_start > cds_start && exon_end < cds_end {
+            cds_len += exon_end - exon_start;
+        }
+        // INFO: last coding exon
+        else if exon_start > cds_start && exon_end >= cds_end {
+            cds_len += cds_end - exon_start;
         }
     }
 
-    (no_nmd, nmd)
+    // INFO: final classification -> tag [NN: no_nmd, SN: strong_nmd, WN: weak_nmd]
+    let tag = if nmd_count == 0 || nmd_count == -1 {
+        NO_NMD.to_string()
+    } else {
+        let mut lbl = format!("{STRONG_NMD}{}", nmd_count);
+        if bp_utr_to_last_ex_ex_jct <= weak_nmd_distance
+            || dist_stop_to_next_sj >= big_exon_dist_to_ej
+            || cds_len <= atg_distance
+        {
+            lbl = format!("{WEAK_NMD}{}", nmd_count);
+        }
+        lbl
+    };
+
+    // INFO: append tags to read name
+    match &tag[..2] {
+        NO_NMD => {
+            // INFO: send to accumulator no_nmd
+            let query_line = read.to_bed::<Bed12>();
+            no_nmd.push(query_line);
+        }
+        STRONG_NMD => {
+            let query_name = unsafe { std::str::from_utf8_unchecked(read.name().unwrap()) };
+            let name = format!("{}{SEP}{tag}", query_name).as_bytes().to_vec();
+            read.set_name(Some(name));
+            // read.set_item_rgb(SN_COLOR);
+
+            nmd.push(read.to_bed::<Bed12>());
+        }
+        WEAK_NMD => {
+            let query_name = unsafe { std::str::from_utf8_unchecked(read.name().unwrap()) };
+            let name = format!("{}{SEP}{tag}", query_name).as_bytes().to_vec();
+            read.set_name(Some(name));
+            // read.set_item_rgb(WN_COLOR);
+
+            nmd.push(read.to_bed::<Bed12>());
+        }
+        _ => {
+            log::error!("ERROR: unrecognized tag detected {tag} -> this is a bug");
+            std::process::exit(1);
+        }
+    }
+
+    accumulator.add(no_nmd, nmd);
 }
 
 /// Unpack blacklist from a vector of .bed paths
@@ -360,15 +328,26 @@ fn process_component(
 ///
 /// assert!(result.is_some());
 /// ```
-pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
-    if paths.is_empty() {
-        return None;
-    }
+pub fn unpack_blacklist<'a>(path: PathBuf) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
+    let mut blacklist = HashMap::new();
 
-    let contents = Arc::new(par_reader(paths).unwrap());
-    let tracks = bed_to_map::<Bed4>(contents, CoordType::Bounds).unwrap();
+    genepred::Reader::<Bed4>::from_mmap(path)
+        .unwrap_or_else(|e| panic!("ERROR: could not read blacklist -> {e}"))
+        .records()
+        .for_each(|record| {
+            let record = record.unwrap_or_else(|e| panic!("ERROR: could not read record -> {e}"));
+            let chrom = std::str::from_utf8(&record.chrom)
+                .unwrap_or_else(|e| panic!("ERROR: could not convert chrom to str -> {e}"));
+            let start = record.start();
+            let end = record.end();
 
-    Some(tracks)
+            blacklist
+                .entry(chrom.to_string())
+                .or_insert_with(HashSet::new)
+                .insert((start, end));
+        });
+
+    Some(blacklist)
 }
 
 /// Parallel accumulator for the processing function
@@ -388,8 +367,8 @@ pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashMap<String, HashS
 /// assert_eq!(accumulator.pass.len(), 0);
 /// ```
 pub struct ParallelAccumulator {
-    pub no_nmd: DashSet<String>,
-    pub nmd: DashSet<String>,
+    pub no_nmd: DashSet<Vec<u8>>,
+    pub nmd: DashSet<Vec<u8>>,
 }
 
 /// ParallelAccumulator constructor
@@ -443,7 +422,7 @@ impl ParallelAccumulator {
     ///
     /// assert_eq!(accumulator.num_retentions(), 1);
     /// ```
-    pub fn add(&self, keep: Vec<String>, discard: Vec<String>) {
+    pub fn add(&self, keep: Vec<Vec<u8>>, discard: Vec<Vec<u8>>) {
         for item in keep {
             self.no_nmd.insert(item);
         }
@@ -451,6 +430,11 @@ impl ParallelAccumulator {
             self.nmd.insert(item);
         }
     }
+}
+
+pub trait ParallelCollector {
+    fn len(&self) -> usize;
+    fn get_collections(&self) -> Result<Vec<&DashSet<Vec<u8>>>, Box<dyn std::error::Error>>;
 }
 
 /// ParallelCollector trait for ParallelAccumulator
@@ -461,12 +445,133 @@ impl<'a> ParallelCollector for ParallelAccumulator {
     }
 
     /// Get the a collection of items from the accumulator
-    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn std::error::Error>> {
+    fn get_collections(&self) -> Result<Vec<&DashSet<Vec<u8>>>, Box<dyn std::error::Error>> {
         let mut collections = Vec::with_capacity(ParallelAccumulator::NUM_FIELDS);
 
         collections.push(&self.no_nmd);
         collections.push(&self.nmd);
 
         Ok(collections)
+    }
+}
+
+/// Write results from a ParallelAccumulator to files in parallel
+///
+/// # Arguments
+///
+/// * `accumulator` - The accumulator containing the results
+/// * `filenames` - A vector of PathBufs representing the filenames
+/// * `outdir` - An optional PathBuf representing the output directory
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::par_write_results;
+///
+/// let accumulator = ParallelAccumulator::default();
+/// let filenames = vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")];
+/// let outdir = Some(PathBuf::from("output"));
+///
+/// par_write_results(accumulator, filenames, outdir);
+/// ```
+pub fn par_write_results<K: ParallelCollector>(
+    accumulator: &K,
+    filenames: Vec<PathBuf>,
+    outdir: Option<PathBuf>,
+) {
+    if accumulator.len() != filenames.len() {
+        log::error!("ERROR: Number of filenames does not match the number of results!");
+        std::process::exit(1);
+    }
+
+    let collections = accumulator
+        .get_collections()
+        .expect("ERROR: Could not get collections!");
+
+    if let Some(outdir) = outdir {
+        let files = filenames
+            .iter()
+            .map(|filename| outdir.join(filename))
+            .collect::<Vec<_>>();
+
+        write_pairs(collections, files);
+    } else {
+        write_pairs(collections, filenames);
+    }
+}
+
+/// Inner function to write pairs of collections to files
+///
+/// # Arguments
+///
+/// * `collections` - A vector of DashSet<String> representing the collections
+/// * `filenames` - A vector of PathBufs representing the filenames
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::write_pairs;
+///
+/// let collections = vec![DashSet::new(), DashSet::new()];
+/// let filenames = vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")];
+///
+/// write_pairs(collections, filenames);
+/// ```
+fn write_pairs(collections: Vec<&DashSet<Vec<u8>>>, filenames: Vec<PathBuf>) {
+    collections
+        .par_iter()
+        .zip(filenames.par_iter())
+        .for_each(|(collection, path)| {
+            if collection.is_empty() {
+                log::warn!("WARN: A collection from the accumulator is empty! Skipping...");
+                return;
+            }
+
+            write_objs(
+                collection,
+                path.to_str().expect("ERROR: Invalid path to write!"),
+            );
+        });
+}
+
+/// Write a DashSet to a file
+///
+/// # Arguments
+///
+/// * `data` - The DashSet to write
+/// * `fname` - The name of the file to write to
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::config::fns::write_objs;
+///
+/// let data = DashSet::new();
+/// data.insert("line1".to_string());
+/// data.insert("line2".to_string());
+///
+/// let fname = "output.txt";
+///
+/// write_objs(&data, fname);
+/// ```
+pub fn write_objs<T>(data: &DashSet<T>, fname: &str)
+where
+    T: AsRef<[u8]> + Sync + Send + Eq + std::hash::Hash,
+{
+    log::info!("Reads in {}: {:?}. Writing...", fname, data.len());
+    let f = match File::create(fname) {
+        Ok(f) => f,
+        Err(e) => panic!("Error creating file: {}", e),
+    };
+    let mut writer = BufWriter::new(f);
+
+    for line in data.iter() {
+        let bytes = line.as_ref();
+        writer
+            .write_all(bytes)
+            .unwrap_or_else(|e| panic!("ERROR: Error writing to file -> {e}"));
+        writer
+            .write_all(b"\n")
+            .unwrap_or_else(|e| panic!("ERROR: Error newline to file -> {e}"));
     }
 }

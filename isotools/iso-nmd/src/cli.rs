@@ -22,34 +22,30 @@ pub const BIG_EXON_DIST_TO_EJ: u64 = 400; // 400 bp
 #[derive(Debug, Parser)]
 pub struct Args {
     #[arg(
-        short = 'r',
-        long = "ref",
+        short = 'b',
+        long = "bed",
         required = true,
-
-        value_name = "PATHS",
-        value_delimiter = ',',
-        num_args = 1..,
-        help = "Path to .bed files"
+        value_name = "PATH",
+        help = "Path to .bed file"
     )]
-    pub refs: Vec<PathBuf>,
+    pub bed: PathBuf,
 
     #[arg(
-        short = 'b',
+        short = 'K',
         long = "blacklist",
         required = false,
         value_name = "PATH",
-        value_delimiter = ',',
-        num_args = 1..,
         help = "Path to BED4 file with blacklisted introns"
     )]
-    pub blacklist: Vec<PathBuf>,
+    pub blacklist: Option<PathBuf>,
 
     #[arg(
         short = 'o',
         long = "outdir",
-        required = true,
+        required = false,
         value_name = "PATH",
-        help = "Path to BED4 file with blacklisted introns"
+        help = "Output directory",
+        default_value = "."
     )]
     pub outdir: PathBuf,
 
@@ -107,7 +103,7 @@ pub struct Args {
         long = "prefix",
         required = false,
         value_name = "VALUE",
-        help = "Prefix to append at the beginning of the read name"
+        help = "Prefix to append at the beginning of the output files"
     )]
     pub prefix: Option<String>,
 }
