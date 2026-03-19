@@ -213,9 +213,6 @@ fn process_read(
         }
     };
 
-    println!("exons: {:?}", exons);
-    println!("cds_start: {:?}, cds_end: {:?}", cds_start, cds_end);
-
     for (i, exon) in exons.iter().enumerate() {
         let exon_start = exon.0;
         let exon_end = exon.1;
