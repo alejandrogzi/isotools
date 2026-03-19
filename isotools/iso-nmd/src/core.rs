@@ -194,8 +194,10 @@ fn process_read(
     exons = match read.strand() {
         Some(genepred::Strand::Forward) => exons,
         Some(genepred::Strand::Reverse) => {
-            cds_start = SCALE - cds_start;
-            cds_end = SCALE - cds_end;
+            let tmp = SCALE - cds_start;
+            cds_start = SCALE - cds_end;
+            cds_end = tmp;
+
             // INFO: we scale the coordinates and then sort them
             // INFO: this is equivalent to reversing the exons and reversing the coordinates
             let mut exons = exons
