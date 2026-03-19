@@ -755,17 +755,6 @@ dependencies = [
 
 [[package]]
 name = "genepred"
-version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f159c120fafdabbd7ebbb601a2b785ffbbb40e370a30e7662a76a51832dd5f3d"
-dependencies = [
- "memchr",
- "memmap2",
- "rayon",
-]
-
-[[package]]
-name = "genepred"
 version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09823e7cec06bf04ef2634f443e6c886b54ae0704893d74e0be903cdb285783d"
@@ -1069,7 +1058,7 @@ dependencies = [
  "clap",
  "config",
  "dashmap",
- "genepred 0.0.11",
+ "genepred",
  "hashbrown 0.16.1",
  "log",
  "num-traits",
@@ -1110,7 +1099,7 @@ dependencies = [
  "clap",
  "config",
  "dashmap",
- "genepred 0.0.11",
+ "genepred",
  "hashbrown 0.16.1",
  "log",
  "num_cpus",
@@ -1686,13 +1675,13 @@ dependencies = [
 
 [[package]]
 name = "packbed"
-version = "0.0.11"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "959c91efd4ada383d7e9b5daff9141b7155b6adaa269c47414304e15ad6870da"
+checksum = "c68be6725db3e589c2d1b665261456a808d5c8c312aa904b3fd2e2294a863523"
 dependencies = [
  "clap",
  "dashmap",
- "genepred 0.0.10",
+ "genepred",
  "num_cpus",
  "rayon",
 ]
