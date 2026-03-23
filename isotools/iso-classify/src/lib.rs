@@ -18,15 +18,9 @@
 //! of introns, enabling deeper insights into alternative splicing and
 //! RNA processing.
 
-use anyhow::Result;
-use core::classify_introns;
-use std::path::PathBuf;
+pub(crate) mod cli;
+pub(crate) mod core;
+pub(crate) mod utils;
 
-pub mod cli;
-pub mod core;
-pub mod utils;
-
-pub fn lib_iso_classify(args: Vec<String>) -> Result<PathBuf> {
-    let args = cli::IntronArgs::from(args);
-    classify_introns(args)
-}
+pub use cli::{Args, SubArgs};
+pub use core::classify_introns;

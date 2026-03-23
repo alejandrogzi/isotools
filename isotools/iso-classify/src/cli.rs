@@ -19,7 +19,6 @@
 //! RNA processing.
 
 use clap::{ArgAction, Parser, Subcommand};
-use config::ArgCheck;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -67,25 +66,12 @@ pub enum SubArgs {
 pub struct IntronArgs {
     #[arg(
         short = 'i',
-        long = "iso",
+        long = "isoseq",
         required = true,
-        value_name = "PATHS",
-        value_delimiter = ',',
-        num_args = 1..,
-        help = "Paths to IsoSeq's BED12 file(s) delimited by comma"
-    )]
-    pub iso: Vec<PathBuf>,
-
-    #[arg(
-        short = 'b',
-        long = "blacklist",
-        required = false,
         value_name = "PATH",
-        value_delimiter = ',',
-        num_args = 1..,
-        help = "Path to BED4 file with blacklisted introns"
+        help = "Paths to IsoSeq BED12 file"
     )]
-    pub blacklist: Vec<PathBuf>,
+    pub isoseq: PathBuf,
 
     #[arg(
         short = 'w',
@@ -98,13 +84,13 @@ pub struct IntronArgs {
     pub spliceai: Option<PathBuf>,
 
     #[arg(
-        long = "twobit",
+        short = 's',
+        long = "sequence",
         required = false,
         value_name = "PATH",
-        num_args = 1,
-        help = "Path to genome 2bit file"
+        help = "Path to genome 2bit/fa/fa.gz file"
     )]
-    pub twobit: Option<PathBuf>,
+    pub sequence: Option<PathBuf>,
 
     #[arg(
         short = 't',
@@ -175,49 +161,6 @@ pub struct IntronArgs {
         default_value = env!("CARGO_MANIFEST_DIR"),
     )]
     pub outdir: PathBuf,
-}
-
-impl ArgCheck for IntronArgs {
-    fn get_blacklist(&self) -> &Vec<PathBuf> {
-        &self.blacklist
-    }
-
-    fn get_ref(&self) -> &Vec<PathBuf> {
-        &self.iso
-    }
-
-    // filled without validation
-    fn get_query(&self) -> &Vec<PathBuf> {
-        &self.iso
-    }
-}
-
-impl IntronArgs {
-    pub fn from(args: Vec<String>) -> Self {
-        let mut local_args = Vec::new();
-        let mut iter = args.iter().peekable();
-
-        while let Some(arg) = iter.next() {
-            // INFO: skipping --aparent + value
-            if arg == "--aparent" {
-                iter.next();
-                continue;
-            }
-
-            if arg == "--query" {
-                local_args.push("--iso".to_string());
-            } else {
-                local_args.push(arg.clone());
-            }
-        }
-
-        let mut full_args = vec![env!("CARGO_PKG_NAME").to_string()];
-        full_args.extend(local_args);
-        full_args.push("--scan".to_string());
-        full_args.push("--nag".to_string());
-
-        IntronArgs::parse_from(full_args)
-    }
 }
 
 #[derive(Debug, Parser)]

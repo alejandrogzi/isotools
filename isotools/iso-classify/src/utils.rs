@@ -21,26 +21,108 @@
 use anyhow::Result;
 use bigtools::{utils::reopen::Reopen, BigWigRead};
 use dashmap::DashMap;
-use hashbrown::{HashMap, HashSet};
+use flate2::read::MultiGzDecoder;
+use hashbrown::HashMap;
 use log::info;
-use packbed::{par_reader, reader, record::Bed4};
 use rayon::prelude::*;
 use twobit::TwoBitFile;
 
-use std::path::PathBuf;
+use std::borrow::Borrow;
+use std::fmt::Debug;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 use std::sync::Mutex;
-
-use config::{
-    bed_to_map, get_progress_bar, CoordType, Sequence, SharedSpliceMap, SpliceScores, SpliceSite,
-    StrandSpliceMap, ACCEPTOR_MINUS, ACCEPTOR_PLUS, BGD, CLASSIFY_ASSETS, CONS1, CONS2,
-    DONOR_MINUS, DONOR_PLUS, MAXENTSCAN_ACCEPTOR_DB, MAXENTSCAN_DONOR_DB,
+use std::{
+    fs::File,
+    io::{Read, Seek},
 };
 
+// spliceai-related names/vars
+pub const ACCEPTOR_MINUS: &str = "spliceAiAcceptorMinus.bw";
+pub const ACCEPTOR_PLUS: &str = "spliceAiAcceptorPlus.bw";
+pub const DONOR_MINUS: &str = "spliceAiDonorMinus.bw";
+pub const DONOR_PLUS: &str = "spliceAiDonorPlus.bw";
+pub const SPLICE_AI_SCORE_RECOVERY_THRESHOLD: f32 = 0.001;
+
+// maxentscan-related names
 pub const MINIMUM_ACCEPTOR_LENGTH: usize = 23;
+pub const MAXENTSCAN_ACCEPTOR_DB: &str = "db.tsv";
+pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
+
+// dirnames
+pub const CLASSIFY_ASSETS: &str = "assets";
+
+// types
+pub type SpliceMap = (StrandSpliceMap, StrandSpliceMap);
+pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
+pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f32>>);
+pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
+
+// filanames
+pub const INTRON_CLASSIFICATION: &str = "reference_introns.tsv";
+
+// collections
+pub const COMPLEMENT: [u8; 128] = {
+    let mut nt = [0; 128];
+    nt[b'A' as usize] = b'T';
+    nt[b'T' as usize] = b'A';
+    nt[b'C' as usize] = b'G';
+    nt[b'G' as usize] = b'C';
+    nt[b'a' as usize] = b't';
+    nt[b't' as usize] = b'a';
+    nt[b'c' as usize] = b'g';
+    nt[b'g' as usize] = b'c';
+    nt[b'N' as usize] = b'N';
+    nt[b'n' as usize] = b'n';
+    nt
+};
+
+pub const BGD: [f64; 128] = {
+    let mut bgd = [0.0; 128];
+    bgd[b'A' as usize] = 0.27;
+    bgd[b'T' as usize] = 0.27;
+    bgd[b'C' as usize] = 0.23;
+    bgd[b'G' as usize] = 0.23;
+    bgd
+};
+
+pub const CONS1: [f64; 128] = {
+    let mut bgd = [0.0; 128];
+    bgd[b'A' as usize] = 0.9903;
+    bgd[b'C' as usize] = 0.0032;
+    bgd[b'G' as usize] = 0.0034;
+    bgd[b'T' as usize] = 0.0030;
+    bgd
+};
+
+pub const CONS2: [f64; 128] = {
+    let mut bgd = [0.0; 128];
+    bgd[b'A' as usize] = 0.0027;
+    bgd[b'C' as usize] = 0.0037;
+    bgd[b'G' as usize] = 0.9905;
+    bgd[b'T' as usize] = 0.0030;
+    bgd
+};
 
 pub type SpliceScoreMap = HashMap<Sequence, Vec<f64>>;
+
+/// Splice site type
+///
+/// This enum is used to store the type of splice site.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::SpliceSite;
+///
+/// let donor = SpliceSite::Donor;
+/// let acceptor = SpliceSite::Acceptor;
+/// ```
+pub enum SpliceSite {
+    Donor,
+    Acceptor,
+}
 
 /// Creates `StrandSpliceMap`s for both plus and minus strands by parsing BigWig files.
 ///
@@ -141,7 +223,7 @@ fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
                 let local_count = AtomicU32::new(0);
 
                 values.into_iter().enumerate().for_each(|(i, v)| {
-                    if v >= config::SPLICE_AI_SCORE_RECOVERY_THRESHOLD {
+                    if v >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD {
                         let pos = i;
                         mapper.entry(pos).or_insert(v);
                         local_count.fetch_add(1, Ordering::Relaxed);
@@ -239,36 +321,6 @@ pub fn create_splice_map(
         get_splice_values(splice_plus),
         get_splice_values(splice_minus),
     )
-}
-
-/// Unpacks a list of blacklist files into a single `HashMap`.
-///
-/// This function reads one or more blacklist files (in a format like BED4) and parses their contents
-/// into a `HashMap` where keys are chromosome names and values are sets of blacklisted intron coordinates.
-///
-/// # Arguments
-///
-/// * `paths`: A `Vec<PathBuf>` of paths to the blacklist files.
-///
-/// # Returns
-///
-/// * An `Option<HashMap<String, HashSet<(u64, u64)>>>` containing the blacklisted intervals, or `None` if
-///   no paths are provided.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let blacklist = unpack_blacklist(paths).unwrap_or_default();
-/// ```
-pub fn unpack_blacklist(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
-    if paths.is_empty() {
-        return None;
-    }
-
-    let contents = Arc::new(par_reader(paths).unwrap());
-    let tracks = bed_to_map::<Bed4>(contents, CoordType::Bounds).unwrap();
-
-    Some(tracks)
 }
 
 /// A trait for parsing MaxEnt scan scores from a line of text.
@@ -398,7 +450,6 @@ pub fn parse_tsv<K>(contents: String) -> Result<SpliceScoreMap, anyhow::Error>
 where
     K: SpliceEntropy,
 {
-    let pb = get_progress_bar(contents.lines().count() as u64, "Parsing BED12 files");
     let tracks = contents
         .par_lines()
         .filter(|row| !row.starts_with("#"))
@@ -407,7 +458,6 @@ where
             let entry = acc.entry(splice_site.get_sequence()).or_default();
             entry.extend(splice_site.get_scores());
 
-            pb.inc(1);
             acc
         })
         .reduce(HashMap::new, |mut acc, map| {
@@ -418,9 +468,7 @@ where
             acc
         });
 
-    pb.finish_and_clear();
     info!("Records parsed: {}", tracks.values().flatten().count());
-
     Ok(tracks)
 }
 
@@ -462,40 +510,6 @@ pub fn load_scan_scores() -> Option<(SpliceScoreMap, SpliceScoreMap)> {
     .expect("ERROR: Could not parse donor scores!");
 
     Some((donor_scores, acceptor_scores))
-}
-
-/// Reads sequences from a 2bit file into a thread-safe map.
-///
-/// This function opens a 2bit file, reads all chromosome sequences, and stores them in a `DashMap`
-/// for efficient, thread-safe access.
-///
-/// # Arguments
-///
-/// * `twobit`: The `PathBuf` to the 2bit file.
-///
-/// # Returns
-///
-/// * An `Option<DashMap<String, Vec<u8>>>` where keys are chromosome names and values are the sequences.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let genome_sequences = get_sequences(twobit_path).expect("Failed to read genome sequences");
-/// ```
-pub fn get_sequences(twobit: PathBuf) -> Option<DashMap<String, Vec<u8>>> {
-    let mut genome = TwoBitFile::open_and_read(twobit).expect("ERROR: Cannot open 2bit file");
-
-    let sequences = DashMap::new();
-    genome.chrom_names().iter().for_each(|chr| {
-        let seq = genome
-            .read_sequence(chr, ..)
-            .expect("ERROR: Could not read sequence from .2bit!")
-            .as_bytes()
-            .to_vec();
-        sequences.insert(chr.to_string(), seq);
-    });
-
-    Some(sequences)
 }
 
 /// Calculates the combined MaxEnt and consensus score for an acceptor splice site sequence.
@@ -613,6 +627,678 @@ pub fn score_consensus_seq(seq: &Sequence) -> f64 {
     let nt2 = seq.at_as_bytes(19);
 
     CONS1[nt1] * CONS2[nt2] / (BGD[nt1] * BGD[nt2])
+}
+
+/// Reads the entire content of a file into a `String`.
+///
+/// This function provides a basic utility for synchronously reading a file's
+/// contents. It's generic over any type that can be converted to a `Path` and
+/// is `Debug` printable.
+///
+/// # Arguments
+///
+/// * `file` - The path to the file to read.
+///
+/// # Returns
+///
+/// A `Result<String, Box<dyn std::error::Error>>` containing the file's
+/// contents on success, or an error if the file cannot be opened or read.
+///
+pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
+    let mut file = File::open(file)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
+}
+
+/// Reads multiple files in parallel and concatenates their contents into a single `String`.
+///
+/// This function leverages Rayon for parallel processing, making it efficient for
+/// reading many files concurrently. It panics if any individual file fails to read.
+///
+/// # Arguments
+///
+/// * `files` - A vector of paths to the files to read.
+///
+/// # Returns
+///
+/// A `Result<String, anyhow::Error>` containing the concatenated contents of all files
+/// on success, or an error if parallel reading fails.
+///
+pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
+    files: Vec<P>,
+) -> Result<String, anyhow::Error> {
+    let contents: Vec<String> = files
+        .par_iter()
+        .map(|path| {
+            reader(path)
+                .unwrap_or_else(|e| panic!("ERROR: Could not read file: {:?} -> {:?}", e, path))
+        })
+        .collect();
+
+    Ok(contents.concat())
+}
+
+/// Sequence struct
+///
+/// This struct is used to store a sequence of nucleotides.
+///
+/// # Example
+/// ```rust, no_run
+/// use iso::Sequence;
+///
+/// let seq = Sequence::new(b"ATCG");
+/// assert_eq!(seq.len(), 4);
+/// assert_eq!(seq.is_empty(), false);
+/// assert_eq!(seq.as_bytes(), b"ATCG");
+/// assert_eq!(seq.as_str(), "ATCG");
+/// assert_eq!(seq.to_string(), "ATCG");
+/// assert_eq!(seq.to_uppercase(), "ATCG");
+/// assert_eq!(seq.to_lowercase(), "atcg");
+/// assert_eq!(seq.reverse_complement().to_string(), "CGAT");
+/// assert_eq!(seq.slice(0, 2), "AT");
+/// assert_eq!(seq.slice_as_seq(0, 2).to_string(), "AT");
+/// assert_eq!(seq.slice_as_bytes(0, 2), b"AT");
+/// assert_eq!(seq.at_as_bytes(0), 65);
+/// assert_eq!(seq.fill(2), "AATCG");
+/// assert_eq!(seq.skip(1, 3).to_string(), "ACG");
+/// ```
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+pub struct Sequence {
+    pub seq: Vec<u8>,
+}
+
+impl Sequence {
+    /// Create a new sequence
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.len(), 4);
+    /// ```
+    pub fn new(seq: &[u8]) -> Self {
+        Self { seq: seq.to_vec() }
+    }
+
+    /// Decode a sequence from bytes
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.decode(b"ACGT"), "ACGT");
+    /// ```
+    pub fn decode(seq: &[u8]) -> Self {
+        let base_count = seq.len() * 2;
+        let mut capacity = Vec::with_capacity(base_count);
+
+        for i in 0..base_count {
+            let byte = seq[i / 2];
+            let base_code = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F };
+
+            let base = Sequence::__decode_base(base_code);
+            if base != b'=' {
+                capacity.push(base);
+            }
+        }
+
+        Self { seq: capacity }
+    }
+
+    /// Get the length of the sequence
+    ///
+    /// # Example
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.len(), 4);
+    /// ```
+    pub fn len(&self) -> usize {
+        self.seq.len()
+    }
+
+    /// Check if the sequence is empty
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.is_empty(), false);
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.seq.is_empty()
+    }
+
+    /// Get the sequence as a string
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.to_string(), String::from("ATCG"));
+    /// ```
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        String::from_utf8_lossy(&self.seq).to_string()
+    }
+
+    /// Get the sequence as uppercase
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"atcg");
+    /// assert_eq!(seq.to_uppercase(), "ATCG");
+    /// ```
+    pub fn to_uppercase(&self) -> Vec<u8> {
+        self.seq.to_ascii_uppercase()
+    }
+
+    /// Get the sequence as lowercase
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.to_lowercase(), "atcg");
+    /// ```
+    pub fn to_lowercase(&self) -> Vec<u8> {
+        self.seq.to_ascii_lowercase()
+    }
+
+    /// Get the complement of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.complement().to_string(), "GCTA");
+    /// ```
+    pub fn complement(&self) -> Self {
+        let mut comp = self.seq.to_vec();
+        comp.iter_mut()
+            .for_each(|c| *c = COMPLEMENT[*c as usize] as u8);
+
+        Self { seq: comp }
+    }
+
+    /// Get the reverse complement of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.reverse_complement().to_string(), "CGAT");
+    /// ```
+    pub fn reverse_complement(&self) -> Self {
+        let mut rev = self.seq.to_vec();
+        rev.reverse();
+        rev.make_ascii_uppercase();
+
+        rev.iter_mut()
+            .for_each(|c| *c = COMPLEMENT[*c as usize] as u8);
+
+        Self { seq: rev }
+    }
+
+    /// Get a slice of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.slice(0, 2), "AT");
+    /// ```
+    pub fn slice(&self, start: usize, end: usize) -> Vec<u8> {
+        self.seq[start..end].to_vec()
+    }
+
+    /// Get a slice of the sequence as a Sequence struct
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.slice_as_seq(0, 2).to_string(), "AT");
+    /// ```
+    pub fn slice_as_seq(&self, start: usize, end: usize) -> Self {
+        Self {
+            seq: self.seq[start..end].to_vec(),
+        }
+    }
+
+    /// Get a slice of the sequence as bytes
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.slice_as_bytes(0, 2), b"AT");
+    /// ```
+    pub fn slice_as_bytes(&self, start: usize, end: usize) -> &[u8] {
+        &self.seq[start..end]
+    }
+
+    /// Get the ASCII value of a nucleotide at a given index
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.at_as_bytes(0), 65);
+    /// ```
+    pub fn at_as_bytes(&self, idx: usize) -> usize {
+        self.seq[idx] as usize
+    }
+
+    /// Skip a given range of the sequence
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.skip(1, 3).to_string(), "ACG");
+    /// ```
+    pub fn skip(&self, from: usize, to: usize) -> Sequence {
+        let mut seq = self.seq[..from].to_vec();
+        seq.extend(self.seq[to..].iter());
+
+        Sequence { seq }
+    }
+
+    /// Decode a base to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let base = Sequence::__decode_base(1);
+    /// assert_eq!(base, b'A');
+    /// ```
+    pub fn __decode_base(nt: u8) -> u8 {
+        match nt & 0x0f {
+            0 => b'=',
+            1 => b'A',
+            2 => b'C',
+            3 => b'M',
+            4 => b'G',
+            5 => b'R',
+            6 => b'S',
+            7 => b'V',
+            8 => b'T',
+            9 => b'W',
+            10 => b'Y',
+            11 => b'H',
+            12 => b'K',
+            13 => b'D',
+            14 => b'B',
+            15 => b'N',
+            _ => panic!(
+                "{}",
+                format!("ERROR: invalid character in sequence: {}", nt)
+            ),
+        }
+    }
+
+    /// Encode a base to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let base = Sequence::__encode_base(b'A');
+    /// assert_eq!(base, 1);
+    /// ```
+    pub fn __encode_base(nt: u8) -> u8 {
+        match nt {
+            b'=' => 0,
+            b'A' => 1,
+            b'C' => 2,
+            b'M' => 3,
+            b'G' => 4,
+            b'R' => 5,
+            b'S' => 6,
+            b'V' => 7,
+            b'T' => 8,
+            b'W' => 9,
+            b'Y' => 10,
+            b'H' => 11,
+            b'K' => 12,
+            b'D' => 13,
+            b'B' => 14,
+            _ => panic!(
+                "{}",
+                format!("ERROR: invalid character in sequence: {}", nt)
+            ),
+        }
+    }
+
+    /// Encode a cannonical base to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let base = Sequence::__encode_base_2(b'A');
+    /// assert_eq!(base, 0);
+    /// ```
+    pub fn __encode_base_2(nt: u8) -> Option<u8> {
+        match nt {
+            b'A' => Some(0),
+            b'C' => Some(1),
+            b'T' => Some(2),
+            b'G' => Some(3),
+            _ => None,
+        }
+    }
+
+    /// Encode the reverse of a sequence to a usize
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.reverse_encode(0, 4), vec![3, 2, 1, 0]);
+    /// ```
+    pub fn reverse_encode(&self, start: usize, end: usize) -> Vec<usize> {
+        self.slice_as_bytes(start, end)
+            .iter()
+            .rev()
+            .filter_map(|b| Self::__encode_base_2(*b))
+            .map(|nt| nt as usize)
+            .collect::<Vec<usize>>()
+    }
+
+    /// Encode the reverse of a sequence to a u8
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"ATCG");
+    /// assert_eq!(seq.reverse_encode_u8(0, 4), vec![3, 2, 1, 0]);
+    /// ```
+    pub fn reverse_encode_u8(&self, start: usize, end: usize) -> Vec<u8> {
+        self.slice_as_bytes(start, end)
+            .iter()
+            .rev()
+            .filter_map(|b| Self::__encode_base_2(*b))
+            .collect::<Vec<u8>>()
+    }
+
+    /// Fill the sequence with a given kmer
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"TCG");
+    /// assert_eq!(seq.fill(2), "AATCG");
+    /// ```
+    pub fn fill(&self, kmer: usize) -> Vec<u8> {
+        let mut seq = b"A".repeat(kmer);
+        seq.extend(self.seq.iter());
+
+        seq
+    }
+
+    /// Fill the sequence with a given kmer at the back
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Sequence;
+    ///
+    /// let seq = Sequence::new(b"TCG");
+    /// assert_eq!(seq.fill_back(2), "TCGAA");
+    /// ```
+    pub fn fill_back(&self, kmer: usize) -> Vec<u8> {
+        let mut seq = self.seq.to_vec();
+        seq.extend(b"A".repeat(kmer).iter());
+
+        seq
+    }
+}
+
+impl std::fmt::Display for Sequence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", String::from_utf8_lossy(&self.seq))
+    }
+}
+
+impl Borrow<Vec<u8>> for Sequence {
+    fn borrow(&self) -> &Vec<u8> {
+        &self.seq
+    }
+}
+
+/// Loads genome sequences from a file (2bit or FASTA format).
+///
+/// # Arguments
+///
+/// - `sequence`: Path to the genome file (.fa, .fa.gz, or .2bit)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::path::PathBuf;
+///
+/// let genome = get_sequences(PathBuf::from("genome.2bit"));
+/// let genome = get_sequences(PathBuf::from("genome.fa"));
+/// let genome = get_sequences(PathBuf::from("genome.fa.gz"));
+/// ```
+pub fn get_sequences(sequence: PathBuf) -> HashMap<Vec<u8>, Vec<u8>> {
+    info!("Reading sequences from file {}", sequence.display());
+    match sequence.extension() {
+        Some(ext) => match ext.to_str() {
+            Some("2bit") => from_2bit(sequence),
+            Some("fa") | Some("fasta") | Some("fna") | Some("gz") => from_fa(sequence),
+            _ => panic!("ERROR: Unsupported file format"),
+        },
+        None => panic!("ERROR: No file extension"),
+    }
+}
+
+/// Loads genome sequences from a 2bit compressed format file.
+///
+/// # Arguments
+///
+/// - `twobit`: Path to the 2bit file
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::path::PathBuf;
+///
+/// let sequences = from_2bit(PathBuf::from("genome.2bit"));
+/// let chr1 = sequences.get(b"chr1");
+/// ```
+fn from_2bit(twobit: PathBuf) -> HashMap<Vec<u8>, Vec<u8>> {
+    let genome = TwoBitFile::open_and_read(&twobit).expect("ERROR: Cannot open 2bit file");
+    let source = format!("file {}", twobit.display());
+    collect_2bit_sequences(genome, &source)
+}
+
+/// Loads genome sequences from a 2bit compressed format file.
+///
+/// # Arguments
+///
+/// - `buf`: Buffer containing the 2bit file
+/// - `source`: Path to the 2bit file
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::path::PathBuf;
+///
+/// let sequences = from_2bit_buf(Vec::new(), PathBuf::from("genome.2bit"));
+/// let chr1 = sequences.get(b"chr1");
+/// ```
+fn from_2bit_buf(buf: Vec<u8>, source: &str) -> HashMap<Vec<u8>, Vec<u8>> {
+    let genome = TwoBitFile::from_buf(buf)
+        .unwrap_or_else(|e| panic!("ERROR: Cannot read 2bit from {}: {}", source, e));
+    collect_2bit_sequences(genome, source)
+}
+
+/// Loads genome sequences from a 2bit compressed format file.
+///
+/// # Arguments
+///
+/// - `genome`: TwoBitFile struct
+/// - `source`: Path to the 2bit file
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::path::PathBuf;
+///
+/// let genome = TwoBitFile::open_and_read(PathBuf::from("genome.2bit")).unwrap();
+/// let sequences = collect_2bit_sequences(genome, PathBuf::from("genome.2bit"));
+/// let chr1 = sequences.get(b"chr1");
+/// ```
+fn collect_2bit_sequences<R: Read + Seek>(
+    mut genome: TwoBitFile<R>,
+    source: &str,
+) -> HashMap<Vec<u8>, Vec<u8>> {
+    let mut sequences = HashMap::new();
+    genome.chrom_names().iter().for_each(|chr| {
+        let seq = genome
+            .read_sequence(chr, ..)
+            .unwrap_or_else(|e| panic!("ERROR: {}", e))
+            .as_bytes()
+            .to_vec();
+
+        sequences.insert(chr.as_bytes().to_vec(), seq);
+    });
+
+    info!("Read {} sequences from {}", sequences.len(), source);
+
+    sequences
+}
+
+/// Loads genome sequences from a FASTA format file (optionally gzipped).
+///
+/// # Arguments
+///
+/// - `f`: Path to the FASTA file (.fa or .fa.gz)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::path::PathBuf;
+///
+/// let sequences = from_fa(PathBuf::from("genome.fa"));
+/// let sequences = from_fa(PathBuf::from("genome.fa.gz"));
+/// let chr1 = sequences.get(b"chr1");
+/// ```
+pub fn from_fa<P: AsRef<Path>>(f: P) -> HashMap<Vec<u8>, Vec<u8>> {
+    let path = f.as_ref();
+    let file = File::open(path)
+        .unwrap_or_else(|e| panic!("ERROR: cannot open FASTA {}: {}", path.display(), e));
+
+    let reader: Box<dyn BufRead> = match path.extension().and_then(|ext| ext.to_str()) {
+        Some("gz") => Box::new(BufReader::new(MultiGzDecoder::new(file))),
+        _ => Box::new(BufReader::new(file)),
+    };
+
+    let source = format!("file {}", path.display());
+    parse_fasta_reader(reader, &source)
+}
+
+/// Parses a FASTA file into a HashMap of sequences.
+///
+/// # Arguments
+///
+/// - `reader`: A BufRead object representing the FASTA file
+/// - `source`: Path to the FASTA file
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::path::PathBuf;
+///
+/// let reader = BufReader::new(File::open(PathBuf::from("genome.fa")).unwrap());
+/// let sequences = parse_fasta_reader(reader, PathBuf::from("genome.fa"));
+/// let chr1 = sequences.get(b"chr1");
+/// ```
+fn parse_fasta_reader<R: BufRead>(mut reader: R, source: &str) -> HashMap<Vec<u8>, Vec<u8>> {
+    let mut acc = HashMap::new();
+    let mut line = Vec::new();
+    let mut header: Option<Vec<u8>> = None;
+    let mut seq = Vec::new();
+
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_until(b'\n', &mut line)
+            .unwrap_or_else(|e| panic!("ERROR: cannot read FASTA {}: {}", source, e));
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        if line.ends_with(b"\n") {
+            line.pop();
+        }
+
+        if line.ends_with(b"\r") {
+            line.pop();
+        }
+
+        if line.is_empty() {
+            continue;
+        }
+
+        if line[0] == b'>' {
+            if let Some(prev_header) = header.replace(line[1..].to_vec()) {
+                acc.insert(prev_header, std::mem::take(&mut seq));
+            }
+        } else {
+            seq.extend_from_slice(&line);
+        }
+    }
+
+    if let Some(last_header) = header {
+        acc.insert(last_header, seq);
+    }
+
+    info!("Read {} sequences from {}", acc.len(), source);
+
+    acc
 }
 
 #[cfg(test)]

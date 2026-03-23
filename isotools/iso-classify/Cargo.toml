@@ -1,6 +1,6 @@
 [package]
 name = "iso-classify"
-version = "0.0.4"
+version = "0.0.5"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -12,8 +12,6 @@ repository = "https://github.com/alejandrogzi/isotools"
 categories = ["command-line-utilities", "science"]
 
 [dependencies]
-iso-pack = { path = "../iso-pack" }
-config.workspace = true
 dashmap.workspace = true
 rayon.workspace = true
 log.workspace = true
@@ -26,3 +24,6 @@ simple_logger.workspace = true
 serde_json.workspace = true
 bigtools.workspace = true
 twobit.workspace = true
+genepred.workspace = true
+packbed.workspace = true
+flate2.workspace = true

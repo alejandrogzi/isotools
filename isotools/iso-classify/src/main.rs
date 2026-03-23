@@ -19,11 +19,10 @@
 //! RNA processing.
 
 use clap::{self, Parser};
-use config::ArgCheck;
 use log::{error, info};
 use simple_logger::init_with_level;
 
-use iso_classify::cli::{Args, SubArgs};
+use iso_classify::{Args, SubArgs};
 
 #[allow(unused_variables)]
 fn main() {
@@ -39,12 +38,7 @@ fn main() {
 
     match args.command {
         SubArgs::Intron { args } => {
-            use iso_classify::core::classify_introns;
-
-            args.check().unwrap_or_else(|e| {
-                error!("{}", e);
-                std::process::exit(1);
-            });
+            use iso_classify::classify_introns;
 
             classify_introns(args).unwrap_or_else(|e| {
                 error!("{}", e);
