@@ -159,6 +159,7 @@ pub fn make_splice_map<T: AsRef<std::path::Path> + std::fmt::Debug>(
     ];
 
     info!("Parsing BigWigs...");
+    info!("BigWig files: {plus:?}, {minus:?}");
     let (plus, minus) = rayon::join(
         || bigwig_to_map(plus, &chrs),
         || bigwig_to_map(minus, &chrs),
@@ -190,10 +191,12 @@ pub fn make_splice_map<T: AsRef<std::path::Path> + std::fmt::Debug>(
 /// ```
 fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
     bigwigs: Vec<T>,
-    chrs: &[String],
+    chrs: &Vec<String>,
 ) -> Vec<DashMap<String, DashMap<usize, f32>>> {
     let total_count = AtomicU32::new(0);
     let rs = Mutex::new(vec![DashMap::new(), DashMap::new()]);
+
+    log::debug!("Will extract scores from the following chromosomes: {chrs:?}");
 
     // [donor, acceptor]
     bigwigs
@@ -210,6 +213,7 @@ fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
                     BigWigRead::reopen(&bwread).expect("ERROR: Cannot re-open BigWig file");
 
                 if !chrs.contains(&chr.name) {
+                    log::debug!("Skipping chromosome {chr:?}");
                     return; // INFO: skip chromosomes not in records
                 }
 

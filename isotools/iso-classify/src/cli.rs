@@ -136,7 +136,7 @@ pub struct IntronArgs {
         short = 'I',
         long = "iic",
         required = false,
-        value_name = "FLAG",
+        value_name = "PATH",
         help = "Path to intron intronIC .fa for intron type classification [U2, U12]"
     )]
     pub iic: Option<PathBuf>,

@@ -119,7 +119,7 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
     } else {
         pack(
             vec![args.isoseq],
-            vec![Role::Reference, Role::Query],
+            vec![Role::Query],
             packbed::OverlapType::Exon,
         )?
     };
@@ -133,7 +133,19 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
         );
 
         if !bucket.value().is_empty() {
-            chrs.push(bucket.key().clone());
+            let bind = bucket.key().clone();
+            let chr = bind
+                .split(':')
+                .next()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "ERROR: Could not get chromosome from key -> {:?}",
+                        bucket.key()
+                    )
+                })
+                .to_string();
+
+            chrs.push(chr);
         }
     });
 
@@ -155,7 +167,14 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
     let accumulator = ParallelAccumulator::default();
 
     isoseqs.into_par_iter().for_each(|bucket| {
-        let chr = bucket.0;
+        log::debug!("INFO: Processing bucket key -> {:?}", bucket.0);
+
+        let chr = bucket.0.split(':').next().unwrap_or_else(|| {
+            panic!(
+                "ERROR: Could not get chromosome from key -> {:?}",
+                bucket.0.clone()
+            )
+        });
         let components = bucket.1;
 
         let splice_map = create_splice_map(&chr, &splice_plus, &splice_minus);
@@ -297,6 +316,10 @@ fn process_component(
     rt_frequency_threshold: f64,
     spliceosome: &HashMap<String, USpliceType>,
 ) -> HashMap<(u64, u64), Intron> {
+    if queries.is_empty() {
+        return HashMap::new();
+    }
+
     let chr = refs[0].chrom();
     let strand = refs[0]
         .strand()
@@ -355,6 +378,10 @@ fn process_component(
                     );
 
                     let mut stats = Intron::new();
+                    stats.chrom = chr.to_vec();
+                    stats.start = *start;
+                    stats.end = *end;
+                    stats.strand = strand;
                     stats.seen = 1;
 
                     // INFO: ask if intron is within how many spans
@@ -371,7 +398,7 @@ fn process_component(
 
                     // INFO: get splice context and spliceAI scores
                     get_sj_context(
-                        &(*start, *end),
+                        &(*start + 1, *end - 1),
                         &mut stats,
                         &strand,
                         chr,
@@ -386,12 +413,11 @@ fn process_component(
                             &USpliceType::Unknown
                         } else {
                             log::warn!(
-                                "WARN: Could not find splice type for{:?} using {:?} with metadata -> {:?}",
+                                "WARN: Couldn't find splice type for {:?} using {:?} with metadata -> {:?}. Setting to UNKNOWN",
                                 (start.clone(), end.clone()),
                                 key,
                                 stats
                             );
-                            log::warn!("WARN: We are setting this to UNKNOWN");
                             &USpliceType::Unknown
                         }
                     });
@@ -430,6 +456,9 @@ fn process_component(
 
     // INFO: merging NAG introns in after all entries are inserted
     query_introns.extend(nag_introns);
+    for q in query_introns.values() {
+        println!("{}", q);
+    }
 
     //
     //     // INFO: not including NAG-derived introns bc they are already Splicing
@@ -681,7 +710,11 @@ fn get_sj_ai_scores(
                 .expect("ERROR: Acceptor score map is None, this is a bug!");
 
             // donor(+)/acceptor(-) [-1 to match bigtools coords]
-            let (intron_donor, intron_acceptor) = (intron_start as usize - 1, intron_end as usize);
+            let (intron_donor, intron_acceptor) = match strand {
+                genepred::Strand::Forward => (intron_start as usize, intron_end as usize - 1),
+                genepred::Strand::Reverse => (intron_end as usize, intron_start as usize - 1),
+                _ => panic!("ERROR: Unknown strand {:?}!", strand),
+            };
 
             let (donor_score, acceptor_score) = (
                 donor_score_map
@@ -694,18 +727,11 @@ fn get_sj_ai_scores(
                     .unwrap_or(0.0),
             );
 
-            match strand {
-                genepred::Strand::Forward => {
-                    descriptor.splice_ai_donor = donor_score;
-                    descriptor.splice_ai_acceptor = acceptor_score;
-                }
-                genepred::Strand::Reverse => {
-                    descriptor.splice_ai_donor = acceptor_score;
-                    descriptor.splice_ai_acceptor = donor_score;
-                }
-                _ => panic!("ERROR: Unknown strand {:?}!", strand),
-            }
+            descriptor.splice_ai_donor = donor_score;
+            descriptor.splice_ai_acceptor = acceptor_score;
         }
+    } else {
+        log::warn!("WARN: No spliceAI scores to grab values from!");
     }
 }
 
@@ -1159,6 +1185,14 @@ impl std::str::FromStr for USpliceType {
 /// systems, used to evaluate the quality and nature of a predicted intron.
 #[derive(Debug, PartialEq, Clone)]
 pub struct Intron {
+    /// Chromosome name
+    pub chrom: Vec<u8>,
+    /// Start position of the intron (1-based)
+    pub start: u64,
+    /// End position of the intron (1-based)
+    pub end: u64,
+    /// Strand of the intron
+    pub strand: genepred::Strand,
     /// The frequency of how many reads contain this intron.
     pub seen: usize,
     /// The frequency of how many reads span this intron.
@@ -1210,6 +1244,10 @@ impl Intron {
     ///
     pub fn new() -> Self {
         Self {
+            chrom: Vec::new(),
+            start: 0,
+            end: 0,
+            strand: genepred::Strand::Unknown,
             seen: 0,
             spanned: 0,
             splice_ai_donor: 0.0,
@@ -1230,6 +1268,39 @@ impl Intron {
             splice_u_type: USpliceType::Unknown,
             support: SupportType::Unclear,
         }
+    }
+}
+
+/// Implements std::fmt::Display for Intron
+impl std::fmt::Display for Intron {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            std::str::from_utf8(&self.chrom).unwrap_or("NA"),
+            self.start,
+            self.end,
+            self.strand,
+            self.seen,
+            self.spanned,
+            self.splice_ai_donor,
+            self.splice_ai_acceptor,
+            self.max_ent_donor,
+            self.max_ent_acceptor,
+            std::str::from_utf8(&self.donor_sequence).unwrap_or("NA"),
+            std::str::from_utf8(&self.acceptor_sequence).unwrap_or("NA"),
+            std::str::from_utf8(&self.donor_context.seq).unwrap_or("NA"),
+            std::str::from_utf8(&self.acceptor_context.seq).unwrap_or("NA"),
+            self.intron_position,
+            self.is_toga_supported,
+            self.is_in_frame,
+            std::str::from_utf8(&self.donor_rt_context).unwrap_or("NA"),
+            std::str::from_utf8(&self.acceptor_rt_context).unwrap_or("NA"),
+            self.is_rt_intron,
+            self.is_nag_intron,
+            self.splice_u_type,
+            self.support
+        )
     }
 }
 
