@@ -22,9 +22,11 @@ use anyhow::Result;
 use bigtools::{utils::reopen::Reopen, BigWigRead};
 use dashmap::DashMap;
 use flate2::read::MultiGzDecoder;
+use genepred::Bed3;
 use hashbrown::HashMap;
 use log::info;
 use rayon::prelude::*;
+use rust_lapper::{Interval, Lapper};
 use twobit::TwoBitFile;
 
 use std::borrow::Borrow;
@@ -54,10 +56,12 @@ pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
 pub const CLASSIFY_ASSETS: &str = "assets";
 
 // types
-pub type SpliceMap = (StrandSpliceMap, StrandSpliceMap);
 pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
 pub type SharedSpliceMap = (Option<DashMap<usize, f32>>, Option<DashMap<usize, f32>>);
 pub type SpliceScores = (Vec<StrandSpliceMap>, Vec<StrandSpliceMap>);
+pub type SpliceScoreMap = HashMap<Sequence, Vec<f64>>;
+pub type Iv = Interval<u64, ()>;
+pub type RepeatIndex = HashMap<Vec<u8>, Lapper<u64, ()>>;
 
 // filanames
 pub const INTRON_CLASSIFICATION: &str = "reference_introns.tsv";
@@ -104,8 +108,6 @@ pub const CONS2: [f64; 128] = {
     bgd[b'T' as usize] = 0.0030;
     bgd
 };
-
-pub type SpliceScoreMap = HashMap<Sequence, Vec<f64>>;
 
 /// Splice site type
 ///
@@ -669,6 +671,7 @@ pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::er
 /// A `Result<String, anyhow::Error>` containing the concatenated contents of all files
 /// on success, or an error if parallel reading fails.
 ///
+#[allow(dead_code)]
 pub fn par_reader<P: AsRef<Path> + Debug + Sync + Send>(
     files: Vec<P>,
 ) -> Result<String, anyhow::Error> {
@@ -736,6 +739,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.decode(b"ACGT"), "ACGT");
     /// ```
+    #[allow(dead_code)]
     pub fn decode(seq: &[u8]) -> Self {
         let base_count = seq.len() * 2;
         let mut capacity = Vec::with_capacity(base_count);
@@ -776,6 +780,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.is_empty(), false);
     /// ```
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.seq.is_empty()
     }
@@ -790,6 +795,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.to_string(), String::from("ATCG"));
     /// ```
+    #[allow(dead_code)]
     #[allow(clippy::inherent_to_string_shadow_display)]
     pub fn to_string(&self) -> String {
         String::from_utf8_lossy(&self.seq).to_string()
@@ -805,6 +811,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"atcg");
     /// assert_eq!(seq.to_uppercase(), "ATCG");
     /// ```
+    #[allow(dead_code)]
     pub fn to_uppercase(&self) -> Vec<u8> {
         self.seq.to_ascii_uppercase()
     }
@@ -819,6 +826,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.to_lowercase(), "atcg");
     /// ```
+    #[allow(dead_code)]
     pub fn to_lowercase(&self) -> Vec<u8> {
         self.seq.to_ascii_lowercase()
     }
@@ -833,10 +841,10 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.complement().to_string(), "GCTA");
     /// ```
+    #[allow(dead_code)]
     pub fn complement(&self) -> Self {
         let mut comp = self.seq.to_vec();
-        comp.iter_mut()
-            .for_each(|c| *c = COMPLEMENT[*c as usize] as u8);
+        comp.iter_mut().for_each(|c| *c = COMPLEMENT[*c as usize]);
 
         Self { seq: comp }
     }
@@ -856,8 +864,7 @@ impl Sequence {
         rev.reverse();
         rev.make_ascii_uppercase();
 
-        rev.iter_mut()
-            .for_each(|c| *c = COMPLEMENT[*c as usize] as u8);
+        rev.iter_mut().for_each(|c| *c = COMPLEMENT[*c as usize]);
 
         Self { seq: rev }
     }
@@ -902,6 +909,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.slice_as_bytes(0, 2), b"AT");
     /// ```
+    #[allow(dead_code)]
     pub fn slice_as_bytes(&self, start: usize, end: usize) -> &[u8] {
         &self.seq[start..end]
     }
@@ -1036,6 +1044,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.reverse_encode(0, 4), vec![3, 2, 1, 0]);
     /// ```
+    #[allow(dead_code)]
     pub fn reverse_encode(&self, start: usize, end: usize) -> Vec<usize> {
         self.slice_as_bytes(start, end)
             .iter()
@@ -1055,6 +1064,7 @@ impl Sequence {
     /// let seq = Sequence::new(b"ATCG");
     /// assert_eq!(seq.reverse_encode_u8(0, 4), vec![3, 2, 1, 0]);
     /// ```
+    #[allow(dead_code)]
     pub fn reverse_encode_u8(&self, start: usize, end: usize) -> Vec<u8> {
         self.slice_as_bytes(start, end)
             .iter()
@@ -1076,23 +1086,6 @@ impl Sequence {
     pub fn fill(&self, kmer: usize) -> Vec<u8> {
         let mut seq = b"A".repeat(kmer);
         seq.extend(self.seq.iter());
-
-        seq
-    }
-
-    /// Fill the sequence with a given kmer at the back
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// use iso::Sequence;
-    ///
-    /// let seq = Sequence::new(b"TCG");
-    /// assert_eq!(seq.fill_back(2), "TCGAA");
-    /// ```
-    pub fn fill_back(&self, kmer: usize) -> Vec<u8> {
-        let mut seq = self.seq.to_vec();
-        seq.extend(b"A".repeat(kmer).iter());
 
         seq
     }
@@ -1155,27 +1148,6 @@ fn from_2bit(twobit: PathBuf) -> HashMap<Vec<u8>, Vec<u8>> {
     let genome = TwoBitFile::open_and_read(&twobit).expect("ERROR: Cannot open 2bit file");
     let source = format!("file {}", twobit.display());
     collect_2bit_sequences(genome, &source)
-}
-
-/// Loads genome sequences from a 2bit compressed format file.
-///
-/// # Arguments
-///
-/// - `buf`: Buffer containing the 2bit file
-/// - `source`: Path to the 2bit file
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use std::path::PathBuf;
-///
-/// let sequences = from_2bit_buf(Vec::new(), PathBuf::from("genome.2bit"));
-/// let chr1 = sequences.get(b"chr1");
-/// ```
-fn from_2bit_buf(buf: Vec<u8>, source: &str) -> HashMap<Vec<u8>, Vec<u8>> {
-    let genome = TwoBitFile::from_buf(buf)
-        .unwrap_or_else(|e| panic!("ERROR: Cannot read 2bit from {}: {}", source, e));
-    collect_2bit_sequences(genome, source)
 }
 
 /// Loads genome sequences from a 2bit compressed format file.
@@ -1303,6 +1275,142 @@ fn parse_fasta_reader<R: BufRead>(mut reader: R, source: &str) -> HashMap<Vec<u8
     info!("Read {} sequences from {}", acc.len(), source);
 
     acc
+}
+
+/// Loads genomic repeats from a BED3 file.
+///
+/// This function reads a BED3 file containing genomic repeats and builds an index
+/// of sorted intervals per chromosome. The index is returned as a `HashMap` where
+/// the keys are chromosome names and the values are `Lapper` instances.
+///
+/// # Arguments
+///
+/// * `path`: Path to the BED3 file containing repeats.
+///
+/// # Returns
+///
+/// * An `Option<RepeatIndex>` containing the repeat index.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let repeats = load_repeats(PathBuf::from("repeats.bed3"));
+/// ```
+pub fn load_repeats(path: PathBuf) -> Option<RepeatIndex> {
+    // First pass: collect raw intervals per chrom
+    let mut raw: HashMap<Vec<u8>, Vec<Iv>> = HashMap::new();
+    let mut counter = 0_usize;
+
+    genepred::Reader::<Bed3>::from_mmap(&path)
+        .unwrap_or_else(|e| panic!("ERROR: Could not read repeats file -> {e}!"))
+        .records()
+        .for_each(|record| {
+            let record = record.unwrap_or_else(|e| panic!("ERROR: Could not read record -> {e}!"));
+            raw.entry(record.chrom().to_vec()).or_default().push(Iv {
+                start: record.start(),
+                stop: record.end(),
+                val: (),
+            });
+
+            counter += 1;
+        });
+    info!("Read {} repeats from {}", counter, path.display());
+
+    // Second pass: build a sorted Lapper per chrom (Lapper::new sorts internally)
+    let index = raw
+        .into_iter()
+        .map(|(chrom, ivs)| (chrom, Lapper::new(ivs)))
+        .collect();
+
+    info!("Built repeat index from {}", path.display());
+    Some(index)
+}
+
+/// Returns true if the intron falls ENTIRELY within a single repeat interval.
+///
+/// # Arguments
+///
+/// * `index`: A `RepeatIndex` containing sorted intervals per chromosome.
+/// * `chrom`: A slice of the chromosome name.
+/// * `intron`: A tuple of the intron coordinates (start, end).
+///
+/// # Returns
+///
+/// * A boolean indicating whether the intron is within a repeat interval.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let index = load_repeats(PathBuf::from("repeats.bed3")).unwrap();
+/// let chrom = b"chr1";
+/// let intron = (100, 200);
+/// let within_repeat = intron_within_repeat(&index, &chrom, intron);
+/// ```
+#[inline]
+pub fn is_intron_within_repeat(index: &Lapper<u64, ()>, intron: (u64, u64)) -> bool {
+    let (start, end) = intron;
+    index
+        .find(start, end)
+        .any(|iv| iv.start <= start && iv.stop >= end)
+}
+
+/// Returns true if ≥ `threshold` fraction (e.g. 0.5) of the intron
+/// is covered by repeats (handles overlapping/adjacent repeat intervals).
+///
+/// # Arguments
+///
+/// * `index`: A `RepeatIndex` containing sorted intervals per chromosome.
+/// * `chrom`: A slice of the chromosome name.
+/// * `intron`: A tuple of the intron coordinates (start, end).
+/// * `threshold`: A float between 0 and 1 representing the minimum fraction of the intron covered by repeats.
+///
+/// # Returns
+///
+/// * A boolean indicating whether the intron is covered by repeats.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let index = load_repeats(PathBuf::from("repeats.bed3")).unwrap();
+/// let chrom = b"chr1";
+/// let intron = (100, 200);
+/// let covered = intron_covered_by_repeats(&index, &chrom, intron, 0.5);
+/// ```
+#[inline]
+pub fn is_intron_covered_by_repeat(
+    index: &Lapper<u64, ()>,
+    intron: (u64, u64),
+    threshold: f64,
+) -> bool {
+    let (start, end) = intron;
+    let intron_len = end - start;
+    if intron_len == 0 {
+        return false;
+    }
+
+    // INFO: merge overlapping hits on-the-fly to avoid double-counting
+    let mut covered: u64 = 0;
+    let mut current_end: u64 = 0; // tracks merged interval right edge
+
+    // INFO: find() returns only intervals overlapping [start, end)
+    // Ww sort by start to merge correctly — Lapper guarantees sorted order
+    for iv in index.find(start, end) {
+        let iv_start = iv.start.max(start); // clamp to intron bounds
+        let iv_stop = iv.stop.min(end);
+
+        if iv_start >= current_end {
+            // INFO: new non-overlapping segment
+            covered += iv_stop - iv_start;
+            current_end = iv_stop;
+        } else if iv_stop > current_end {
+            // INFO: extends the current merged segment
+            covered += iv_stop - current_end;
+            current_end = iv_stop;
+        }
+        // else: fully contained in already-counted region, skip
+    }
+
+    covered as f64 / intron_len as f64 >= threshold
 }
 
 #[cfg(test)]

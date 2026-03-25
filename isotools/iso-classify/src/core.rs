@@ -10,26 +10,27 @@
 //! input long-read sequencing data. It performs data integration,
 //! collecting splice site prediction scores (from tools like SpliceAI
 //! and MaxEntScan), analyzing genomic sequence context, and detecting
-//! specific sequence patterns such as RT repeats and NAG motifs. Through
+//! specific sequence patterns such as RT repeats and NULLG motifs. Through
 //! a parallel processing approach, each intron is evaluated to determine
 //! its "support type", indicating whether it is likely to be a genuine
 //! spliced intron, an RT-driven event, or an unclear case requiring
 //! further investigation. The final output is a detailed, classified list
 //! of introns, enabling deeper insights into alternative splicing and
-//! RNA processing.
+//! RNULL processing.
 
 use std::fmt::Debug;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashSet;
 use genepred::{GenePred, Strand};
 use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
 use packbed::{pack, Role};
 use rayon::prelude::*;
+use rust_lapper::Lapper;
 
 // use config::{
 //     write_objs, SharedSpliceMap, SupportType, CLASSIFY_ASSETS, INTRON_CLASSIFICATION,
@@ -45,7 +46,7 @@ const RT_REPEAT: usize = 12;
 const MISMATCHES: u32 = 1;
 const MAX_ENT_DONOR_MIN_SIZE: usize = 9;
 const WIGGLE_SWITCH: [usize; 2] = [2, 4];
-const NAG_PATTERNS: [&[u8]; 3] = [b"CAG", b"TAG", b"AAG"];
+const NULLG_PATTERNS: [&[u8]; 3] = [b"CAG", b"TAG", b"AAG"];
 
 type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
 
@@ -98,13 +99,14 @@ type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
 /// let output_path = classify_introns(args).expect("Failed to classify introns");
 /// println!("Intron classification complete. Output at: {:?}", output_path);
 /// ```
-pub fn classify_introns(args: Args) -> Result<PathBuf> {
+pub fn classify_introns(args: Args) -> Result<()> {
     log::info!("INFO: Classifying introns...");
 
     let spliceosome = if let Some(iic) = args.iic {
         log::info!("INFO: Parsing intronIC...");
         read_iic(iic)
     } else {
+        log::warn!("WARN: No intronIC provided, using empty spliceosome!");
         HashMap::new()
     };
 
@@ -164,6 +166,13 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
 
     // if args.scan is true, we need to load both databases
     let scan_scores = if args.scan { load_scan_scores() } else { None };
+    let repeats = if let Some(path) = args.repeats {
+        load_repeats(path)
+    } else {
+        log::warn!("WARN: No repeats provided, skipping repeats overlapping...");
+        None
+    };
+
     let accumulator = ParallelAccumulator::default();
 
     isoseqs.into_par_iter().for_each(|bucket| {
@@ -177,7 +186,10 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
         });
         let components = bucket.1;
 
-        let splice_map = create_splice_map(&chr, &splice_plus, &splice_minus);
+        let splice_map = create_splice_map(chr, &splice_plus, &splice_minus);
+
+        let binding = HashMap::new();
+        let repeats = repeats.as_ref().unwrap_or(&binding).get(chr.as_bytes());
 
         distribute(
             components,
@@ -187,25 +199,44 @@ pub fn classify_introns(args: Args) -> Result<PathBuf> {
             &accumulator,
             args.nag,
             args.rt_freq_threshold,
+            args.spliceai_min_ss_signal,
+            args.intron_freq_threshold,
+            args.maxent_min_ss_signal,
             &spliceosome,
+            repeats,
         );
     });
+    log::info!("INFO: Classified {} introns", accumulator.introns.len());
 
-    let output = args.outdir.join(INTRON_CLASSIFICATION);
+    let filename = format!(
+        "{}.{}",
+        args.prefix.unwrap_or_default(),
+        INTRON_CLASSIFICATION
+    );
+    std::fs::create_dir_all(&args.outdir)
+        .unwrap_or_else(|e| panic!("ERROR: Could not create output directory -> {e}!"));
+    let output = args.outdir.join(filename);
 
-    // write_objs(
-    //     &accumulator.introns,
-    //     output
-    //         .clone()
-    //         .to_str()
-    //         .expect("ERROR: Could not convert path to str!"),
-    // );
+    log::info!("INFO: Writing output to {}", output.display());
+    let mut writer = BufWriter::new(
+        File::create(output)
+            .unwrap_or_else(|e| panic!("ERROR: Could not create output file -> {e}!")),
+    );
 
-    Ok(output)
+    accumulator.introns.iter().for_each(|descriptor| {
+        writer
+            .write_all(&descriptor)
+            .unwrap_or_else(|e| panic!("ERROR: Could not write intron -> {e}!"));
+        writer
+            .write_all(b"\n")
+            .unwrap_or_else(|e| panic!("ERROR: Could not write newline -> {e}!"));
+    });
+
+    Ok(())
 }
 
 struct ParallelAccumulator {
-    introns: DashSet<String>,
+    introns: DashSet<Vec<u8>>,
 }
 
 impl Default for ParallelAccumulator {
@@ -229,7 +260,7 @@ impl Default for ParallelAccumulator {
 /// * `scan_scores`: An `Option` containing `ScanScores` for MaxEnt scanning.
 /// * `genome`: An `Option` containing the genome sequence data.
 /// * `accumulator`: A `ParallelAccumulator` for thread-safe collection of results.
-/// * `nag`: A `bool` indicating whether to scan for NAG patterns.
+/// * `nag`: A `bool` indicating whether to scan for NULLG patterns.
 ///
 /// # Example
 ///
@@ -245,10 +276,14 @@ fn distribute(
     genome: &HashMap<Vec<u8>, Vec<u8>>,
     accumulator: &ParallelAccumulator,
     nag: bool,
-    rt_frequency_threshold: f64,
+    rt_frequency_threshold: f32,
+    spliceai_min_ss_signal: f32,
+    intron_frequency_threshold: f32,
+    maxent_min_ss_signal: f32,
     spliceosome: &HashMap<String, USpliceType>,
+    repeats: Option<&Lapper<u64, ()>>,
 ) {
-    components.into_par_iter().for_each(|mut comp| {
+    components.into_par_iter().for_each(|comp| {
         let (refs, queries) = comp.into_iter().partition(|record| {
             let role = record
                 .get_extra(b"role")
@@ -259,7 +294,7 @@ fn distribute(
             role == Some(b"reference".to_vec())
         });
 
-        let info = process_component(
+        let result = process_component(
             refs,
             queries,
             splice_map,
@@ -267,21 +302,25 @@ fn distribute(
             genome,
             nag,
             rt_frequency_threshold,
+            spliceai_min_ss_signal,
+            intron_frequency_threshold,
+            maxent_min_ss_signal,
             spliceosome,
+            repeats,
         );
 
-        // info.into_iter().for_each(|(_, intron_descriptor)| {
-        //     if !intron_descriptor.is_empty() {
-        //         accumulator.introns.insert(intron_descriptor);
-        //     }
-        // });
+        result.into_iter().for_each(|descriptor| {
+            if !descriptor.is_empty() {
+                accumulator.introns.insert(descriptor);
+            }
+        });
     });
 }
 
 /// Processes a single `IntronBucket` and classifies its introns.
 ///
 /// This function iterates through all introns in a given `IntronBucket`, applies classification logic
-/// (e.g., getting splice site context, SpliceAI scores, MaxEnt scores, and checking for RT and NAG repeats),
+/// (e.g., getting splice site context, SpliceAI scores, MaxEnt scores, and checking for RT and NULLG repeats),
 /// and determines the support type for each intron.
 ///
 /// # Arguments
@@ -291,7 +330,7 @@ fn distribute(
 /// * `splice_map`: A tuple of `SharedSpliceMap` containing SpliceAI scores.
 /// * `scan_scores`: An `Option` containing `ScanScores` for MaxEnt scanning.
 /// * `genome`: An `Option` containing the genome sequence data.
-/// * `nag`: A `bool` indicating whether to scan for NAG patterns.
+/// * `nag`: A `bool` indicating whether to scan for NULLG patterns.
 ///
 /// # Returns
 ///
@@ -306,6 +345,7 @@ fn distribute(
 #[inline(always)]
 #[allow(clippy::collapsible_else_if)]
 #[allow(clippy::if_same_then_else)]
+#[allow(clippy::too_many_arguments)]
 fn process_component(
     refs: Vec<GenePred>,
     queries: Vec<GenePred>,
@@ -313,15 +353,20 @@ fn process_component(
     scan_scores: &ScanScores,
     genome: &HashMap<Vec<u8>, Vec<u8>>,
     nag: bool,
-    rt_frequency_threshold: f64,
+    rt_frequency_threshold: f32,
+    spliceai_min_ss_signal: f32,
+    intron_frequency_threshold: f32,
+    maxent_min_ss_signal: f32,
     spliceosome: &HashMap<String, USpliceType>,
-) -> HashMap<(u64, u64), Intron> {
+    repeats: Option<&Lapper<u64, ()>>,
+) -> Vec<Vec<u8>> {
     if queries.is_empty() {
-        return HashMap::new();
+        return Vec::new();
     }
 
-    let chr = refs[0].chrom();
-    let strand = refs[0]
+    // INFO: on queries in case of no references -> panics
+    let chr = queries[0].chrom();
+    let strand = queries[0]
         .strand()
         .unwrap_or_else(|| panic!("ERROR: Could not get strand from {}!", refs[0]));
 
@@ -359,9 +404,12 @@ fn process_component(
         spans.insert((query.start(), query.end()));
     });
 
-    let mut nag_introns: HashMap<(u64, u64), Intron> = HashMap::new(); // collect NAG hits
+    let mut nag_introns: HashMap<(u64, u64), Intron> = HashMap::new(); // collect NULLG hits
     let mut query_introns = HashMap::new();
     queries.iter().for_each(|query| {
+        // INFO: determine if query is in frame
+        let is_in_frame = query.cds_length() % 3 == 0;
+
         query.introns().iter_mut().for_each(|(start, end)| {
             match query_introns.entry((*start, *end)) {
                 Entry::Occupied(mut entry) => {
@@ -383,6 +431,7 @@ fn process_component(
                     stats.end = *end;
                     stats.strand = strand;
                     stats.seen = 1;
+                    stats.is_in_frame = is_in_frame;
 
                     // INFO: ask if intron is within how many spans
                     for (span_start, span_end) in &spans {
@@ -412,9 +461,9 @@ fn process_component(
                         if stats.is_toga_supported {
                             &USpliceType::Unknown
                         } else {
-                            log::warn!(
-                                "WARN: Couldn't find splice type for {:?} using {:?} with metadata -> {:?}. Setting to UNKNOWN",
-                                (start.clone(), end.clone()),
+                            log::debug!(
+                                "DEBUG: Couldn't find splice type for {:?} using {:?} with metadata -> {:?}. Setting to UNKNOWN",
+                                (*start, *end),
                                 key,
                                 stats
                             );
@@ -432,7 +481,18 @@ fn process_component(
                         stats.intron_position = Position::Unknown;
                     }
 
-                    // INFOL if --nag set and acceptor is AG and TOGA supported, look for NAGNAG
+                    // INFO: if repeats are provided, check if intron is within a repeat
+                    if let Some(repeats) = repeats {
+                        if is_intron_within_repeat(repeats, (*start, *end)) {
+                            stats.within_repeat = SpanRepeat::Within;
+                        } else if is_intron_covered_by_repeat(repeats, (*start, *end), 0.5) {
+                            stats.within_repeat = SpanRepeat::Spans;
+                        } else {
+                            stats.within_repeat = SpanRepeat::Null;
+                        }
+                    }
+
+                    // INFO: if --nag set and acceptor is AG and TOGA supported, look for NULLGNULLG
                     if nag && stats.acceptor_sequence == b"AG" && stats.is_toga_supported {
                         scan_nag_repeats(
                             &(*start, *end),
@@ -454,79 +514,139 @@ fn process_component(
         });
     });
 
-    // INFO: merging NAG introns in after all entries are inserted
+    // INFO: merging NULLG introns in after all entries are inserted
     query_introns.extend(nag_introns);
-    for q in query_introns.values() {
-        println!("{}", q);
-    }
 
-    //
-    //     // INFO: not including NAG-derived introns bc they are already Splicing
-    //     // WARN: strange TOGA supported RT introns -> s14	9965456	9968743
-    //     if descriptor.is_rt_intron {
-    //         if descriptor.is_toga_supported {
-    //             if descriptor.intron_position == IntronPosition::UTR {
-    //                 descriptor.support = SupportType::Unclear; // INFO: TOGA2 UTRs are not 100% reliable yet
-    //             } else {
-    //                 descriptor.support = SupportType::Splicing;
-    //             }
-    //         } else {
-    //             // INFO: if we see that RT intron in more than args.rt_freq_threshold we assume
-    //             // its likely something real -> Unclear
-    //             if (descriptor.seen as f64 / descriptor.spanned as f64) >= rt_frequency_threshold {
-    //                 descriptor.support = SupportType::Unclear;
-    //             } else {
-    //                 descriptor.support = SupportType::RT;
-    //             }
-    //         }
-    //     } else {
-    //         if descriptor.is_toga_supported
-    //             || (descriptor.splice_ai_donor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD
-    //                 && descriptor.splice_ai_acceptor >= SPLICE_AI_SCORE_RECOVERY_THRESHOLD)
-    //         {
-    //             descriptor.support = SupportType::Splicing;
-    //         } else if (descriptor.seen as f64 / descriptor.spanned as f64) // WARN: how do we deal with 1/2 (50%) cases?
-    //             >= INTRON_FREQUENCY_RECOVERY_THRESHOLD
-    //         {
-    //             descriptor.support = SupportType::Splicing;
-    //         } else if (descriptor.max_ent_donor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD
-    //             && descriptor.max_ent_acceptor >= MAX_ENT_SCORE_RECOVERY_THRESHOLD)
-    //             && (descriptor.splice_ai_donor > 0.0 && descriptor.splice_ai_acceptor > 0.0)
-    //         {
-    //             // INFO: new branch for MaxEnt only -> not trusting it alone
-    //             // INFO: here we test if maxEnt is significant + if there is
-    //             // INFO: spliceAi signal [> 0.0]
-    //             descriptor.support = SupportType::Splicing;
-    //         } else {
-    //             descriptor.support = SupportType::Unclear;
-    //         }
-    //     }
-    //
-    //     if acc.contains_key(&(intron_start, intron_end)) {
-    //         log::debug!("DEBUG: Found seen ({intron_start}, {intron_end}) tuple, likely NAG!");
-    //
-    //         let handle = acc.get_mut(&(intron_start, intron_end)).unwrap_or_else(|| {
-    //             panic!(
-    //                 "ERROR: could not retrieve descriptor from accumulator -> {:?}",
-    //                 (intron_start, intron_end)
-    //             )
-    //         });
-    //
-    //         descriptor.is_nag_intron = true;
-    //         descriptor.support = SupportType::Splicing; // INFO: we assume Splicing because is NAG
-    //
-    //         *handle = descriptor.fmt(&chr, &strand, intron_start, intron_end);
-    //     } else {
-    //         log::debug!("DEBUG: Inserting unseen {intron_start} {intron_end} tuple!");
-    //
-    //         acc.insert(
-    //             (intron_start, intron_end),
-    //             descriptor.fmt(&chr, &strand, intron_start, intron_end),
-    //         );
-    //     }
-    // }
+    log::debug!("INFO: Second pass over introns...");
+    __veredict(
+        &mut query_introns,
+        rt_frequency_threshold,
+        spliceai_min_ss_signal,
+        intron_frequency_threshold,
+        maxent_min_ss_signal,
+    );
 
+    let mut rows = Vec::new();
+    query_introns.values().for_each(|descriptor| {
+        rows.push(descriptor.as_bytes());
+    });
+
+    rows
+}
+
+/// Determines the support type for each intron.
+///
+/// This function takes a vector of `Intron` descriptors and determines the support type for each intron.
+/// It uses the `Intron` descriptors to determine the support type based on various criteria, such as
+/// splice site context, MaxEnt scores, and intron frequency.
+///
+/// # Arguments
+///
+/// * `query_introns`: A mutable reference to a `HashMap` containing the intron descriptors.
+/// * `rt_frequency_threshold`: A float representing the RT intron frequency threshold.
+/// * `spliceai_min_ss_signal`: A float representing the spliceAI minimum splice signal threshold.
+/// * `intron_frequency_threshold`: A float representing the intron frequency threshold.
+/// * `maxent_min_ss_signal`: A float representing the MaxEnt minimum splice signal threshold.
+///
+/// # Example
+///
+/// ```rust, ignore
+/// __veredict(
+///     &mut query_introns,
+///     rt_frequency_threshold,
+///     spliceai_min_ss_signal,
+///     intron_frequency_threshold,
+///     maxent_min_ss_signal,
+/// );
+/// ```
+#[allow(clippy::collapsible_else_if)]
+pub fn __veredict(
+    query_introns: &mut HashMap<(u64, u64), Intron>,
+    rt_frequency_threshold: f32,
+    spliceai_min_ss_signal: f32,
+    intron_frequency_threshold: f32,
+    maxent_min_ss_signal: f32,
+) {
     query_introns
+        .iter_mut()
+        .for_each(|((_intron_start, _intron_end), descriptor)| {
+            // INFO: not including NAG-derived introns bc they are already Splicing
+            // WARN: strange TOGA supported RT introns -> s14	9965456	9968743
+            if descriptor.is_rt_intron {
+                if descriptor.is_toga_supported {
+                    if descriptor.intron_position == Position::UTR {
+                        // INFO: TOGA2 UTRs are not 100% reliable yet
+                        match descriptor.within_repeat {
+                            SpanRepeat::Within | SpanRepeat::Spans => {
+                                descriptor.support = SupportType::StrongRT;
+                            }
+                            SpanRepeat::Null => {
+                                // INFO: UTR TOGA2 support with small repeats but not within
+                                // INFO: test spliceAi score and decide
+                                if descriptor.splice_ai_donor >= 0.001
+                                    && descriptor.splice_ai_acceptor >= 0.001
+                                {
+                                    descriptor.support = SupportType::Splicing;
+                                } else {
+                                    descriptor.support = SupportType::WeakRT;
+                                }
+                            }
+                        }
+                    } else {
+                        // INFO: TOGA2 intron is splicing
+                        descriptor.support = SupportType::Splicing;
+                    }
+                } else {
+                    // INFO: intron is RT but not TOGA2 supported
+                    match descriptor.within_repeat {
+                        // INFO: within/spans repeats -> sure RT no matter frequency
+                        SpanRepeat::Within | SpanRepeat::Spans => {
+                            descriptor.support = SupportType::StrongRT;
+                        }
+                        SpanRepeat::Null => {
+                            // INFO: completey new intron with small repeats and not within db
+                            // INFO: if intron > 50% -> really unclear
+                            if (descriptor.seen as f32 / descriptor.spanned as f32)
+                                >= rt_frequency_threshold
+                            {
+                                descriptor.support = SupportType::Unclear;
+                            } else {
+                                // INFO: low frequency RT intron -> spliceAi scores decide
+                                // strong/weak
+                                if descriptor.splice_ai_donor >= 0.001
+                                    && descriptor.splice_ai_acceptor >= 0.001
+                                {
+                                    descriptor.support = SupportType::WeakRT;
+                                } else {
+                                    descriptor.support = SupportType::StrongRT;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                if descriptor.is_toga_supported
+                    || (descriptor.splice_ai_donor >= spliceai_min_ss_signal
+                        && descriptor.splice_ai_acceptor >= spliceai_min_ss_signal)
+                {
+                    descriptor.support = SupportType::Splicing;
+                } else if ((descriptor.seen as f32 / descriptor.spanned as f32)
+                    >= intron_frequency_threshold)
+                    || ((descriptor.max_ent_donor >= maxent_min_ss_signal
+                        && descriptor.max_ent_acceptor >= maxent_min_ss_signal)
+                        && (descriptor.splice_ai_donor > 0.0
+                            && descriptor.splice_ai_acceptor > 0.0))
+                {
+                    // WARN: how do we deal with 1/2 (50%) cases?
+                    // INFO: new branch for MaxEnt only -> not trusting it alone
+                    // INFO: here we test if maxEnt is significant + if there is
+                    // INFO: spliceAi signal [> 0.0]
+                    descriptor.support = SupportType::Splicing;
+                } else {
+                    descriptor.support = SupportType::Unclear;
+                }
+            }
+        });
 }
 
 /// Extracts the genomic sequence context around the splice junction.
@@ -712,7 +832,7 @@ fn get_sj_ai_scores(
             // donor(+)/acceptor(-) [-1 to match bigtools coords]
             let (intron_donor, intron_acceptor) = match strand {
                 genepred::Strand::Forward => (intron_start as usize, intron_end as usize - 1),
-                genepred::Strand::Reverse => (intron_end as usize, intron_start as usize - 1),
+                genepred::Strand::Reverse => (intron_end as usize - 1, intron_start as usize),
                 _ => panic!("ERROR: Unknown strand {:?}!", strand),
             };
 
@@ -735,9 +855,9 @@ fn get_sj_ai_scores(
     }
 }
 
-/// Processes a potential NAG-derived intron.
+/// Processes a potential NULLG-derived intron.
 ///
-/// This function creates a new intron descriptor for a NAG-derived
+/// This function creates a new intron descriptor for a NULLG-derived
 /// intron, retrieves its genomic context and splice site scores,
 /// and formats a new descriptor string. This new intron is considered
 /// a splicing intron.
@@ -754,7 +874,7 @@ fn get_sj_ai_scores(
 ///
 /// # Returns
 ///
-/// * A `String` containing the formatted descriptor for the new NAG intron.
+/// * A `String` containing the formatted descriptor for the new NULLG intron.
 ///
 /// # Example
 ///
@@ -774,7 +894,7 @@ fn process_nag_pattern(
     ref_utr_introns: &HashSet<(u64, u64)>,
     acc: &mut HashMap<(u64, u64), Intron>,
 ) {
-    // INFO: move the acceptor position by offset [look for NAG]
+    // INFO: move the acceptor position by offset [look for NULLG]
     let intron = match strand {
         Strand::Forward => (base_intron.0, (base_intron.1 as i64 + offset) as u64),
         Strand::Reverse => (base_intron.0 - (offset as u64), base_intron.1),
@@ -782,7 +902,10 @@ fn process_nag_pattern(
     };
 
     if acc.contains_key(&intron) {
-        log::debug!("DEBUG: NAG pattern already in accumulator -> {:?}", intron);
+        log::debug!(
+            "DEBUG: NULLG pattern already in accumulator -> {:?}",
+            intron
+        );
 
         let descriptor = acc.get_mut(&intron).unwrap_or_else(|| {
             panic!(
@@ -794,11 +917,11 @@ fn process_nag_pattern(
         descriptor.is_nag_intron = true;
 
         log::debug!(
-            "DEBUG: Will replace seen intron with NAG flag -> {:?}",
+            "DEBUG: Will replace seen intron with NULLG flag -> {:?}",
             intron
         );
     } else {
-        log::debug!("DEBUG: Found and insert potential NAG {:?}!", intron);
+        log::debug!("DEBUG: Found and insert potential NULLG {:?}!", intron);
 
         let mut new_descriptor = Intron::new();
         get_sj_context(
@@ -827,9 +950,9 @@ fn process_nag_pattern(
     }
 }
 
-/// Scans for NAG patterns in the acceptor context.
+/// Scans for NULLG patterns in the acceptor context.
 ///
-/// If the pre- or post-acceptor sequence matches one of the NAG
+/// If the pre- or post-acceptor sequence matches one of the NULLG
 /// patterns (`CAG`, `TAG`, `AAG`), this function calls `process_nag_pattern`
 /// to create and classify new introns at the wiggled splice sites.
 ///
@@ -842,7 +965,7 @@ fn process_nag_pattern(
 /// * `genome`: An `Option` containing the genome sequence data.
 /// * `scan_scores`: An `Option` containing `ScanScores`.
 /// * `splice_scores`: An `Option` containing a reference to `SharedSpliceMap`.
-/// * `acc`: A mutable `HashMap` to store the new NAG introns.
+/// * `acc`: A mutable `HashMap` to store the new NULLG introns.
 ///
 /// # Example
 ///
@@ -865,7 +988,7 @@ fn scan_nag_repeats(
     let pre_acceptor = &descriptor.acceptor_context.slice(14, 17);
     let post_acceptor = &descriptor.acceptor_context.slice(20, 23);
 
-    if NAG_PATTERNS.contains(&pre_acceptor.as_slice()) {
+    if NULLG_PATTERNS.contains(&pre_acceptor.as_slice()) {
         process_nag_pattern(
             intron,
             -3,
@@ -874,13 +997,13 @@ fn scan_nag_repeats(
             genome,
             scan_scores,
             splice_scores,
-            &ref_cds_introns,
-            &ref_utr_introns,
+            ref_cds_introns,
+            ref_utr_introns,
             acc,
         );
     }
 
-    if NAG_PATTERNS.contains(&post_acceptor.as_slice()) {
+    if NULLG_PATTERNS.contains(&post_acceptor.as_slice()) {
         process_nag_pattern(
             intron,
             3,
@@ -889,8 +1012,8 @@ fn scan_nag_repeats(
             genome,
             scan_scores,
             splice_scores,
-            &ref_cds_introns,
-            &ref_utr_introns,
+            ref_cds_introns,
+            ref_utr_introns,
             acc,
         );
     }
@@ -1160,7 +1283,7 @@ impl std::fmt::Display for USpliceType {
         match self {
             USpliceType::U2 => write!(f, "U2"),
             USpliceType::U12 => write!(f, "U12"),
-            USpliceType::Unknown => write!(f, "Unknown"),
+            USpliceType::Unknown => write!(f, "UNKNOWN"),
         }
     }
 }
@@ -1229,6 +1352,8 @@ pub struct Intron {
     pub is_nag_intron: bool,
     /// A classification of the intron's splice type.
     pub splice_u_type: USpliceType,
+    /// A boolean indicating if the intron is within a repeat.
+    pub within_repeat: SpanRepeat,
     /// A classification of the intron's support type.
     pub support: SupportType,
 }
@@ -1266,8 +1391,13 @@ impl Intron {
             is_rt_intron: false,
             is_nag_intron: false,
             splice_u_type: USpliceType::Unknown,
+            within_repeat: SpanRepeat::Null,
             support: SupportType::Unclear,
         }
+    }
+
+    pub fn as_bytes(&self) -> Vec<u8> {
+        format!("{}", self).as_bytes().to_vec()
     }
 }
 
@@ -1276,8 +1406,8 @@ impl std::fmt::Display for Intron {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            std::str::from_utf8(&self.chrom).unwrap_or("NA"),
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            std::str::from_utf8(&self.chrom).unwrap_or("NULL"),
             self.start,
             self.end,
             self.strand,
@@ -1287,18 +1417,19 @@ impl std::fmt::Display for Intron {
             self.splice_ai_acceptor,
             self.max_ent_donor,
             self.max_ent_acceptor,
-            std::str::from_utf8(&self.donor_sequence).unwrap_or("NA"),
-            std::str::from_utf8(&self.acceptor_sequence).unwrap_or("NA"),
-            std::str::from_utf8(&self.donor_context.seq).unwrap_or("NA"),
-            std::str::from_utf8(&self.acceptor_context.seq).unwrap_or("NA"),
+            std::str::from_utf8(&self.donor_sequence).unwrap_or("NULL"),
+            std::str::from_utf8(&self.acceptor_sequence).unwrap_or("NULL"),
+            std::str::from_utf8(&self.donor_context.seq).unwrap_or("NULL"),
+            std::str::from_utf8(&self.acceptor_context.seq).unwrap_or("NULL"),
             self.intron_position,
-            self.is_toga_supported,
-            self.is_in_frame,
-            std::str::from_utf8(&self.donor_rt_context).unwrap_or("NA"),
-            std::str::from_utf8(&self.acceptor_rt_context).unwrap_or("NA"),
-            self.is_rt_intron,
-            self.is_nag_intron,
+            if self.is_toga_supported { "TOGA_SUPPORT" } else { "NO_TOGA_SUPPORT" },
+            if self.is_in_frame { "IN_FRAME" } else { "OUT_OF_FRAME" },
+            std::str::from_utf8(&self.donor_rt_context).unwrap_or("NULL"),
+            std::str::from_utf8(&self.acceptor_rt_context).unwrap_or("NULL"),
+            if self.is_rt_intron { "RT_INTRON" } else { "NOT_RT_INTRON" },
+            if self.is_nag_intron { "NAG_SS" } else { "NOT_NAG_SS" },
             self.splice_u_type,
+            self.within_repeat,
             self.support
         )
     }
@@ -1306,6 +1437,7 @@ impl std::fmt::Display for Intron {
 
 /// Position of the intron in the reference
 #[derive(Debug, Eq, PartialEq, Clone)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum Position {
     CDS,
     UTR,
@@ -1339,7 +1471,8 @@ impl std::fmt::Display for Position {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SupportType {
     Splicing,
-    RT,
+    StrongRT,
+    WeakRT,
     Unclear,
 }
 
@@ -1347,7 +1480,8 @@ impl std::fmt::Display for SupportType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SupportType::Splicing => write!(f, "SPLICED"),
-            SupportType::RT => write!(f, "RT"),
+            SupportType::StrongRT => write!(f, "STRONG_RT"),
+            SupportType::WeakRT => write!(f, "WEAK_RT"),
             SupportType::Unclear => write!(f, "UNCLEAR"),
         }
     }
@@ -1359,9 +1493,41 @@ impl std::str::FromStr for SupportType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "SPLICED" => Ok(SupportType::Splicing),
-            "RT" => Ok(SupportType::RT),
+            "STRONG_RT" => Ok(SupportType::StrongRT),
+            "WEAK_RT" => Ok(SupportType::WeakRT),
             "UNCLEAR" => Ok(SupportType::Unclear),
             _ => Err("ERROR: Cannot parse support type!".into()),
+        }
+    }
+}
+
+/// Support type
+///
+/// This enum is used to store the type of support.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::SpanRepeat;
+///
+/// let within = SpanRepeat::Within;
+/// let spans = SpanRepeat::Spans;
+/// let null = SpanRepeat::Null;
+/// ```
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum SpanRepeat {
+    Within,
+    Spans,
+    Null,
+}
+
+/// Implements std::fmt::Display for SpanRepeat
+impl std::fmt::Display for SpanRepeat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpanRepeat::Within => write!(f, "WITHIN_REPEAT"),
+            SpanRepeat::Spans => write!(f, "SPANS_REPEAT"),
+            SpanRepeat::Null => write!(f, "NO_REPEAT"),
         }
     }
 }

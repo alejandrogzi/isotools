@@ -40,7 +40,7 @@ fn main() {
         SubArgs::Intron { args } => {
             use iso_classify::classify_introns;
 
-            classify_introns(args).unwrap_or_else(|e| {
+            classify_introns(*args).unwrap_or_else(|e| {
                 error!("{}", e);
                 std::process::exit(1);
             });
