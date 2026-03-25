@@ -210,7 +210,7 @@ pub fn classify_introns(args: Args) -> Result<()> {
 
     let filename = format!(
         "{}.{}",
-        args.prefix.unwrap_or_default(),
+        args.prefix.unwrap_or("isotools".to_string()),
         INTRON_CLASSIFICATION
     );
     std::fs::create_dir_all(&args.outdir)
