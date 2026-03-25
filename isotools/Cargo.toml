@@ -20,7 +20,7 @@ authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70.0"
-version = "0.0.5"
+version = "0.0.6"
 
 [workspace.dependencies]
 dashmap = { version = "6", features = ["rayon"] }
@@ -52,6 +52,7 @@ memmap2 = "0.9.4"
 flate2 = "1.1.9"
 genepred = { version = "0.0.11", features = ["mmap", "rayon"] }
 packbed = { version = "0.0.13", features = ["dashmap"] }
+rust-lapper = "1.2.0"
 
 [profile.release]
 lto = true

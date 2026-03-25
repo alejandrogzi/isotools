@@ -53,7 +53,7 @@ pub enum SubArgs {
     #[command(name = "intron")]
     Intron {
         #[command(flatten)]
-        args: IntronArgs,
+        args: Box<IntronArgs>,
     },
     #[command(name = "exon")]
     Exon {
@@ -142,15 +142,66 @@ pub struct IntronArgs {
     pub iic: Option<PathBuf>,
 
     #[arg(
+        short = 'R',
+        long = "repeats",
+        required = false,
+        value_name = "PATH",
+        help = "Path to BED3 genomic repeats file"
+    )]
+    pub repeats: Option<PathBuf>,
+
+    #[arg(
+        short = 'F',
         long = "rt_freq_threshold",
         required = false,
         value_name = "FLOAT",
         num_args = 1,
         help = "RT intron frequency threshold",
-        default_value_t = 0.5,
-        default_missing_value("0.5")
+        default_value_t = 0.5
     )]
-    pub rt_freq_threshold: f64,
+    pub rt_freq_threshold: f32,
+
+    #[arg(
+        short = 'S',
+        long = "spliceai_min_ss_signal",
+        required = false,
+        value_name = "FLOAT",
+        num_args = 1,
+        help = "SpliceAI minimum splice signal threshold",
+        default_value_t = 0.01
+    )]
+    pub spliceai_min_ss_signal: f32,
+
+    #[arg(
+        short = 'I',
+        long = "intron_freq_threshold",
+        required = false,
+        value_name = "FLOAT",
+        num_args = 1,
+        help = "Intron frequency threshold",
+        default_value_t = 0.5
+    )]
+    pub intron_freq_threshold: f32,
+
+    #[arg(
+        long = "maxent_min_ss_signal",
+        required = false,
+        value_name = "FLOAT",
+        num_args = 1,
+        help = "MaxEnt minimum splice signal threshold",
+        default_value_t = 1.5
+    )]
+    pub maxent_min_ss_signal: f32,
+
+    #[arg(
+        short = 'p',
+        long = "prefix",
+        required = false,
+        value_name = "PATH",
+        num_args = 1,
+        help = "Prefix for output files"
+    )]
+    pub prefix: Option<String>,
 
     #[arg(
         long = "outdir",

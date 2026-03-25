@@ -27,3 +27,4 @@ twobit.workspace = true
 genepred.workspace = true
 packbed.workspace = true
 flate2.workspace = true
+rust-lapper.workspace = true
