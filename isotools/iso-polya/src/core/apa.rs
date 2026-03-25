@@ -1,7 +1,6 @@
 use bigtools::BigWigWrite;
 use config::{get_progress_bar, Sequence, Strand, CHUNK_SIZE};
-use dashmap::DashSet;
-use iso_classify::core::Genome;
+use dashmap::{DashMap, DashSet};
 use packbed::{par_reader, unpack};
 use rand::Rng;
 use rayon::prelude::*;
@@ -24,6 +23,7 @@ const APPARENT_PY: &str = "run_aparent.py";
 pub const RAM_PER_SITE: f32 = 0.025;
 const JOBLIST: &str = "joblist";
 const TOKIO_RUNTIME_THREADS: usize = 8;
+pub type Genome = DashMap<String, Vec<u8>>;
 
 pub fn calculate_polya(
     args: AparentArgs,
