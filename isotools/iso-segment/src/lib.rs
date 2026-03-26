@@ -8,10 +8,18 @@
 //! filters reads based on alignment quality and predicts the polyA
 //! tail using a two-state HMM model.
 
+//! Command-line argument parser
 pub mod cli;
+/// Constant values for configuration
 pub mod constants;
+/// Core segmentation logic
 pub mod core;
 
+/// Command-line arguments parsed by clap
 pub use cli::Args;
+
+/// Re-export of constant values
 pub use constants::*;
+
+/// Main segmentation function for processing BAM files
 pub use core::segment;
