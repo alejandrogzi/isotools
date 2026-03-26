@@ -51,9 +51,8 @@ pub const SPLICE_AI_SCORE_RECOVERY_THRESHOLD: f32 = 0.001;
 pub const MINIMUM_ACCEPTOR_LENGTH: usize = 23;
 pub const MAXENTSCAN_ACCEPTOR_DB: &str = "db.tsv";
 pub const MAXENTSCAN_DONOR_DB: &str = "donor.tsv";
-
-// dirnames
-pub const CLASSIFY_ASSETS: &str = "assets";
+pub const MAXENTSCAN_ACCEPTOR_DB_CONTENTS: &str = include_str!("../assets/db.tsv");
+pub const MAXENTSCAN_DONOR_DB_CONTENTS: &str = include_str!("../assets/donor.tsv");
 
 // types
 pub type StrandSpliceMap = DashMap<String, DashMap<usize, f32>>;
@@ -160,8 +159,8 @@ pub fn make_splice_map<T: AsRef<std::path::Path> + std::fmt::Debug>(
         dir.as_ref().join(ACCEPTOR_MINUS),
     ];
 
-    info!("Parsing BigWigs...");
-    info!("BigWig files: {plus:?}, {minus:?}");
+    info!("INFO: Parsing BigWigs...");
+    info!("INFO: BigWig files: {plus:?}, {minus:?}");
     let (plus, minus) = rayon::join(
         || bigwig_to_map(plus, &chrs),
         || bigwig_to_map(minus, &chrs),
@@ -248,7 +247,7 @@ fn bigwig_to_map<T: AsRef<std::path::Path> + std::fmt::Debug + Sized + Sync>(
         });
 
     info!(
-        "Parsed and combined {} significant splicing scores from BigWigs!",
+        "INFO: Parsed and combined {} significant splicing scores from BigWigs!",
         total_count.load(Ordering::Relaxed)
     );
 
@@ -474,14 +473,17 @@ where
             acc
         });
 
-    info!("Records parsed: {}", tracks.values().flatten().count());
+    info!(
+        "INFO: Records parsed: {}",
+        tracks.values().flatten().count()
+    );
     Ok(tracks)
 }
 
-/// Loads MaxEnt scan scores from pre-computed database files.
+/// Loads MaxEnt scan scores from pre-computed database assets embedded in the binary.
 ///
-/// This function locates the MaxEntScan database files for donors and acceptors, reads them,
-/// and parses their contents into `SpliceScoreMap`s using `parse_tsv`.
+/// This function parses the embedded MaxEntScan donor and acceptor tables into
+/// `SpliceScoreMap`s using `parse_tsv`.
 ///
 /// # Returns
 ///
@@ -493,27 +495,19 @@ where
 /// let maxent_scores = load_scan_scores().expect("Failed to load MaxEnt scores");
 /// ```
 pub fn load_scan_scores() -> Option<(SpliceScoreMap, SpliceScoreMap)> {
-    let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CLASSIFY_ASSETS);
-
-    let acceptor_scores = parse_tsv::<AcceptorScores>(
-        reader(assets.join(MAXENTSCAN_ACCEPTOR_DB)).unwrap_or_else(|_| {
+    let acceptor_scores = parse_tsv::<AcceptorScores>(MAXENTSCAN_ACCEPTOR_DB_CONTENTS.to_owned())
+        .unwrap_or_else(|e| {
             panic!(
-                "ERROR: Cannot read acceptor scores from {:?}!",
-                assets.join(MAXENTSCAN_ACCEPTOR_DB)
+                "ERROR: Could not parse embedded acceptor scores from {MAXENTSCAN_ACCEPTOR_DB}! -> {e}"
             )
-        }),
-    )
-    .unwrap_or_else(|e| {
-        panic!(
-            "ERROR: Could not parse acceptor scores from {:?}! -> {e}",
-            assets.join(MAXENTSCAN_ACCEPTOR_DB)
-        )
-    });
+        });
 
-    let donor_scores = parse_tsv::<DonorScores>(
-        reader(assets.join(MAXENTSCAN_DONOR_DB)).expect("ERROR: Cannot read donor scores!"),
-    )
-    .expect("ERROR: Could not parse donor scores!");
+    let donor_scores = parse_tsv::<DonorScores>(MAXENTSCAN_DONOR_DB_CONTENTS.to_owned())
+        .unwrap_or_else(|e| {
+            panic!(
+                "ERROR: Could not parse embedded donor scores from {MAXENTSCAN_DONOR_DB}! -> {e}"
+            )
+        });
 
     Some((donor_scores, acceptor_scores))
 }
@@ -1119,7 +1113,7 @@ impl Borrow<Vec<u8>> for Sequence {
 /// let genome = get_sequences(PathBuf::from("genome.fa.gz"));
 /// ```
 pub fn get_sequences(sequence: PathBuf) -> HashMap<Vec<u8>, Vec<u8>> {
-    info!("Reading sequences from file {}", sequence.display());
+    info!("INFO: Reading sequences from file {}", sequence.display());
     match sequence.extension() {
         Some(ext) => match ext.to_str() {
             Some("2bit") => from_2bit(sequence),
@@ -1181,7 +1175,7 @@ fn collect_2bit_sequences<R: Read + Seek>(
         sequences.insert(chr.as_bytes().to_vec(), seq);
     });
 
-    info!("Read {} sequences from {}", sequences.len(), source);
+    info!("INFO: Read {} sequences from {}", sequences.len(), source);
 
     sequences
 }
@@ -1272,7 +1266,7 @@ fn parse_fasta_reader<R: BufRead>(mut reader: R, source: &str) -> HashMap<Vec<u8
         acc.insert(last_header, seq);
     }
 
-    info!("Read {} sequences from {}", acc.len(), source);
+    info!("INFO: Read {} sequences from {}", acc.len(), source);
 
     acc
 }
@@ -1314,7 +1308,7 @@ pub fn load_repeats(path: PathBuf) -> Option<RepeatIndex> {
 
             counter += 1;
         });
-    info!("Read {} repeats from {}", counter, path.display());
+    info!("INFO: Read {} repeats from {}", counter, path.display());
 
     // Second pass: build a sorted Lapper per chrom (Lapper::new sorts internally)
     let index = raw
@@ -1322,7 +1316,7 @@ pub fn load_repeats(path: PathBuf) -> Option<RepeatIndex> {
         .map(|(chrom, ivs)| (chrom, Lapper::new(ivs)))
         .collect();
 
-    info!("Built repeat index from {}", path.display());
+    info!("INFO: Built repeat index from {}", path.display());
     Some(index)
 }
 
@@ -1416,6 +1410,15 @@ pub fn is_intron_covered_by_repeat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_load_scan_scores_returns_embedded_tables() {
+        let (donor_scores, acceptor_scores) =
+            load_scan_scores().expect("ERROR: Could not load scan scores!");
+
+        assert!(!donor_scores.is_empty());
+        assert!(!acceptor_scores.is_empty());
+    }
 
     #[test]
     fn test_calculate_consensus_score() {

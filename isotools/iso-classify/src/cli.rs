@@ -118,7 +118,7 @@ pub struct IntronArgs {
         num_args(0..=1),
         require_equals(true),
         action = ArgAction::Set,
-        requires("twobit")
+        requires("sequence")
     )]
     pub scan: bool,
 
@@ -132,7 +132,7 @@ pub struct IntronArgs {
         num_args(0..=1),
         require_equals(true),
         action = ArgAction::Set,
-        requires("twobit"),
+        requires("sequence"),
         requires("toga")
     )]
     pub nag: bool,
@@ -178,7 +178,7 @@ pub struct IntronArgs {
     pub spliceai_min_ss_signal: f32,
 
     #[arg(
-        short = 'I',
+        short = 'f',
         long = "intron_freq_threshold",
         required = false,
         value_name = "FLOAT",
@@ -214,10 +214,35 @@ pub struct IntronArgs {
         value_name = "PATH",
         num_args = 1,
         help = "Path to output directory",
-        default_value = env!("CARGO_MANIFEST_DIR"),
+        default_value = "."
     )]
     pub outdir: PathBuf,
 }
 
 #[derive(Debug, Parser)]
 pub struct ExonArgs {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_intron_outdir_defaults_to_current_directory() {
+        let args = Args::parse_from(["iso-classify", "intron", "--isoseq", "input.bed"]);
+
+        let SubArgs::Intron { args } = args.command else {
+            panic!("ERROR: Failed to parse intron subcommand arguments");
+        };
+
+        assert_eq!(args.outdir, PathBuf::from("."));
+    }
+
+    #[test]
+    fn test_scan_requires_sequence_argument() {
+        let err =
+            Args::try_parse_from(["iso-classify", "intron", "--isoseq", "input.bed", "--scan"])
+                .expect_err("ERROR: --scan should require --sequence");
+
+        assert!(err.to_string().contains("--sequence"));
+    }
+}
