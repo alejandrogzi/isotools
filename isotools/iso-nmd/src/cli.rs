@@ -20,6 +20,12 @@ pub const ATG_DISTANCE: u64 = 100; // 100 bp
 pub const BIG_EXON_DIST_TO_EJ: u64 = 400; // 400 bp
 
 #[derive(Debug, Parser)]
+#[clap(
+    name = "iso-nmd",
+    version = env!("CARGO_PKG_VERSION"),
+    author = "Alejandro Gonzales-Irribarren <alejandrxgzi@gmail.com>",
+    about = "Detect non-mediated decays in a query set of reads",
+)]
 pub struct Args {
     #[arg(
         short = 'b',

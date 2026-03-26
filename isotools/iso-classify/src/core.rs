@@ -32,12 +32,6 @@ use packbed::{pack, Role};
 use rayon::prelude::*;
 use rust_lapper::Lapper;
 
-// use config::{
-//     write_objs, SharedSpliceMap, SupportType, CLASSIFY_ASSETS, INTRON_CLASSIFICATION,
-//     INTRON_FREQUENCY_RECOVERY_THRESHOLD, MAX_ENT_SCORE_RECOVERY_THRESHOLD, SCALE,
-//     SPLICE_AI_SCORE_RECOVERY_THRESHOLD,
-// };
-
 use crate::cli::IntronArgs as Args;
 use crate::utils::*;
 
@@ -1232,7 +1226,7 @@ pub fn read_iic(path: PathBuf) -> HashMap<String, USpliceType> {
 
     let mut table = HashMap::new();
 
-    for line in reader.lines() {
+    for line in reader.lines().skip(1) {
         let record =
             line.unwrap_or_else(|e| panic!("ERROR: Could not read intronIC output line -> {e}!",));
 

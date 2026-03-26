@@ -15,7 +15,7 @@ use crate::constants::*;
 
 #[derive(Debug, Parser, Clone)]
 #[clap(
-    name = "iso-seqgment",
+    name = "iso-segment",
     version = env!("CARGO_PKG_VERSION"),
     author = "Alejandro Gonzales-Irribarren <alejandrxgzi@gmail.com>",
     about = "segment isoseq polyA tails",

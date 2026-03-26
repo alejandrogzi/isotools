@@ -22,7 +22,12 @@ use clap::{ArgAction, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[clap(
+    name = "iso-classify",
+    version = env!("CARGO_PKG_VERSION"),
+    author = "Alejandro Gonzales-Irribarren <alejandrxgzi@gmail.com>",
+    about = "Classify introns based on their splice site prediction and structural characteristics",
+)]
 pub struct Args {
     #[command(subcommand)]
     pub command: SubArgs,
