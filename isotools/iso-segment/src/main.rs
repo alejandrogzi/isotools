@@ -20,14 +20,16 @@ fn main() {
 
     let args: Args = Args::parse();
 
-    rayon::ThreadPoolBuilder::new()
+    let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build()
         .unwrap();
 
-    segment(args).unwrap_or_else(|e| {
-        error!("{}", e);
-        std::process::exit(1);
+    pool.install(|| {
+        segment(args).unwrap_or_else(|e| {
+            error!("{}", e);
+            std::process::exit(1);
+        });
     });
 
     let elapsed = start.elapsed();

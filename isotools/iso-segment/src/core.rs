@@ -12,16 +12,18 @@ use std::{
     collections::HashMap,
     fmt::Write as FmtWrite,
     fs::File,
-    hash::{Hash, Hasher},
     io::{BufWriter, Write},
-    path::PathBuf,
-    sync::Arc,
+    path::{Path, PathBuf},
+    sync::{
+        mpsc::{sync_channel, Receiver, SyncSender},
+        Arc,
+    },
+    thread::JoinHandle,
 };
 
 use crate::{cli::Args, constants::*};
 
 use bio::stats::hmm::{discrete_emission::Model, viterbi, State};
-use dashmap::DashSet;
 use ndarray::{array, Array2};
 use noodles_bam::{io::writer::Builder, Record};
 use noodles_core::{region::Interval, Position};
@@ -55,12 +57,13 @@ use rayon::prelude::*;
 /// ```
 pub fn segment(args: Args) -> Result<(), String> {
     let (chroms, refs, header) = read_bam(&args.bam);
-    let accumulator = ParallelAccumulator::default();
+    let (outputs, handles) = spawn_output_workers(&args, &header, Arc::clone(&refs));
 
     // INFO: process each reference region in parallel
     chroms.par_iter().for_each(|chr| {
         // INFO: thread-local copy of the reference sequences
         let references = Arc::clone(&refs);
+        let outputs = outputs.clone();
 
         let mut reader = noodles_bam::io::indexed_reader::Builder::default()
             .build_from_path(&args.bam)
@@ -70,6 +73,7 @@ pub fn segment(args: Args) -> Result<(), String> {
         let header = reader
             .read_header()
             .unwrap_or_else(|e| panic!("ERROR: could not open file: {e}"));
+        let hmm = HMM::init(args.p2p, args.emit_a);
 
         let mut track = 0;
 
@@ -87,71 +91,107 @@ pub fn segment(args: Args) -> Result<(), String> {
                         record,
                         &header,
                         track,
-                        chr,
+                        chr.as_str(),
                         &args,
-                        &accumulator,
+                        &hmm,
+                        &outputs,
                         args.singleton,
                     );
                 }
             });
     });
 
-    write_output(accumulator, &args, &header, refs);
+    drop(outputs);
+
+    for (name, handle) in handles {
+        handle
+            .join()
+            .map_err(|_| format!("ERROR: could not join {name}"))?;
+    }
 
     Ok(())
 }
 
-/// Writes processed reads to either BAM or BED format output files based on configuration
+/// Container for output channels to accept/reject writers
 ///
-/// This function routes the accumulated reads to the appropriate output writer
-/// based on the `bed` flag in the arguments. It handles both accepted and rejected
-/// reads according to the output paths specified in the arguments.
-///
-/// # Arguments
-///
-/// * `accumulator` - Parallel accumulator containing processed reads (both accepted and rejected)
-/// * `args` - Configuration parameters containing output paths and format selection
-/// * `header` - SAM/BAM header reference (only used for BAM output)
-///
-/// # Behavior
-///
-/// - When `args.bed` is true:
-///   * Writes output in BED format using `write_beds`
-///   * Header is not used
-/// - When `args.bed` is false:
-///   * Writes output in BAM format using `write_bams`
-///   * Uses the provided header for BAM writing
+/// Provides synchronized senders for distributing processed records
+/// to either high-quality (accepted) or low-quality (rejected) outputs.
 ///
 /// # Example
 ///
 /// ```rust, no_run
-/// use noodles_sam::header::Header;
+/// use std::sync::mpsc::sync_channel;
 ///
-/// let accumulator = ParallelAccumulator::new();
-/// let args = Args {
-///     bed: true,  // Output as BED format
-///     ..Default::default()
-/// };
-/// let header = Header::default();
-///
-/// write_output(accumulator, &args, &header);
+/// let (accept, _) = sync_channel(100);
+/// let (reject, _) = sync_channel(100);
+/// let senders = OutputSenders { accept, reject };
 /// ```
-fn write_output(
-    accumulator: ParallelAccumulator,
-    args: &Args,
-    header: &Header,
-    refs: Arc<noodles_sam::header::ReferenceSequences>,
-) {
-    match args.bed {
-        true => write_beds(accumulator, args, refs),
-        false => write_bams(accumulator, args, header),
+#[derive(Clone)]
+struct OutputSenders {
+    accept: SyncSender<RecordBuf>,
+    reject: SyncSender<RecordBuf>,
+}
+
+impl OutputSenders {
+    /// Send record to appropriate output channel
+    ///
+    /// # Arguments
+    ///
+    /// * `accepted` - Whether record passed quality filters
+    /// * `record` - The record to send
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use noodles_sam::alignment::record::RecordBuf;
+    ///
+    /// let senders = OutputSenders { accept, reject };
+    /// let record = RecordBuf::new();
+    /// senders.send(true, record);
+    /// ```
+    fn send(&self, accepted: bool, record: RecordBuf) {
+        let sender = if accepted { &self.accept } else { &self.reject };
+        sender
+            .send(record)
+            .expect("ERROR: failed to send record to output writer");
     }
 }
 
+/// Build output file path based on parameters
+///
+/// # Arguments
+///
+/// * `outdir` - Output directory path
+/// * `prefix` - File name prefix
+/// * `split` - Whether to split by chromosome
+/// * `delimiter` - Delimiter for chromosome prefix
+/// * `chromosome` - Chromosome name (if splitting)
+/// * `quality_suffix` - Quality prefix (hq/lq)
+/// * `extension` - File extension
+///
+/// # Returns
+///
+/// * `PathBuf` - Full output path
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use std::path::PathBuf;
+///
+/// let path = build_output_path(
+///     &PathBuf::from("out"),
+///     &PathBuf::from("sample"),
+///     true,
+///     "@",
+///     Some("chr1"),
+///     "hq",
+///     "bam",
+/// );
+/// ```
 #[inline(always)]
 fn build_output_path(
-    outdir: &PathBuf,
-    prefix: &PathBuf,
+    outdir: &Path,
+    prefix: &Path,
     split: bool,
     delimiter: &str,
     chromosome: Option<&str>,
@@ -169,256 +209,487 @@ fn build_output_path(
     outdir.join(format!("{stem}.{quality_suffix}.{extension}"))
 }
 
-fn spawn_bam_writer(
-    output_path: PathBuf,
-    records: Vec<Arc<RecordBuf>>,
+/// Spawn output worker threads for BAM/BED writing
+///
+/// Creates threaded workers that write records to output files
+/// based on the configured output format (BAM or BED).
+///
+/// # Arguments
+///
+/// * `args` - Command-line arguments
+/// * `header` - BAM header
+/// * `refs` - Reference sequences
+///
+/// # Returns
+///
+/// * Tuple of (OutputSenders, handles)
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_segment::cli::Args;
+/// use noodles_sam::Header;
+///
+/// let args = Args::default();
+/// let header = Header::default();
+/// let refs = std::sync::Arc::new(noodles_sam::header::ReferenceSequences::new());
+/// let (senders, handles) = spawn_output_workers(&args, &header, refs);
+/// ```
+fn spawn_output_workers(
+    args: &Args,
+    header: &Header,
+    refs: Arc<noodles_sam::header::ReferenceSequences>,
+) -> (OutputSenders, Vec<(&'static str, JoinHandle<()>)>) {
+    let capacity = (args.threads.max(1) * 32).clamp(128, 1024);
+
+    if args.bed {
+        let (accept, accept_handle) = spawn_bed_output_worker(
+            args.clone(),
+            Arc::clone(&refs),
+            PASS_PREFIX,
+            RGB_ACCEPT,
+            capacity,
+        );
+        let (reject, reject_handle) =
+            spawn_bed_output_worker(args.clone(), refs, FAIL_PREFIX, RGB_REJECT, capacity);
+
+        (
+            OutputSenders { accept, reject },
+            vec![
+                ("accept BED writer", accept_handle),
+                ("reject BED writer", reject_handle),
+            ],
+        )
+    } else {
+        let header = Arc::new(header.clone());
+        let (accept, accept_handle) =
+            spawn_bam_output_worker(args.clone(), Arc::clone(&header), PASS_PREFIX, capacity);
+        let (reject, reject_handle) =
+            spawn_bam_output_worker(args.clone(), header, FAIL_PREFIX, capacity);
+
+        (
+            OutputSenders { accept, reject },
+            vec![
+                ("accept BAM writer", accept_handle),
+                ("reject BAM writer", reject_handle),
+            ],
+        )
+    }
+}
+
+/// Spawn a BAM output worker thread
+///
+/// Creates a threaded worker for writing BAM records to disk.
+///
+/// # Arguments
+///
+/// * `args` - Command-line arguments
+/// * `header` - BAM header
+/// * `quality_suffix` - Quality prefix (hq/lq)
+/// * `capacity` - Channel capacity
+///
+/// # Returns
+///
+/// * Tuple of (sender, handle)
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_segment::cli::Args;
+/// use noodles_sam::Header;
+///
+/// let args = Args::default();
+/// let header = Arc::new(Header::default());
+/// let (sender, handle) = spawn_bam_output_worker(args, header, "hq", 128);
+/// ```
+fn spawn_bam_output_worker(
+    args: Args,
     header: Arc<Header>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
+    quality_suffix: &'static str,
+    capacity: usize,
+) -> (SyncSender<RecordBuf>, JoinHandle<()>) {
+    let (sender, receiver) = sync_channel(capacity);
+    let handle =
+        std::thread::spawn(move || write_bam_records(receiver, args, header, quality_suffix));
+    (sender, handle)
+}
+
+/// Spawn a BED output worker thread
+///
+/// Creates a threaded worker for writing BED records to disk.
+///
+/// # Arguments
+///
+/// * `args` - Command-line arguments
+/// * `refs` - Reference sequences
+/// * `quality_suffix` - Quality prefix (hq/lq)
+/// * `rgb` - RGB color string
+/// * `capacity` - Channel capacity
+///
+/// # Returns
+///
+/// * Tuple of (sender, handle)
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_segment::cli::Args;
+/// use std::sync::Arc;
+///
+/// let args = Args::default();
+/// let refs = Arc::new(noodles_sam::header::ReferenceSequences::new());
+/// let (sender, handle) = spawn_bed_output_worker(args, refs, "hq", "43,118,219", 128);
+/// ```
+fn spawn_bed_output_worker(
+    args: Args,
+    refs: Arc<noodles_sam::header::ReferenceSequences>,
+    quality_suffix: &'static str,
+    rgb: &'static str,
+    capacity: usize,
+) -> (SyncSender<RecordBuf>, JoinHandle<()>) {
+    let (sender, receiver) = sync_channel(capacity);
+    let handle =
+        std::thread::spawn(move || write_bed_records(receiver, args, refs, quality_suffix, rgb));
+    (sender, handle)
+}
+
+/// Write BAM records to output files
+///
+/// Continuously receives records from channel and writes to BAM files.
+/// Supports both split (by chromosome) and unified output modes.
+///
+/// # Arguments
+///
+/// * `receiver` - Channel receiver for records
+/// * `args` - Command-line arguments
+/// * `header` - BAM header
+/// * `quality_suffix` - Quality prefix (hq/lq)
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use std::sync::mpsc::sync_channel;
+/// use iso_segment::cli::Args;
+///
+/// let (tx, rx) = sync_channel(100);
+/// let args = Args::default();
+/// // write_bam_records(rx, args, header, "hq");
+/// ```
+fn write_bam_records(
+    receiver: Receiver<RecordBuf>,
+    args: Args,
+    header: Arc<Header>,
+    quality_suffix: &'static str,
+) {
+    log::info!("INFO: Writing streamed BAM records to {quality_suffix} output");
+
+    if args.split {
+        let refs = header.reference_sequences();
+        let mut writers = HashMap::new();
+
+        while let Ok(record) = receiver.recv() {
+            let chromosome = resolve_record_chromosome(&record, refs);
+            let writer = writers.entry(chromosome.clone()).or_insert_with(|| {
+                let output = build_output_path(
+                    &args.outdir,
+                    &args.prefix,
+                    args.split,
+                    &args.delimiter,
+                    Some(&chromosome),
+                    quality_suffix,
+                    "bam",
+                );
+
+                let mut writer = Builder.build_from_path(&output).unwrap_or_else(|_| {
+                    panic!("ERROR: could not create file: {}", output.display())
+                });
+
+                writer
+                    .write_header(&header)
+                    .expect("ERROR: failed to write header");
+
+                writer
+            });
+
+            writer
+                .write_alignment_record(&header, &record)
+                .expect("ERROR: failed to write record");
+        }
+
+        for (_, mut writer) in writers {
+            writer
+                .finish(&header)
+                .expect("ERROR: failed to finish writing BAM file");
+        }
+    } else {
+        let output = build_output_path(
+            &args.outdir,
+            &args.prefix,
+            args.split,
+            &args.delimiter,
+            None,
+            quality_suffix,
+            "bam",
+        );
+
         let mut writer = Builder
-            .build_from_path(&output_path)
-            .unwrap_or_else(|_| panic!("ERROR: could not create file: {}", output_path.display()));
+            .build_from_path(&output)
+            .unwrap_or_else(|_| panic!("ERROR: could not create file: {}", output.display()));
 
         writer
             .write_header(&header)
             .expect("ERROR: failed to write header");
 
-        for record in records {
+        while let Ok(record) = receiver.recv() {
             writer
-                .write_alignment_record(&header, record.as_ref())
+                .write_alignment_record(&header, &record)
                 .expect("ERROR: failed to write record");
         }
 
         writer
             .finish(&header)
             .expect("ERROR: failed to finish writing BAM file");
-    })
-}
-
-fn spawn_bed_writer(output_path: PathBuf, lines: Vec<String>) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut writer = BufWriter::new(
-            File::create(&output_path)
-                .unwrap_or_else(|e| panic!("ERROR: could not create file: {e}")),
-        );
-
-        let joined = lines.join("\n");
-        writer
-            .write_all(joined.as_bytes())
-            .expect("ERROR: failed to write BED lines");
-    })
-}
-
-fn group_bam_records_by_chromosome(
-    records: DashSet<HashedRecord>,
-    refs: &noodles_sam::header::ReferenceSequences,
-) -> HashMap<String, Vec<Arc<RecordBuf>>> {
-    let pairs: Vec<(String, Arc<RecordBuf>)> = records
-        .into_iter()
-        .par_bridge()
-        .map(|record| {
-            let bam_record = record.0;
-            let chr = bam_record
-                .reference_sequence_id()
-                .and_then(|id| refs.get_index(id).map(|(name, _)| name.to_string()))
-                .unwrap_or_else(|| "unmapped".to_string());
-            (chr, bam_record)
-        })
-        .collect();
-
-    let mut grouped: HashMap<String, Vec<Arc<RecordBuf>>> = HashMap::new();
-    for (chr, record) in pairs {
-        grouped.entry(chr).or_default().push(record);
     }
-
-    grouped
 }
 
-/// Writes a BAM file from a ParallelAccumulator
+/// Write BED records to output files
+///
+/// Continuously receives records from channel and writes to BED files.
+/// Supports both split (by chromosome) and unified output modes.
 ///
 /// # Arguments
 ///
-/// * `accumulator` - ParallelAccumulator collection
-/// *  args - Module arguments
-/// *  header - BAM file header
+/// * `receiver` - Channel receiver for records
+/// * `args` - Command-line arguments
+/// * `refs` - Reference sequences
+/// * `quality_suffix` - Quality prefix (hq/lq)
+/// * `rgb` - RGB color string
 ///
 /// # Example
 ///
 /// ```rust, no_run
-/// write_bams(accumulator, args, header);
+/// use std::sync::mpsc::sync_channel;
+/// use iso_segment::cli::Args;
+/// use std::sync::Arc;
+///
+/// let (tx, rx) = sync_channel(100);
+/// let args = Args::default();
+/// let refs = Arc::new(noodles_sam::header::ReferenceSequences::new());
+/// // write_bed_records(rx, args, refs, "hq", "43,118,219");
 /// ```
-fn write_bams(accumulator: ParallelAccumulator, args: &Args, header: &Header) {
-    log::info!("INFO: Writing BAM files from filtered records!");
-
-    let header = Arc::new(header.clone());
-    let ParallelAccumulator { accept, reject } = accumulator;
-
-    if args.split {
-        let refs = header.reference_sequences();
-        let accept_by_chr = group_bam_records_by_chromosome(accept, refs);
-        let reject_by_chr = group_bam_records_by_chromosome(reject, refs);
-
-        let mut handles = Vec::with_capacity(accept_by_chr.len() + reject_by_chr.len());
-
-        for (chr, records) in accept_by_chr {
-            let output = build_output_path(
-                &args.outdir,
-                &args.prefix,
-                args.split,
-                &args.delimiter,
-                Some(&chr),
-                PASS_PREFIX,
-                "bam",
-            );
-            handles.push(spawn_bam_writer(output, records, Arc::clone(&header)));
-        }
-
-        for (chr, records) in reject_by_chr {
-            let output = build_output_path(
-                &args.outdir,
-                &args.prefix,
-                args.split,
-                &args.delimiter,
-                Some(&chr),
-                FAIL_PREFIX,
-                "bam",
-            );
-            handles.push(spawn_bam_writer(output, records, Arc::clone(&header)));
-        }
-
-        for handle in handles {
-            handle
-                .join()
-                .expect("ERROR: could not join a split BAM writer");
-        }
-    } else {
-        let accept_records: Vec<Arc<RecordBuf>> =
-            accept.into_iter().map(|record| record.0).collect();
-        let reject_records: Vec<Arc<RecordBuf>> =
-            reject.into_iter().map(|record| record.0).collect();
-
-        let accept_output = build_output_path(
-            &args.outdir,
-            &args.prefix,
-            args.split,
-            &args.delimiter,
-            None,
-            PASS_PREFIX,
-            "bam",
-        );
-
-        let reject_output = build_output_path(
-            &args.outdir,
-            &args.prefix,
-            args.split,
-            &args.delimiter,
-            None,
-            FAIL_PREFIX,
-            "bam",
-        );
-
-        let accept_handle = spawn_bam_writer(accept_output, accept_records, Arc::clone(&header));
-        let reject_handle = spawn_bam_writer(reject_output, reject_records, Arc::clone(&header));
-
-        accept_handle
-            .join()
-            .expect("ERROR: could not join acceptance BAM writer");
-        reject_handle
-            .join()
-            .expect("ERROR: could not join rejection BAM writer");
-    }
-}
-
-/// Writes a BED file from a ParallelAccumulator of BAM/SAM records
-///
-/// # Arguments
-///
-/// * `accumulator` - ParallelAccumulator collection
-/// *  args - Module arguments
-/// *  refs - BAM reference sequences index
-///
-/// # Example
-///
-/// ```rust, no_run
-/// write_bams(accumulator, args, refs);
-/// ```
-fn write_beds(
-    accumulator: ParallelAccumulator,
-    args: &Args,
+fn write_bed_records(
+    receiver: Receiver<RecordBuf>,
+    args: Args,
     refs: Arc<noodles_sam::header::ReferenceSequences>,
+    quality_suffix: &'static str,
+    rgb: &'static str,
 ) {
-    let ParallelAccumulator { accept, reject } = accumulator;
-
-    log::info!("INFO: Converting BAM records into BED12 lines!");
+    log::info!("INFO: Writing streamed BED records to {quality_suffix} output");
 
     if args.split {
-        let accept_by_chr = convert_grouped(accept, Arc::clone(&refs), RGB_ACCEPT);
-        let reject_by_chr = convert_grouped(reject, Arc::clone(&refs), RGB_REJECT);
+        let mut writers = HashMap::new();
 
-        let mut handles = Vec::with_capacity(accept_by_chr.len() + reject_by_chr.len());
+        while let Ok(record) = receiver.recv() {
+            let Some((chromosome, line)) = record_to_bed(&record, refs.as_ref(), rgb) else {
+                continue;
+            };
 
-        for (chr, lines) in accept_by_chr {
-            let output = build_output_path(
-                &args.outdir,
-                &args.prefix,
-                args.split,
-                &args.delimiter,
-                Some(&chr),
-                PASS_PREFIX,
-                "bed",
-            );
-            handles.push(spawn_bed_writer(output, lines));
+            let writer = writers.entry(chromosome.clone()).or_insert_with(|| {
+                let output = build_output_path(
+                    &args.outdir,
+                    &args.prefix,
+                    args.split,
+                    &args.delimiter,
+                    Some(&chromosome),
+                    quality_suffix,
+                    "bed",
+                );
+
+                BufWriter::new(
+                    File::create(&output)
+                        .unwrap_or_else(|e| panic!("ERROR: could not create file: {e}")),
+                )
+            });
+
+            writeln!(writer, "{line}").expect("ERROR: failed to write BED line");
         }
 
-        for (chr, lines) in reject_by_chr {
-            let output = build_output_path(
-                &args.outdir,
-                &args.prefix,
-                args.split,
-                &args.delimiter,
-                Some(&chr),
-                FAIL_PREFIX,
-                "bed",
-            );
-            handles.push(spawn_bed_writer(output, lines));
-        }
-
-        for handle in handles {
-            handle
-                .join()
-                .expect("ERROR: failed to write a split BED file");
+        for (_, mut writer) in writers {
+            writer.flush().expect("ERROR: failed to flush BED file");
         }
     } else {
-        let accept_lines = convert(&accept, Arc::clone(&refs), RGB_ACCEPT);
-        let reject_lines = convert(&reject, Arc::clone(&refs), RGB_REJECT);
-
-        log::info!("INFO: Writing BED files from filtered records!");
-
-        let accept_output = build_output_path(
+        let output = build_output_path(
             &args.outdir,
             &args.prefix,
             args.split,
             &args.delimiter,
             None,
-            PASS_PREFIX,
-            "bed",
-        );
-        let reject_output = build_output_path(
-            &args.outdir,
-            &args.prefix,
-            args.split,
-            &args.delimiter,
-            None,
-            FAIL_PREFIX,
+            quality_suffix,
             "bed",
         );
 
-        let accept_handle = spawn_bed_writer(accept_output, accept_lines);
-        let reject_handle = spawn_bed_writer(reject_output, reject_lines);
+        let mut writer = BufWriter::new(
+            File::create(&output).unwrap_or_else(|e| panic!("ERROR: could not create file: {e}")),
+        );
 
-        accept_handle.join().expect("ERROR: failed to write hq.bed");
-        reject_handle.join().expect("ERROR: failed to write lq.bed");
+        while let Ok(record) = receiver.recv() {
+            let Some((_, line)) = record_to_bed(&record, refs.as_ref(), rgb) else {
+                continue;
+            };
+
+            writeln!(writer, "{line}").expect("ERROR: failed to write BED line");
+        }
+
+        writer.flush().expect("ERROR: failed to flush BED file");
     }
+}
+
+/// Resolve chromosome name from a BAM record
+///
+/// # Arguments
+///
+/// * `record` - BAM record
+/// * `refs` - Reference sequences
+///
+/// # Returns
+///
+/// * `String` - Chromosome name or "unmapped"
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso_segment::cli::Args;
+/// // let chrom = resolve_record_chromosome(&record, &refs);
+/// ```
+fn resolve_record_chromosome(
+    record: &RecordBuf,
+    refs: &noodles_sam::header::ReferenceSequences,
+) -> String {
+    record
+        .reference_sequence_id()
+        .and_then(|id| refs.get_index(id).map(|(name, _)| name.to_string()))
+        .unwrap_or_else(|| "unmapped".to_string())
+}
+
+/// Convert BAM record to BED format
+///
+/// # Arguments
+///
+/// * `record` - BAM record
+/// * `refs` - Reference sequences
+/// * `rgb` - RGB color string
+///
+/// # Returns
+///
+/// * Option of (chromosome, BED line)
+///
+/// # Example
+///
+/// ```rust, no_run
+/// // let bed = record_to_bed(&record, &refs, "43,118,219");
+/// ```
+fn record_to_bed(
+    record: &RecordBuf,
+    refs: &noodles_sam::header::ReferenceSequences,
+    rgb: &str,
+) -> Option<(String, String)> {
+    let chromosome = resolve_record_chromosome(record, refs);
+    let line = record_to_bed_line(record, &chromosome, rgb)?;
+    Some((chromosome, line))
+}
+
+/// Generate BED line from BAM record
+///
+/// # Arguments
+///
+/// * `record` - BAM record
+/// * `chr` - Chromosome name
+/// * `rgb` - RGB color string
+///
+/// # Returns
+///
+/// * Option of BED line string
+///
+/// # Example
+///
+/// ```rust, no_run
+/// // let line = record_to_bed_line(&record, "chr1", "43,118,219");
+/// ```
+#[inline(always)]
+fn record_to_bed_line(record: &RecordBuf, chr: &str, rgb: &str) -> Option<String> {
+    let start = record.alignment_start()?.get() - 1;
+    let score = record
+        .mapping_quality()
+        .map(|q| q.get())
+        .unwrap_or(0)
+        .to_string();
+
+    let name = record.name().unwrap();
+    let strand = if record.flags().is_reverse_complemented() {
+        '-'
+    } else {
+        '+'
+    };
+
+    let mut blocks = Vec::new();
+    let mut ref_pos = start;
+    let mut block_start = ref_pos;
+    let mut block_len = 0;
+
+    let cigar = record.cigar();
+    for c in cigar.iter() {
+        let c = c.unwrap();
+        let len = c.len();
+        match c.kind() {
+            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch | Kind::Deletion => {
+                block_len += len;
+                ref_pos += len;
+            }
+            Kind::Skip => {
+                if block_len > 0 {
+                    blocks.push((block_start, block_len));
+                }
+
+                ref_pos += len;
+                block_start = ref_pos;
+                block_len = 0;
+            }
+            Kind::Insertion | Kind::SoftClip | Kind::HardClip | Kind::Pad => continue,
+        }
+    }
+
+    if block_len > 0 {
+        blocks.push((block_start, block_len));
+    }
+
+    if blocks.is_empty() {
+        return None;
+    }
+
+    let chrom_end = blocks.last().map(|(s, l)| s + l).unwrap_or(start);
+    let thick_start = start;
+    let thick_end = chrom_end;
+
+    let mut block_sizes = String::with_capacity(16 * blocks.len());
+    let mut block_starts = String::with_capacity(16 * blocks.len());
+
+    for (s, l) in &blocks {
+        let _ = write!(block_sizes, "{},", l);
+        let _ = write!(block_starts, "{},", s - start);
+    }
+    block_sizes.pop();
+    block_starts.pop();
+
+    let mut line = String::with_capacity(256);
+    write!(
+        &mut line,
+        "{chr}\t{start}\t{chrom_end}\t{name}\t{score}\t{strand}\t\
+         {thick_start}\t{thick_end}\t{rgb}\t{}\t{block_sizes}\t{block_starts}",
+        blocks.len()
+    )
+    .unwrap();
+
+    Some(line)
 }
 
 /// Reads a BAM file and returns the chromosome names,
@@ -479,7 +750,8 @@ fn read_bam(
 /// * `track` - Track identifier used for read tagging
 /// * `chr` - Chromosome name string reference
 /// * `args` - Configuration parameters for processing
-/// * `accumulator` - Parallel accumulator for collecting accepted/rejected reads
+/// * `hmm` - Shared HMM model for the worker processing this chromosome
+/// * `outputs` - Streaming output senders for accepted/rejected reads
 ///
 /// # Behavior
 ///
@@ -514,16 +786,18 @@ fn read_bam(
 ///     &accumulator
 /// );
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn process_record(
     record: Record,
     header: &Header,
     track: u64,
-    chr: &String,
+    chr: &str,
     args: &Args,
-    accumulator: &ParallelAccumulator,
+    hmm: &HMM,
+    outputs: &OutputSenders,
     singleton: bool,
 ) {
-    let mut read = Read::from(&record);
+    let mut read = Read::from_mapping_record(&record);
 
     // INFO: enforces minimum identity to filter
     // out low quality reads from the analysis
@@ -531,26 +805,32 @@ fn process_record(
         return;
     }
 
-    let hmm = HMM::init(args.p2p, args.emit_a);
+    if read.three_clip > 0 || args.tail_suffix > 0 {
+        read.set_sequence(&record);
 
-    if read.three_clip > 0 && !read.has_hard_clip_three {
-        let clipped_seq = read.get_rev_clipped_seq_sized();
-        read.set_polya_len(predict_tail(clipped_seq, &hmm));
-    }
-
-    if args.tail_suffix > 0 {
-        let suffix_len = read.three_clip + args.tail_suffix;
-        let mut polya_suffix_len =
-            predict_tail_with_suffix(suffix_len, &read, &hmm, args.suffix_step_size);
-
-        if read.polya_len > polya_suffix_len {
-            polya_suffix_len = read.polya_len;
+        if read.three_clip > 0 && !read.has_hard_clip_three {
+            let clipped_seq = read.get_rev_clipped_seq_sized();
+            read.set_polya_len(predict_tail(clipped_seq, hmm));
         }
 
-        read.set_polya_read_len(polya_suffix_len);
+        if args.tail_suffix > 0 {
+            let suffix_len = read.three_clip + args.tail_suffix;
+            let mut polya_suffix_len =
+                predict_tail_with_suffix(suffix_len, &read, hmm, args.suffix_step_size);
+
+            if read.polya_len > polya_suffix_len {
+                polya_suffix_len = read.polya_len;
+            }
+
+            read.set_polya_read_len(polya_suffix_len);
+        }
+
+        read.set_three_clip(read.three_clip.saturating_sub(read.polya_len));
     }
 
-    read.set_three_clip(read.three_clip - read.polya_len);
+    let accepted = read.identity >= args.identity
+        && read.five_clip <= args.max_clip_five
+        && read.three_clip <= args.max_clip_three;
 
     let mut record = RecordBuf::try_from_alignment_record(header, &record)
         .unwrap_or_else(|err| panic!("ERROR: failed to convert record: {err:?}"));
@@ -559,14 +839,7 @@ fn process_record(
         *record.name_mut() = Some(read.tag_read(track, chr, &args.batch, singleton).into());
     }
 
-    if read.identity >= args.identity
-        && read.five_clip <= args.max_clip_five
-        && read.three_clip <= args.max_clip_three
-    {
-        accumulator.accept(Arc::from(record));
-    } else {
-        accumulator.reject(Arc::from(record));
-    }
+    outputs.send(accepted, record);
 }
 
 /// Predict the length of the polyA tail using a suffix
@@ -611,229 +884,6 @@ fn predict_tail_with_suffix(
             return polya_len;
         }
     }
-}
-
-/// Parallel accumulator for BAM records
-///
-/// # Fields
-///
-/// * `pass` - DashSet to store the pass reads
-/// * `intrapriming` - DashSet to store the intrapriming reads
-/// * `review` - DashSet to store the review reads
-///
-/// # Example
-///
-/// ```rust, no_run
-/// let accumulator = ParallelAccumulator::default();
-///
-/// assert_eq!(accumulator.pass.len(), 0);
-/// ```
-#[derive(Debug)]
-struct ParallelAccumulator {
-    accept: DashSet<HashedRecord>,
-    reject: DashSet<HashedRecord>,
-}
-
-impl Default for ParallelAccumulator {
-    fn default() -> Self {
-        Self {
-            accept: DashSet::new(),
-            reject: DashSet::new(),
-        }
-    }
-}
-
-impl ParallelAccumulator {
-    pub fn accept(&self, record: Arc<RecordBuf>) {
-        self.accept.insert(HashedRecord(record));
-    }
-
-    pub fn reject(&self, record: Arc<RecordBuf>) {
-        self.reject.insert(HashedRecord(record));
-    }
-}
-
-/// A wrapper around Arc<Record> that implements Hash and Eq
-#[derive(Debug)]
-struct HashedRecord(Arc<RecordBuf>);
-
-impl PartialEq for HashedRecord {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.name() == other.0.name()
-            && self.0.alignment_start().unwrap() == other.0.alignment_start().unwrap()
-    }
-}
-impl Eq for HashedRecord {}
-
-impl Hash for HashedRecord {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.name().hash(state);
-        self.0.alignment_start().unwrap().hash(state);
-    }
-}
-
-impl HashedRecord {
-    /// Convert a BAM record into a BED12 line
-    ///
-    /// # Fields
-    ///
-    /// * `chr` - Chromosome where the record belongs to
-    /// * `rgb` - RGB color of the record in the bed file
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let chr = String::from("chr1");
-    /// let rgb = Arc::from(String::from("255,0,0"));
-    /// let record: HashedRecord = record;
-    /// record.to_bed(chr, rgb);
-    /// ```
-    #[inline(always)]
-    fn to_bed(&self, chr: &str, rgb: &str) -> Option<String> {
-        let record = &self.0;
-
-        let start = record.alignment_start()?.get() - 1;
-        let score = record
-            .mapping_quality()
-            .map(|q| q.get())
-            .unwrap_or(0)
-            .to_string();
-
-        let name = record.name().unwrap();
-        let strand = if record.flags().is_reverse_complemented() {
-            '-'
-        } else {
-            '+'
-        };
-
-        let mut blocks = Vec::new();
-        let mut ref_pos = start;
-        let mut block_start = ref_pos;
-        let mut block_len = 0;
-
-        let cigar = record.cigar();
-        for c in cigar.iter() {
-            let c = c.unwrap();
-            let len = c.len();
-            match c.kind() {
-                Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch | Kind::Deletion => {
-                    block_len += len;
-                    ref_pos += len;
-                }
-                Kind::Skip => {
-                    // INFO: end current block
-                    if block_len > 0 {
-                        blocks.push((block_start, block_len));
-                    }
-
-                    // INFO: skip the intron
-                    ref_pos += len;
-
-                    // INFO: start new block
-                    block_start = ref_pos;
-                    block_len = 0;
-                }
-                Kind::Insertion | Kind::SoftClip | Kind::HardClip | Kind::Pad => continue,
-            }
-        }
-
-        if block_len > 0 {
-            blocks.push((block_start, block_len));
-        }
-
-        if blocks.is_empty() {
-            return None;
-        }
-
-        let chrom_end = blocks.last().map(|(s, l)| s + l).unwrap_or(start);
-        let thick_start = start;
-        let thick_end = chrom_end;
-
-        let mut block_sizes = String::with_capacity(16 * blocks.len());
-        let mut block_starts = String::with_capacity(16 * blocks.len());
-
-        for (s, l) in &blocks {
-            let _ = write!(block_sizes, "{},", l);
-            let _ = write!(block_starts, "{},", s - start);
-        }
-        block_sizes.pop();
-        block_starts.pop();
-
-        let mut line = String::with_capacity(256);
-        write!(
-            &mut line,
-            "{chr}\t{start}\t{chrom_end}\t{name}\t{score}\t{strand}\t\
-             {thick_start}\t{thick_end}\t{rgb}\t{}\t{block_sizes}\t{block_starts}",
-            blocks.len()
-        )
-        .unwrap();
-
-        Some(line)
-    }
-}
-
-/// Convert a set of BAM records into a
-/// set of BED records in parallel
-///
-/// # Arguments
-///
-/// * `records` - Set of BAM records as HashedRecords
-/// * `refs` - Reference sequences from the BAM file
-/// * `rgb` - HTML color code for the group
-///
-/// # Returns
-///
-/// * `Vec<String>` - BED records
-///
-/// # Example
-///
-/// ```rust, no_run
-/// let bed_records = convert(records, refs, rgb);
-/// ```
-#[inline(always)]
-fn convert(
-    records: &DashSet<HashedRecord>,
-    refs: Arc<noodles_sam::header::ReferenceSequences>,
-    rgb: &str,
-) -> Vec<String> {
-    // WARN: filtering errors directly!
-    records
-        .par_iter()
-        .filter_map(|record| {
-            let chr = refs
-                .get_index(record.0.reference_sequence_id()?)
-                .map(|(name, _)| name.to_string())?;
-
-            record.to_bed(&chr, rgb)
-        })
-        .collect()
-}
-
-#[inline(always)]
-fn convert_grouped(
-    records: DashSet<HashedRecord>,
-    refs: Arc<noodles_sam::header::ReferenceSequences>,
-    rgb: &str,
-) -> HashMap<String, Vec<String>> {
-    let pairs: Vec<(String, String)> = records
-        .into_iter()
-        .par_bridge()
-        .filter_map(|record| {
-            let chr = refs
-                .get_index(record.0.reference_sequence_id()?)
-                .map(|(name, _)| name.to_string())?;
-
-            let line = record.to_bed(&chr, rgb)?;
-            Some((chr, line))
-        })
-        .collect();
-
-    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
-    for (chr, line) in pairs {
-        grouped.entry(chr).or_default().push(line);
-    }
-
-    grouped
 }
 
 /// Predict the length of the polyA tail
@@ -1123,6 +1173,24 @@ impl Read {
         read.set_mapping_features(record);
         read.set_sequence(record);
 
+        read
+    }
+
+    /// Creates a Read from a mapping record (without sequence)
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// use iso::Read;
+    /// use noodles_sam::alignment::Record;
+    ///
+    /// let record = Record::new();
+    /// let read = Read::from_mapping_record(&record);
+    /// ```
+    fn from_mapping_record(record: &Record) -> Self {
+        let mut read = Read::new();
+        read.get_strand_from_record(record);
+        read.set_mapping_features(record);
         read
     }
 
@@ -1536,7 +1604,7 @@ impl Read {
     ///
     /// assert_eq!(read.name, "R1_chr1::FC5:TC24:PA45:PR65:IY98");
     /// ```
-    fn tag_read(&self, index: u64, chr: &String, batch: &String, singleton: bool) -> String {
+    fn tag_read(&self, index: u64, chr: &str, batch: &str, singleton: bool) -> String {
         let batch = if !batch.is_empty() {
             format!("@{batch}")
         } else {
