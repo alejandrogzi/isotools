@@ -451,7 +451,14 @@ fn process_component(
                     get_sj_ai_scores(&(*start, *end), &mut stats, splice_scores, &strand);
 
                     // INFO: get splice type from intronIC
-                    let splice_u_type = spliceosome.get(&key).unwrap_or_else(|| {
+                    let sup_key = format!(
+                        "{}:{}-{}({})",
+                        std::str::from_utf8(chr).unwrap(),
+                        *start,
+                        *end,
+                        strand
+                    );
+                    let splice_u_type = spliceosome.get(&sup_key).unwrap_or_else(|| {
                         if stats.is_toga_supported {
                             &USpliceType::Unknown
                         } else {
@@ -1062,13 +1069,13 @@ unsafe fn scan_sequence(descriptor: &mut Intron) {
 
     #[inline(always)]
     fn base_to_bits(base: u8) -> u8 {
-        match base {
+        match base.to_ascii_uppercase() {
             b'A' => 0,
             b'C' => 1,
             b'G' => 2,
             b'T' => 3,
             b'N' => 0,
-            _ => panic!("Invalid base"),
+            _ => panic!("ERROR: Invalid base -> {base}"),
         }
     }
 
@@ -1248,6 +1255,12 @@ pub fn read_iic(path: PathBuf) -> HashMap<String, USpliceType> {
 
         table.insert(id, splice_type);
     }
+
+    log::info!(
+        "INFO: Read {} intronIC types from {}",
+        table.len(),
+        path.display()
+    );
 
     table
 }
