@@ -13,13 +13,23 @@
 
 use dashmap::{DashMap, DashSet};
 use hashbrown::{HashMap, HashSet};
-use packbed::{par_reader, record::Bed4};
+use rayon::prelude::*;
+use rust_lapper::{Interval, Lapper};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::{
+    fmt::{Debug, Display},
+    fs::File,
+    io::Read,
+    path::Path,
+};
 
 use config::{bed_to_map, CoordType, ModuleMap, ParallelCollector};
+
+pub type Iv = Interval<u64, ()>;
+pub type IntronIndex = HashMap<Vec<u8>, Lapper<u64, ()>>;
 
 /// Parallel counter for the processing function
 ///
@@ -307,4 +317,563 @@ pub fn unpack_blacklist(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(
     let tracks = bed_to_map::<Bed4>(contents, CoordType::Bounds).unwrap();
 
     Some(tracks)
+}
+
+/// Splice site type (U2, U12, Unknown)
+///
+/// This enum is used to store the type of splice site.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::SpliceSite;
+///
+/// let donor = SpliceSite::Donor;
+/// let acceptor = SpliceSite::Acceptor;
+/// ```
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum USpliceType {
+    U2,
+    U12,
+    Unknown,
+}
+
+/// Implements std::fmt::Display for USpliceType
+impl std::fmt::Display for USpliceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            USpliceType::U2 => write!(f, "U2"),
+            USpliceType::U12 => write!(f, "U12"),
+            USpliceType::Unknown => write!(f, "UNKNOWN"),
+        }
+    }
+}
+
+/// Implements std::str::FromStr for USpliceType
+impl std::str::FromStr for USpliceType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "U2" => Ok(USpliceType::U2),
+            "U12" => Ok(USpliceType::U12),
+            "Unknown" => Ok(USpliceType::Unknown),
+            _ => Err(format!("ERROR: Unknown splice type -> {s}")),
+        }
+    }
+}
+
+/// Position of the intron in the reference
+#[derive(Debug, Eq, PartialEq, Clone)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum Position {
+    CDS,
+    UTR,
+    Unknown,
+}
+
+/// Implements std::fmt::Display for Position
+impl std::fmt::Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Position::CDS => write!(f, "CDS"),
+            Position::UTR => write!(f, "UTR"),
+            Position::Unknown => write!(f, "NEW"),
+        }
+    }
+}
+
+/// Implements std::str::FromStr for Position
+impl std::str::FromStr for Position {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "CDS" => Ok(Position::CDS),
+            "UTR" => Ok(Position::UTR),
+            "NEW" => Ok(Position::Unknown),
+            _ => Err("ERROR: Cannot parse position!".into()),
+        }
+    }
+}
+
+/// Support type
+///
+/// This enum is used to store the type of support.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::SupportType;
+///
+/// let spliced = SupportType::Splicing;
+/// let rt = SupportType::RT;
+/// let unclear = SupportType::Unclear;
+/// ```
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum SupportType {
+    Splicing,
+    StrongRT,
+    WeakRT,
+    Unclear,
+}
+
+impl std::fmt::Display for SupportType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SupportType::Splicing => write!(f, "SPLICED"),
+            SupportType::StrongRT => write!(f, "STRONG_RT"),
+            SupportType::WeakRT => write!(f, "WEAK_RT"),
+            SupportType::Unclear => write!(f, "UNCLEAR"),
+        }
+    }
+}
+
+impl std::str::FromStr for SupportType {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "SPLICED" => Ok(SupportType::Splicing),
+            "STRONG_RT" => Ok(SupportType::StrongRT),
+            "WEAK_RT" => Ok(SupportType::WeakRT),
+            "UNCLEAR" => Ok(SupportType::Unclear),
+            _ => Err("ERROR: Cannot parse support type!".into()),
+        }
+    }
+}
+
+/// Repeat span type
+///
+/// This enum is used to store the type of support.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::SpanRepeat;
+///
+/// let within = SpanRepeat::Within;
+/// let spans = SpanRepeat::Spans;
+/// let null = SpanRepeat::Null;
+/// ```
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum SpanRepeat {
+    Within,
+    Spans,
+    Null,
+}
+
+/// Implements std::fmt::Display for SpanRepeat
+impl std::fmt::Display for SpanRepeat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpanRepeat::Within => write!(f, "WITHIN_REPEAT"),
+            SpanRepeat::Spans => write!(f, "SPANS_REPEAT"),
+            SpanRepeat::Null => write!(f, "NO_REPEAT"),
+        }
+    }
+}
+
+/// Implements std::str::FromStr for SpanRepeat
+impl std::str::FromStr for SpanRepeat {
+    type Err = Box<dyn std::error::Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "WITHIN_REPEAT" => Ok(SpanRepeat::Within),
+            "SPANS_REPEAT" => Ok(SpanRepeat::Spans),
+            "NO_REPEAT" => Ok(SpanRepeat::Null),
+            _ => Err("ERROR: Cannot parse span repeat!".into()),
+        }
+    }
+}
+
+/// Holds a variety of statistical and contextual data for a predicted intron.
+///
+/// This struct contains metrics from different prediction tools and classification
+/// systems, used to evaluate the quality and nature of a predicted intron.
+#[derive(Debug, PartialEq, Clone)]
+pub struct Intron {
+    /// Chromosome name
+    pub chrom: Vec<u8>,
+    /// Start position of the intron (1-based)
+    pub start: u64,
+    /// End position of the intron (1-based)
+    pub end: u64,
+    /// Strand of the intron
+    pub strand: genepred::Strand,
+    /// The frequency of how many reads contain this intron.
+    pub seen: usize,
+    /// The frequency of how many reads span this intron.
+    pub spanned: usize,
+    /// SpliceAI score for the donor site.
+    pub splice_ai_donor: f32,
+    /// SpliceAI score for the acceptor site.
+    pub splice_ai_acceptor: f32,
+    /// MaxEntScan score for the donor site.
+    pub max_ent_donor: f32,
+    /// MaxEntScan score for the acceptor site.
+    pub max_ent_acceptor: f32,
+    /// The sequence around the donor site.
+    pub donor_sequence: Vec<u8>,
+    /// The sequence around the acceptor site.
+    pub acceptor_sequence: Vec<u8>,
+    /// The MaxEntScan 9-mer donor context sequence.
+    pub donor_context: Vec<u8>,
+    /// The MaxEntScan 23-mer acceptor context sequence.
+    pub acceptor_context: Vec<u8>,
+    /// The classification of the intron's position according to TOGA.
+    pub intron_position: Position,
+    /// A boolean indicating if the intron is supported by TOGA.
+    pub is_toga_supported: Vec<u8>,
+    /// A boolean indicating if the intron maintains the reading frame.
+    pub is_in_frame: Vec<u8>,
+    /// The RT-switch context sequence for the donor site.
+    pub donor_rt_context: Vec<u8>,
+    /// The RT-switch context sequence for the acceptor site.
+    pub acceptor_rt_context: Vec<u8>,
+    /// A boolean indicating if the intron is an RT-switch intron.
+    pub is_rt_intron: Vec<u8>,
+    /// A boolean indicating if the intron is a TOGA-nag intron.
+    pub is_nag_intron: Vec<u8>,
+    /// A classification of the intron's splice type.
+    pub splice_u_type: USpliceType,
+    /// A boolean indicating if the intron is within a repeat.
+    pub within_repeat: SpanRepeat,
+    /// A classification of the intron's support type.
+    pub support: SupportType,
+}
+
+impl Intron {
+    pub fn from(record: &str) -> Result<Self, anyhow::Error> {
+        let mut fields = record.split('\t');
+
+        let chrom = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get chromosome from {}!", record))
+            .into();
+        let start = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get start from {}!", record))
+            .parse::<u64>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse start from {}!", record));
+        let end = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get end from {}!", record))
+            .parse::<u64>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse end from {}!", record));
+        let strand = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get strand from {}!", record));
+        let seen = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get seen from {}!", record))
+            .parse::<usize>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse seen from {}!", record));
+        let spanned = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get spanned from {}!", record))
+            .parse::<usize>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse spanned from {}!", record));
+        let splice_ai_donor = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get splice_ai_donor from {}!", record))
+            .parse::<f32>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse splice_ai_donor from {}!", record));
+        let splice_ai_acceptor = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get splice_ai_acceptor from {}!", record))
+            .parse::<f32>()
+            .unwrap_or_else(|_| {
+                panic!("ERROR: Could not parse splice_ai_acceptor from {}!", record)
+            });
+        let max_ent_donor = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get max_ent_donor from {}!", record))
+            .parse::<f32>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse max_ent_donor from {}!", record));
+        let max_ent_acceptor = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get max_ent_acceptor from {}!", record))
+            .parse::<f32>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse max_ent_acceptor from {}!", record));
+        let donor_sequence = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get donor_sequence from {}!", record))
+            .into();
+        let acceptor_sequence = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get acceptor_sequence from {}!", record))
+            .into();
+        let donor_context = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get donor_context from {}!", record))
+            .into();
+        let acceptor_context = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get acceptor_context from {}!", record))
+            .into();
+        let intron_position = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get intron_position from {}!", record))
+            .parse::<Position>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse intron_position from {}!", record));
+        // INFO: match TOGA_SUPPOT or NOT_TOGA_SUPPORT
+        let is_toga_supported = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get is_toga_supported from {}!", record))
+            .into();
+        let is_in_frame = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get is_in_frame from {}!", record))
+            .into();
+        let donor_rt_context = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get donor_rt_context from {}!", record))
+            .into();
+        let acceptor_rt_context = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get acceptor_rt_context from {}!", record))
+            .into();
+        let is_rt_intron = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get is_rt_intron from {}!", record))
+            .into();
+        let is_nag_intron = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get is_nag_intron from {}!", record))
+            .into();
+        let splice_u_type = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get splice_u_type from {}!", record))
+            .parse::<USpliceType>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse splice_u_type from {}!", record));
+        let within_repeat = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get within_repeat from {}!", record))
+            .parse::<SpanRepeat>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse within_repeat from {}!", record));
+        let support = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get support from {}!", record))
+            .parse::<SupportType>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse support from {}!", record));
+
+        let strand = match strand {
+            "+" => genepred::Strand::Forward,
+            "-" => genepred::Strand::Reverse,
+            _ => panic!("ERROR: Unknown strand -> {strand}"),
+        };
+
+        Ok(Self {
+            chrom,
+            start,
+            end,
+            strand,
+            seen,
+            spanned,
+            splice_ai_donor,
+            splice_ai_acceptor,
+            max_ent_donor,
+            max_ent_acceptor,
+            donor_sequence,
+            acceptor_sequence,
+            donor_context,
+            acceptor_context,
+            intron_position,
+            is_toga_supported,
+            is_in_frame,
+            donor_rt_context,
+            acceptor_rt_context,
+            is_rt_intron,
+            is_nag_intron,
+            splice_u_type,
+            within_repeat,
+            support,
+        })
+    }
+}
+
+impl std::fmt::Display for Intron {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            std::str::from_utf8(&self.chrom).unwrap_or("NULL"),
+            self.start,
+            self.end,
+            self.strand,
+            self.seen,
+            self.spanned,
+            self.splice_ai_donor,
+            self.splice_ai_acceptor,
+            self.max_ent_donor,
+            self.max_ent_acceptor,
+            std::str::from_utf8(&self.donor_sequence).unwrap_or("NULL"),
+            std::str::from_utf8(&self.acceptor_sequence).unwrap_or("NULL"),
+            std::str::from_utf8(&self.donor_context.seq).unwrap_or("NULL"),
+            std::str::from_utf8(&self.acceptor_rt_context).unwrap_or("NULL"),
+            if self.is_rt_intron { "RT_INTRON" } else { "NOT_RT_INTRON" },
+            if self.is_nag_intron { "NAG_SS" } else { "NOT_NAG_SS" },
+            self.splice_u_type,
+            self.within_repeat,
+            self.support
+        )
+    }
+}
+
+/// Loads intron DB
+///
+/// This function reads a BED3 file containing genomic repeats and builds an index
+/// of sorted intervals per chromosome. The index is returned as a `HashMap` where
+/// the keys are chromosome names and the values are `Lapper` instances.
+///
+/// # Arguments
+///
+/// * `path`: Path to the BED3 file containing repeats.
+///
+/// # Returns
+///
+/// * An `Option<RepeatIndex>` containing the repeat index.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let repeats = load_repeats(PathBuf::from("repeats.bed3"));
+/// ```
+pub fn load_introns<P: AsRef<Path> + Debug + Display>(
+    path: P,
+) -> Option<(IntronIndex, HashMap<Vec<u8>, Intron>)> {
+    let mut counter = 0_usize;
+
+    // INFO: build two collections: 1) lookup Intron hash, 2) Lapper index
+    let mut iv_collector: HashMap<Vec<u8>, Vec<Iv>> = HashMap::new();
+    let mut introns: HashMap<Vec<u8>, Intron> = HashMap::new();
+
+    let lines = reader(path)
+        .unwrap_or_else(|e| panic!("ERROR: Could not read introns file {path:?} -> {e}!"));
+    lines.lines().for_each(|line| {
+        // INFO: convert line to Intron
+        let record = Intron::from(line)
+            .unwrap_or_else(|e| panic!("ERROR: Could not parse line {line:?} -> {e}!"));
+
+        // INFO: add to lookup, key fmt: chrom:start-end(strand) as bytes
+        let mut key = Vec::new();
+        key.extend_from_slice(&record.chrom);
+        key.extend_from_slice(b":");
+        key.extend_from_slice(&record.start.to_string().as_bytes());
+        key.extend_from_slice(b"-");
+        key.extend_from_slice(&record.end.to_string().as_bytes());
+        key.extend_from_slice(b"(");
+        key.extend_from_slice(&record.strand.to_string().as_bytes());
+        key.extend_from_slice(b")");
+
+        introns.insert(key, record);
+
+        // INFO: add to interval collector for Lapper index
+        let iv = Iv {
+            start: record.start,
+            stop: record.end,
+            val: (),
+        };
+        iv_collector.entry(record.chrom).or_default().push(iv);
+
+        counter += 1;
+    });
+
+    log::info!("INFO: Read {} introns from {}", counter, path.display());
+
+    // Second pass: build a sorted Lapper per chrom (Lapper::new sorts internally)
+    let index = iv_collector
+        .into_iter()
+        .map(|(chrom, ivs)| (chrom, Lapper::new(ivs)))
+        .collect();
+
+    log::info!("INFO: Built intron index from {}", path.display());
+    Some((index, introns))
+}
+
+/// Returns true if the intron falls ENTIRELY within a single repeat interval.
+///
+/// # Arguments
+///
+/// * `index`: A `RepeatIndex` containing sorted intervals per chromosome.
+/// * `chrom`: A slice of the chromosome name.
+/// * `intron`: A tuple of the intron coordinates (start, end).
+///
+/// # Returns
+///
+/// * A boolean indicating whether the intron is within a repeat interval.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let index = load_repeats(PathBuf::from("repeats.bed3")).unwrap();
+/// let chrom = b"chr1";
+/// let intron = (100, 200);
+/// let within_repeat = intron_within_repeat(&index, &chrom, intron);
+/// ```
+#[inline]
+pub fn is_intron_retention(index: &Lapper<u64, ()>, exon: (u64, u64)) -> bool {
+    let (start, end) = exon;
+    index
+        .find(start, end)
+        .any(|iv| start <= iv.start && iv.stop <= end)
+}
+
+/// Returns an iterator over the intron retentions within an exon
+///
+/// # Arguments
+///
+/// * `index` - The index to search for intron retentions.
+/// * `exon` - The exon to search for intron retentions.
+///
+/// # Returns
+///
+/// * An iterator over the intron retentions within the exon.
+///
+/// # Example
+///
+/// ```rust, no_run
+/// let index = load_repeats(PathBuf::from("repeats.bed3")).unwrap();
+/// let chrom = b"chr1";
+/// let exon = (100, 200);
+/// let introns = intron_retentions(&index, &exon);
+///
+/// for intron in introns {
+///     println!("Intron retention: {:?}", intron);
+/// }
+/// ```
+#[inline]
+pub fn intron_retentions<'a>(
+    index: &'a Lapper<u64, ()>,
+    exon: (u64, u64),
+) -> impl Iterator<Item = (u64, u64)> + 'a {
+    let (start, end) = exon;
+    index
+        .find(start, end)
+        .filter(move |iv| start <= iv.start && iv.stop <= end)
+        .map(|iv| (iv.start, iv.stop))
+}
+
+/// Reads the entire content of a file into a `String`.
+///
+/// This function provides a basic utility for synchronously reading a file's
+/// contents. It's generic over any type that can be converted to a `Path` and
+/// is `Debug` printable.
+///
+/// # Arguments
+///
+/// * `file` - The path to the file to read.
+///
+/// # Returns
+///
+/// A `Result<String, Box<dyn std::error::Error>>` containing the file's
+/// contents on success, or an error if the file cannot be opened or read.
+///
+pub fn reader<P: AsRef<Path> + Debug>(file: P) -> Result<String, Box<dyn std::error::Error>> {
+    let mut file = File::open(file)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
 }

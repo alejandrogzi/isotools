@@ -15,20 +15,21 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use dashmap::DashMap;
+use genepred::GenePred;
 use hashbrown::{HashMap, HashSet};
 use log::info;
-use packbed::record::IntronPosition;
-use packbed::{packbed, BedPackage, GenePred, IntronPred};
+use packbed::{OverlapType, Role};
 use rayon::prelude::*;
+use rust_lapper::Lapper;
 use serde_json::Value;
 
 use crate::cli::Args;
-use crate::utils::{unpack_blacklist, ParallelAccumulator, ParallelCounter};
+use crate::utils::*;
 
 use config::{
-    get_progress_bar, par_write_results, write_descriptor, IntronRetentionValue, ModuleDescriptor,
-    ModuleMap, ModuleType, OverlapType, INTRON_RETENTIONS, INTRON_RETENTION_DESCRIPTOR,
-    INTRON_RETENTION_FREE, INTRON_RETENTION_REVIEW, RETENTION_RATIO_THRESHOLD, SCALE,
+    par_write_results, write_descriptor, IntronRetentionValue, ModuleDescriptor, ModuleMap,
+    ModuleType, INTRON_RETENTIONS, INTRON_RETENTION_DESCRIPTOR, INTRON_RETENTION_FREE,
+    INTRON_RETENTION_REVIEW, RETENTION_RATIO_THRESHOLD, SCALE,
 };
 
 /// Detects intron retentions in a query set of reads
@@ -50,15 +51,11 @@ use config::{
 pub fn detect_intron_retentions(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>> {
     info!("INFO: Detecting intron retentions...");
 
-    let tracks = packbed(
-        args.refs,
-        Some(args.query),
-        OverlapType::Exon,
-        packbed::PackMode::Query,
-    )?;
+    let tracks = packbed::pack(vec![args.query], vec![Role::Query], OverlapType::Exon)
+        .unwrap_or_else(|e| panic!("ERROR: Could not pack query -> {e}!"));
+    let (index, reference_introns) = load_introns(&args.refs)
+        .unwrap_or_else(|| panic!("ERROR: Could not load introns from {:?}!", args.refs));
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
-
-    let pb = get_progress_bar(tracks.len() as u64, "Processing...");
 
     let accumulator = ParallelAccumulator::default();
     let counter = ParallelCounter::default();
@@ -72,12 +69,21 @@ pub fn detect_intron_retentions(args: Args) -> Result<DashMap<String, Box<dyn Mo
         let binding = HashSet::new();
         let banned = blacklist.get(&chr).unwrap_or(&binding);
 
-        process_components(components, banned, &accumulator, &counter, args.recover);
+        let local_index = index
+            .get(chr.as_bytes())
+            .unwrap_or_else(|| panic!("ERROR: Could not find introns for chromosome -> {chr:?}!"));
 
-        pb.inc(1);
+        process_components(
+            components,
+            &reference_introns,
+            &local_index,
+            banned,
+            &accumulator,
+            &counter,
+            args.recover,
+        );
     });
 
-    pb.finish_and_clear();
     info!(
         "Reads with retained introns: {}",
         accumulator.num_retentions()
@@ -133,25 +139,23 @@ pub fn detect_intron_retentions(args: Args) -> Result<DashMap<String, Box<dyn Mo
 /// ```
 #[inline(always)]
 fn process_components(
-    components: Vec<Box<dyn BedPackage>>,
+    components: Vec<Vec<GenePred>>,
+    reference_introns: &HashMap<Vec<u8>, Intron>,
+    index: &Lapper<u64, ()>,
     banned: &HashSet<(u64, u64)>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     recover: bool,
 ) {
-    components.into_par_iter().for_each(|mut comp| {
-        let comp = comp
-            .as_any_mut()
-            .downcast_mut::<(Vec<IntronPred>, Vec<GenePred>)>()
-            .expect("ERROR: Could not downcast to IntronPred and GenePred!");
-
-        // if comp is len 1 OR comp is len <=5 and no TOGA, continue
-        // if comp.1.len() <= 5 {
-        //     counter.inc_skipped();
-        //     return;
-        // }
-
-        let (keep, discard, review, descriptor) = process_component(comp, banned, counter, recover);
+    components.into_iter().for_each(|mut component| {
+        let (keep, discard, review, descriptor) = process_component(
+            component,
+            reference_introns,
+            index,
+            banned,
+            counter,
+            recover,
+        );
         accumulator.add(keep, discard, review, descriptor);
     });
 }
@@ -237,7 +241,9 @@ impl std::fmt::Display for IntronModuleReadAction {
 /// ```
 #[inline(always)]
 pub fn process_component(
-    comp: &mut (Vec<IntronPred>, Vec<GenePred>),
+    component: Vec<GenePred>,
+    reference_introns: &HashMap<Vec<u8>, Intron>,
+    index: &Lapper<u64, ()>,
     ban: &HashSet<(u64, u64)>,
     counter: &ParallelCounter,
     recover: bool,
@@ -252,26 +258,15 @@ pub fn process_component(
     let mut keep = Vec::new();
     let mut discard = Vec::new();
 
-    let introns = &comp.0;
-    let reads = &comp.1;
-
     let (mut count, totals) = (0_f32, reads.len() as f32);
 
-    // INFO: convert Vec<IntronPred> into BTreeMap<(u64, u64), IntronPred>
-    // WARN: conserving order is important to avoid early false breaks!
-    let ref_introns = introns
-        .iter()
-        .map(|intron| ((intron.start, intron.end), intron))
-        .collect::<BTreeMap<_, _>>();
-
     // INFO: for every read -> see which introns are retained and which the read has!
-    for read in reads {
+    for read in component {
         let mut schema = RetentionSchema::default();
 
-        schema.ref_introns_component_size = Value::Number(introns.len().into());
-        schema.query_component_size = Value::Number(reads.len().into());
+        schema.component_size = component.len();
 
-        detect_rt_intron(read, ban, &ref_introns, &mut schema);
+        detect_rt_intron(read, ban, &reference_introns, &mut schema);
         detect_retention(read, &ref_introns, &mut schema);
 
         if schema.intron_retention {
@@ -602,50 +597,49 @@ impl Default for RetentionSchema {
 fn detect_rt_intron(
     read: &GenePred,
     ban: &HashSet<(u64, u64)>,
-    ref_introns: &BTreeMap<(u64, u64), &IntronPred>,
-    schema: &mut RetentionSchema,
+    reference_introns: &HashMap<Vec<u8>, Intron>,
+    schema: &mut Schema,
 ) {
-    // INFO: Determine if read has RT introns -> limit to only first hit
-    // INFO: will not count ALL RT introns but just the first one!
-    let read_introns = read.get_introns();
-    let mut action = IntronModuleReadAction::Keep;
+    let read_introns = read.introns();
+    let mut rt = false;
 
     for intron in read_introns {
         if ban.contains(&(intron.0, intron.1)) {
             continue;
         }
 
-        let hit = ref_introns
-            .get(&intron)
-            .expect("ERROR: Intron not found, this is likely a bug!");
+        // INFO: build lookup key
+        let key = Vec::new();
+        key.extend_from_slice(&read.chrom);
+        key.extend_from_slice(b":");
+        key.extend_from_slice(&intron.0.to_string().as_bytes());
+        key.extend_from_slice(b"-");
+        key.extend_from_slice(&intron.1.to_string().as_bytes());
+        key.extend_from_slice(b"(");
+        key.extend_from_slice(&read.strand().unwrap().to_string().as_bytes());
+        key.extend_from_slice(b")");
 
-        match hit.stats.support {
-            config::SupportType::RT => {
-                // INFO: if read is RT, discard
-                action = IntronModuleReadAction::Discard;
-                schema.has_rt_intron = Value::Bool(true);
+        let info = reference_introns.get(&key).unwrap_or_else(|| {
+            panic!(
+                "ERROR: Intron not found, this is likely a bug! -> {:?}",
+                key
+            );
+        });
 
-                match read.strand {
-                    config::Strand::Forward => {
-                        let coord = format!("{}:{}-{}", read.chrom, intron.0, intron.1);
-                        schema.has_rt_intron_map.push(Value::String(coord));
-                    }
-                    config::Strand::Reverse => {
-                        let coord =
-                            format!("{}:{}-{}", read.chrom, SCALE - intron.1, SCALE - intron.0);
-                        schema.has_rt_intron_map.push(Value::String(coord));
-                    }
+        if info.support == SupportType::StrongRT || info.support == SupportType::WeakRT {
+            if !rt {
+                rt = true;
+                // INFO: add 'X' to code representing that read has RT intron
+                schema.code.push(b'X');
+
+                if schema.status != b"FLAWED" {
+                    schema.status = b"FLAWED";
                 }
             }
-            config::SupportType::Splicing | config::SupportType::Unclear => {} // INFO: Do nothing
-        };
-    }
 
-    if action == IntronModuleReadAction::Keep {
-        schema.has_rt_intron = Value::Bool(false);
+            schema.html.push(info);
+        }
     }
-
-    schema.intronic_status = action;
 }
 
 /// Determine if any read exons retain any intron
@@ -673,137 +667,140 @@ fn detect_rt_intron(
 /// ```
 fn detect_retention(
     read: &GenePred,
-    ref_introns: &BTreeMap<(u64, u64), &IntronPred>,
+    reference_introns: HashMap<Vec<u8>, Intron>,
+    index: &Lapper<u64, ()>,
     schema: &mut RetentionSchema,
 ) {
     let mut action = IntronModuleReadAction::Keep;
-    let read_exons = read.get_exons();
+    let read_exons = read.exons();
     let mut must_discard = false;
 
     for exon in read_exons {
         let exon_start = exon.0;
         let exon_end = exon.1;
 
-        for (intron, stats) in ref_introns.iter() {
-            let intron_start = intron.0;
-            let intron_end = intron.1;
+        let retentions = intron_retentions(index, exon).collect::<Vec<_>>();
 
-            // INFO: early exit to avoid unnecessary checks -> enforces BTreeMap instead of HashMap!
-            if intron_end < exon_start {
-                continue;
-            }
-
-            if exon_start < intron_start && intron_end < exon_end {
-                match stats.stats.support {
-                    config::SupportType::RT => {
-                        // INFO: retaining a false intron is not an IR, do nothing
-                        match read.strand {
-                            config::Strand::Forward => {
-                                let coord =
-                                    format!("{}:{}-{}", read.chrom, intron_start, intron_end);
-                                schema.retains_rt_map.push(Value::String(coord));
-                            }
-                            config::Strand::Reverse => {
-                                let coord = format!(
-                                    "{}:{}-{}",
-                                    read.chrom,
-                                    SCALE - intron_end,
-                                    SCALE - intron_start
-                                );
-                                schema.retains_rt_map.push(Value::String(coord));
-                            }
-                        }
-
-                        schema.retains_rt_intron = Value::Bool(true);
-                    }
-                    config::SupportType::Unclear | config::SupportType::Splicing => {
-                        // INFO: any other variant is considered an intron retention!
-                        if !schema.intron_retention {
-                            schema.intron_retention = true;
-                        }
-
-                        schema
-                            .retention_support_type
-                            .push(Value::String(stats.stats.support.to_string()));
-                        schema
-                            .is_intron_retained_in_frame
-                            .push(Value::Bool(stats.stats.is_in_frame));
-                        schema
-                            .retention_donor_score
-                            .push(serde_json::json!(stats.stats.splice_ai_donor));
-                        schema
-                            .retention_acceptor_score
-                            .push(serde_json::json!(stats.stats.splice_ai_acceptor));
-
-                        match read.strand {
-                            config::Strand::Forward => {
-                                let coord =
-                                    format!("{}:{}-{}", read.chrom, intron_start, intron_end);
-                                schema.coords_of_retention.push(Value::String(coord));
-                            }
-                            config::Strand::Reverse => {
-                                let coord = format!(
-                                    "{}:{}-{}",
-                                    read.chrom,
-                                    SCALE - intron_end,
-                                    SCALE - intron_start
-                                );
-                                schema.coords_of_retention.push(Value::String(coord));
-                            }
-                        }
-
-                        match stats.stats.intron_position {
-                            IntronPosition::CDS => {
-                                // INFO: else do not annotate read (exon structure is flawed)
-                                if !stats.stats.is_in_frame {
-                                    if stats.stats.support == config::SupportType::Unclear {
-                                        // INFO: if support is unclear, keep read
-                                        // INFO: edge case where IR is in CDS + not in-frame
-                                        // INFO: but we do not know if intron is real or not
-                                        action = IntronModuleReadAction::Unclear;
-                                    } else {
-                                        // INFO: clear point where IR is in CDS + not in-frame + splicing
-                                        // INFO: if support is splicing, discard read
-                                        must_discard = true;
-                                        action = IntronModuleReadAction::Discard;
-                                    }
-                                }
-                                // DEPRECATED: if intron in frame keep read --> splice variant producing a longer protein
-                                else {
-                                    // INFO: if intron is in frame -> clearly retaining a true intron
-                                    // INFO: for a clearer example see mm39 chr11:3,198,396-3,217,905
-                                    action = IntronModuleReadAction::Discard; // INFO: will solve some bugs
-                                }
-
-                                schema
-                                    .location_of_retention
-                                    .push(Value::String(stats.stats.intron_position.to_string()));
-                            }
-                            // INFO: keep read --> variant would not affect CDS
-                            IntronPosition::UTR | IntronPosition::Mixed => {
-                                schema
-                                    .location_of_retention
-                                    .push(Value::String(stats.stats.intron_position.to_string()));
-                            }
-                            IntronPosition::Unknown => {
-                                schema
-                                    .location_of_retention
-                                    .push(Value::String(stats.stats.intron_position.to_string()));
-
-                                // INFO: logic changed here -> if intron is not in frame, discard read
-                                // INFO: if intron is in frame, keep read -> flag it as UNCLEAR
-                                if !stats.stats.is_in_frame {
-                                    must_discard = true;
-                                    action = IntronModuleReadAction::Discard;
-                                } else {
-                                    action = IntronModuleReadAction::Unclear;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // for (intron, stats) in ref_introns.iter() {
+        //     let intron_start = intron.0;
+        //     let intron_end = intron.1;
+        //
+        //     // INFO: early exit to avoid unnecessary checks -> enforces BTreeMap instead of HashMap!
+        //     if intron_end < exon_start {
+        //         continue;
+        //     }
+        //
+        //     if exon_start < intron_start && intron_end < exon_end {
+        //         match stats.stats.support {
+        //             config::SupportType::RT => {
+        //                 // INFO: retaining a false intron is not an IR, do nothing
+        //                 match read.strand {
+        //                     config::Strand::Forward => {
+        //                         let coord =
+        //                             format!("{}:{}-{}", read.chrom, intron_start, intron_end);
+        //                         schema.retains_rt_map.push(Value::String(coord));
+        //                     }
+        //                     config::Strand::Reverse => {
+        //                         let coord = format!(
+        //                             "{}:{}-{}",
+        //                             read.chrom,
+        //                             SCALE - intron_end,
+        //                             SCALE - intron_start
+        //                         );
+        //                         schema.retains_rt_map.push(Value::String(coord));
+        //                     }
+        //                 }
+        //
+        //                 schema.retains_rt_intron = Value::Bool(true);
+        //             }
+        //             config::SupportType::Unclear | config::SupportType::Splicing => {
+        //                 // INFO: any other variant is considered an intron retention!
+        //                 if !schema.intron_retention {
+        //                     schema.intron_retention = true;
+        //                 }
+        //
+        //                 schema
+        //                     .retention_support_type
+        //                     .push(Value::String(stats.stats.support.to_string()));
+        //                 schema
+        //                     .is_intron_retained_in_frame
+        //                     .push(Value::Bool(stats.stats.is_in_frame));
+        //                 schema
+        //                     .retention_donor_score
+        //                     .push(serde_json::json!(stats.stats.splice_ai_donor));
+        //                 schema
+        //                     .retention_acceptor_score
+        //                     .push(serde_json::json!(stats.stats.splice_ai_acceptor));
+        //
+        //                 match read.strand {
+        //                     config::Strand::Forward => {
+        //                         let coord =
+        //                             format!("{}:{}-{}", read.chrom, intron_start, intron_end);
+        //                         schema.coords_of_retention.push(Value::String(coord));
+        //                     }
+        //                     config::Strand::Reverse => {
+        //                         let coord = format!(
+        //                             "{}:{}-{}",
+        //                             read.chrom,
+        //                             SCALE - intron_end,
+        //                             SCALE - intron_start
+        //                         );
+        //                         schema.coords_of_retention.push(Value::String(coord));
+        //                     }
+        //                 }
+        //
+        //                 match stats.stats.intron_position {
+        //                     IntronPosition::CDS => {
+        //                         // INFO: else do not annotate read (exon structure is flawed)
+        //                         if !stats.stats.is_in_frame {
+        //                             if stats.stats.support == config::SupportType::Unclear {
+        //                                 // INFO: if support is unclear, keep read
+        //                                 // INFO: edge case where IR is in CDS + not in-frame
+        //                                 // INFO: but we do not know if intron is real or not
+        //                                 action = IntronModuleReadAction::Unclear;
+        //                             } else {
+        //                                 // INFO: clear point where IR is in CDS + not in-frame + splicing
+        //                                 // INFO: if support is splicing, discard read
+        //                                 must_discard = true;
+        //                                 action = IntronModuleReadAction::Discard;
+        //                             }
+        //                         }
+        //                         // DEPRECATED: if intron in frame keep read --> splice variant producing a longer protein
+        //                         else {
+        //                             // INFO: if intron is in frame -> clearly retaining a true intron
+        //                             // INFO: for a clearer example see mm39 chr11:3,198,396-3,217,905
+        //                             action = IntronModuleReadAction::Discard; // INFO: will solve some bugs
+        //                         }
+        //
+        //                         schema
+        //                             .location_of_retention
+        //                             .push(Value::String(stats.stats.intron_position.to_string()));
+        //                     }
+        //                     // INFO: keep read --> variant would not affect CDS
+        //                     IntronPosition::UTR | IntronPosition::Mixed => {
+        //                         schema
+        //                             .location_of_retention
+        //                             .push(Value::String(stats.stats.intron_position.to_string()));
+        //                     }
+        //                     IntronPosition::Unknown => {
+        //                         schema
+        //                             .location_of_retention
+        //                             .push(Value::String(stats.stats.intron_position.to_string()));
+        //
+        //                         // INFO: logic changed here -> if intron is not in frame, discard read
+        //                         // INFO: if intron is in frame, keep read -> flag it as UNCLEAR
+        //                         if !stats.stats.is_in_frame {
+        //                             must_discard = true;
+        //                             action = IntronModuleReadAction::Discard;
+        //                         } else {
+        //                             action = IntronModuleReadAction::Unclear;
+        //                         }
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     schema.number_of_retentions = Value::Number(schema.coords_of_retention.len().into());

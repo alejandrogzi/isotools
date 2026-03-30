@@ -9,23 +9,19 @@ pub struct Args {
         short = 'r',
         long = "ref",
         required = true,
-        value_name = "PATHS",
-        value_delimiter = ',',
-        num_args = 1..,
+        value_name = "PATH",
         help = "Paths to reference_introns TSV file produced by iso-classify"
     )]
-    pub refs: Vec<PathBuf>,
+    pub refs: PathBuf,
 
     #[arg(
         short = 'q',
         long = "query",
         required = true,
-        value_name = "PATHS",
-        value_delimiter = ',',
-        num_args = 1..,
+        value_name = "PATH",
         help = "Path to BED12 file to classify"
     )]
-    pub query: Vec<PathBuf>,
+    pub query: PathBuf,
 
     #[arg(
         short = 'b',
