@@ -11,22 +11,17 @@
 //! ab initio gene prediction, and other heuristics. The process is heavily
 //! parallelized to offer fast performance on large datasets.
 
-use dashmap::{DashMap, DashSet};
+use genepred::Bed4;
 use hashbrown::{HashMap, HashSet};
-use rayon::prelude::*;
 use rust_lapper::{Interval, Lapper};
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 use std::{
-    fmt::{Debug, Display},
+    fmt::Debug,
     fs::File,
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU32, Ordering},
 };
-
-use config::{bed_to_map, CoordType, ModuleMap, ParallelCollector};
 
 pub type Iv = Interval<u64, ()>;
 pub type IntronIndex = HashMap<Vec<u8>, Lapper<u64, ()>>;
@@ -136,7 +131,7 @@ impl ParallelCounter {
         (dirties, (dirties / components) * 100.0)
     }
 
-    /// Get the number of retentions
+    /// Increment the number of retentions
     ///
     /// # Example
     ///
@@ -148,6 +143,20 @@ impl ParallelCounter {
     /// ```
     pub fn inc_retentions(&self) {
         self.retentions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Get the number of retentions
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_retentions();
+    ///
+    /// assert_eq!(counter.get_retentions(), 1);
+    /// ```
+    pub fn num_retentions(&self) -> u32 {
+        self.retentions.load(Ordering::Relaxed)
     }
 }
 
@@ -165,128 +174,6 @@ impl ParallelCounter {
 impl Default for ParallelCounter {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Parallel accumulator for the processing function
-///
-/// # Fields
-///
-/// - `retentions`: A set of strings representing the retentions.
-/// - `non_retentions`: A set of strings representing the non-retentions.
-/// - `miscellaneous`: A set of strings representing miscellaneous items.
-/// - `descriptor`: A map of strings to boxed `ModuleMap` trait objects.
-///
-/// # Example
-///
-/// ```rust, no_run
-/// let accumulator = ParallelAccumulator::default();
-///
-/// assert_eq!(accumulator.pass.len(), 0);
-/// ```
-pub struct ParallelAccumulator {
-    pub retentions: DashSet<String>,
-    pub non_retentions: DashSet<String>,
-    pub miscellaneous: DashSet<String>,
-    pub descriptor: DashMap<String, Box<dyn ModuleMap>>,
-}
-
-/// ParallelAccumulator constructor
-///
-/// # Example
-///
-/// ```rust, no_run
-/// let accumulator = ParallelAccumulator::default();
-///
-/// assert_eq!(accumulator.retentions.len(), 0);
-/// assert_eq!(accumulator.non_retentions.len(), 0);
-/// assert_eq!(accumulator.miscellaneous.len(), 0);
-/// assert_eq!(accumulator.descriptor.len(), 0);
-/// ```
-impl Default for ParallelAccumulator {
-    fn default() -> Self {
-        Self {
-            retentions: DashSet::new(),
-            non_retentions: DashSet::new(),
-            miscellaneous: DashSet::new(),
-            descriptor: DashMap::new(),
-        }
-    }
-}
-
-/// ParallelCollector trait for ParallelAccumulator
-impl ParallelCollector for ParallelAccumulator {
-    /// Get the number of fields in the accumulator
-    fn len(&self) -> usize {
-        ParallelAccumulator::NUM_FIELDS
-    }
-
-    /// Get the a collection of items from the accumulator
-    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn std::error::Error>> {
-        let mut collections = Vec::with_capacity(ParallelAccumulator::NUM_FIELDS);
-
-        collections.push(&self.retentions);
-        collections.push(&self.non_retentions);
-        collections.push(&self.miscellaneous);
-
-        Ok(collections)
-    }
-}
-
-impl ParallelAccumulator {
-    /// Number of fields in the accumulator of type DashSet<String>
-    pub const NUM_FIELDS: usize = 3;
-
-    /// Get the number of retentions
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let accumulator = ParallelAccumulator::default();
-    /// assert_eq!(accumulator.num_retentions(), 0);
-    /// ```
-    pub fn num_retentions(&self) -> usize {
-        self.retentions.len()
-    }
-
-    /// Add items to the accumulator
-    ///
-    /// # Parameters
-    ///
-    /// - `keep`: A vector of strings to be retained.
-    /// - `discard`: A vector of strings to be discarded.
-    /// - `descriptor`: A HashMap of strings to boxed `ModuleMap` trait objects.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let mut accumulator = ParallelAccumulator::default();
-    /// accumulator.add(vec!["item1".to_string()], vec!["item2".to_string()], HashMap::new());
-    ///
-    /// assert_eq!(accumulator.num_retentions(), 1);
-    /// ```
-    pub fn add(
-        &self,
-        keep: Vec<String>,
-        discard: Vec<String>,
-        review: Option<Vec<String>>,
-        descriptor: HashMap<String, Box<dyn ModuleMap>>,
-    ) {
-        for item in keep {
-            self.non_retentions.insert(item);
-        }
-        for item in discard {
-            self.retentions.insert(item);
-        }
-        for (key, value) in descriptor {
-            self.descriptor.insert(key, value);
-        }
-
-        if let Some(review) = review {
-            for item in review {
-                self.miscellaneous.insert(item);
-            }
-        }
     }
 }
 
@@ -308,15 +195,32 @@ impl ParallelAccumulator {
 ///
 /// assert!(result.is_some());
 /// ```
-pub fn unpack_blacklist(paths: Vec<PathBuf>) -> Option<HashMap<String, HashSet<(u64, u64)>>> {
-    if paths.is_empty() {
+pub fn unpack_blacklist(path: Option<PathBuf>) -> Option<HashMap<Vec<u8>, HashSet<(u64, u64)>>> {
+    if path.is_none() {
         return None;
     }
 
-    let contents = Arc::new(par_reader(paths).unwrap());
-    let tracks = bed_to_map::<Bed4>(contents, CoordType::Bounds).unwrap();
+    let path = path.unwrap();
 
-    Some(tracks)
+    let mut blacklist: HashMap<Vec<u8>, HashSet<(u64, u64)>> = HashMap::new();
+    let mut tracks = genepred::Reader::<Bed4>::from_mmap(&path).unwrap_or_else(|e| {
+        panic!("ERROR: Could not read blacklist from {:?} -> {e}!", path);
+    });
+
+    tracks.records().for_each(|record| {
+        let record = record.unwrap_or_else(|e| panic!("ERROR: Could not parse record -> {e}!"));
+
+        let chrom = record.chrom();
+        let start = record.start();
+        let end = record.end();
+
+        blacklist
+            .entry(chrom.to_vec())
+            .or_default()
+            .insert((start, end));
+    });
+
+    Some(blacklist)
 }
 
 /// Splice site type (U2, U12, Unknown)
@@ -545,7 +449,7 @@ pub struct Intron {
 }
 
 impl Intron {
-    pub fn from(record: &str) -> Result<Self, anyhow::Error> {
+    pub fn from(record: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let mut fields = record.split('\t');
 
         let chrom = fields
@@ -618,7 +522,7 @@ impl Intron {
             .unwrap_or_else(|| panic!("ERROR: Could not get intron_position from {}!", record))
             .parse::<Position>()
             .unwrap_or_else(|_| panic!("ERROR: Could not parse intron_position from {}!", record));
-        // INFO: match TOGA_SUPPOT or NOT_TOGA_SUPPORT
+        // INFO: match TOGA_SUPPORT or NOT_TOGA_SUPPORT
         let is_toga_supported = fields
             .next()
             .unwrap_or_else(|| panic!("ERROR: Could not get is_toga_supported from {}!", record))
@@ -698,7 +602,7 @@ impl std::fmt::Display for Intron {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             std::str::from_utf8(&self.chrom).unwrap_or("NULL"),
             self.start,
             self.end,
@@ -711,10 +615,15 @@ impl std::fmt::Display for Intron {
             self.max_ent_acceptor,
             std::str::from_utf8(&self.donor_sequence).unwrap_or("NULL"),
             std::str::from_utf8(&self.acceptor_sequence).unwrap_or("NULL"),
-            std::str::from_utf8(&self.donor_context.seq).unwrap_or("NULL"),
+            std::str::from_utf8(&self.donor_context).unwrap_or("NULL"),
+            std::str::from_utf8(&self.acceptor_context).unwrap_or("NULL"),
+            self.intron_position,
+            std::str::from_utf8(&self.is_toga_supported).unwrap_or("NULL"),
+            std::str::from_utf8(&self.is_in_frame).unwrap_or("NULL"),
+            std::str::from_utf8(&self.donor_rt_context).unwrap_or("NULL"),
             std::str::from_utf8(&self.acceptor_rt_context).unwrap_or("NULL"),
-            if self.is_rt_intron { "RT_INTRON" } else { "NOT_RT_INTRON" },
-            if self.is_nag_intron { "NAG_SS" } else { "NOT_NAG_SS" },
+            std::str::from_utf8(&self.is_rt_intron).unwrap_or("NULL"),
+            std::str::from_utf8(&self.is_nag_intron).unwrap_or("NULL"),
             self.splice_u_type,
             self.within_repeat,
             self.support
@@ -741,7 +650,7 @@ impl std::fmt::Display for Intron {
 /// ```rust,ignore
 /// let repeats = load_repeats(PathBuf::from("repeats.bed3"));
 /// ```
-pub fn load_introns<P: AsRef<Path> + Debug + Display>(
+pub fn load_introns<P: AsRef<Path> + Debug + Copy>(
     path: P,
 ) -> Option<(IntronIndex, HashMap<Vec<u8>, Intron>)> {
     let mut counter = 0_usize;
@@ -768,20 +677,23 @@ pub fn load_introns<P: AsRef<Path> + Debug + Display>(
         key.extend_from_slice(&record.strand.to_string().as_bytes());
         key.extend_from_slice(b")");
 
-        introns.insert(key, record);
-
         // INFO: add to interval collector for Lapper index
         let iv = Iv {
             start: record.start,
             stop: record.end,
             val: (),
         };
-        iv_collector.entry(record.chrom).or_default().push(iv);
+        iv_collector
+            .entry(record.chrom.clone())
+            .or_default()
+            .push(iv);
+
+        introns.insert(key, record);
 
         counter += 1;
     });
 
-    log::info!("INFO: Read {} introns from {}", counter, path.display());
+    log::info!("INFO: Read {} introns from {:?}", counter, path);
 
     // Second pass: build a sorted Lapper per chrom (Lapper::new sorts internally)
     let index = iv_collector
@@ -789,7 +701,7 @@ pub fn load_introns<P: AsRef<Path> + Debug + Display>(
         .map(|(chrom, ivs)| (chrom, Lapper::new(ivs)))
         .collect();
 
-    log::info!("INFO: Built intron index from {}", path.display());
+    log::info!("INFO: Built intron index from {:?}", path);
     Some((index, introns))
 }
 

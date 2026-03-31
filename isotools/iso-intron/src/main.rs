@@ -12,7 +12,6 @@
 //! parallelized to offer fast performance on large datasets.
 
 use clap::{self, Parser};
-use config::ArgCheck;
 use log::{error, info, Level};
 use simple_logger::init_with_level;
 
@@ -23,11 +22,6 @@ fn main() {
     init_with_level(Level::Info).unwrap();
 
     let args: Args = Args::parse();
-    args.check().unwrap_or_else(|e| {
-        error!("{}", e);
-        std::process::exit(1);
-    });
-
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build()
