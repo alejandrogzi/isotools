@@ -4,15 +4,21 @@ use std::path::PathBuf;
 pub const RETENTION_RATIO_THRESHOLD: f32 = 0.5;
 
 #[derive(Debug, Parser)]
+#[clap(
+    name = "iso-intron",
+    version = env!("CARGO_PKG_VERSION"),
+    author = "Alejandro Gonzales-Irribarren <alejandrxgzi@gmail.com>",
+    about = "Detects intron retentions in a query set of reads"
+)]
 pub struct Args {
     #[arg(
-        short = 'r',
-        long = "ref",
+        short = 'i',
+        long = "introns",
         required = true,
         value_name = "PATH",
         help = "Paths to reference_introns TSV file produced by iso-classify"
     )]
-    pub refs: PathBuf,
+    pub introns: PathBuf,
 
     #[arg(
         short = 'q',
@@ -54,24 +60,21 @@ pub struct Args {
     pub recover: bool,
 
     #[arg(
-        long = "im",
-        long = "in-memory",
-        help = "Flag to avoid writing output files",
-        value_name = "FLAG",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
+        short = 'r',
+        long = "ratio_threshold",
+        help = "Ratio threshold for intron retentions",
+        value_name = "RATIO",
+        default_value_t = RETENTION_RATIO_THRESHOLD
     )]
-    pub in_memory: bool,
+    pub ratio_threshold: f32,
 
     #[arg(
         short = 'p',
         long = "prefix",
         required = false,
         value_name = "PATH",
-        help = "Prefix for output files"
+        help = "Prefix for output files",
+        default_value = "retention_classification"
     )]
-    pub prefix: Option<PathBuf>,
+    pub prefix: String,
 }

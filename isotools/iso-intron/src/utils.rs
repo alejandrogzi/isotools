@@ -261,7 +261,7 @@ impl std::str::FromStr for USpliceType {
         match s {
             "U2" => Ok(USpliceType::U2),
             "U12" => Ok(USpliceType::U12),
-            "Unknown" => Ok(USpliceType::Unknown),
+            "UNKNOWN" => Ok(USpliceType::Unknown),
             _ => Err(format!("ERROR: Unknown splice type -> {s}")),
         }
     }
@@ -566,7 +566,7 @@ impl Intron {
         let strand = match strand {
             "+" => genepred::Strand::Forward,
             "-" => genepred::Strand::Reverse,
-            _ => panic!("ERROR: Unknown strand -> {strand}"),
+            _ => panic!("ERROR: Unknown strand -> {strand} from {}", record),
         };
 
         Ok(Self {
@@ -683,10 +683,12 @@ pub fn load_introns<P: AsRef<Path> + Debug + Copy>(
             stop: record.end,
             val: (),
         };
-        iv_collector
-            .entry(record.chrom.clone())
-            .or_default()
-            .push(iv);
+
+        let mut chr_stranded = Vec::new();
+        chr_stranded.extend_from_slice(&record.chrom);
+        chr_stranded.push(b':');
+        chr_stranded.extend_from_slice(&record.strand.to_string().as_bytes());
+        iv_collector.entry(chr_stranded).or_default().push(iv);
 
         introns.insert(key, record);
 

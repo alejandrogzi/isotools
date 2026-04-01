@@ -19,6 +19,9 @@ use packbed::{OverlapType, Role};
 use rayon::prelude::*;
 use rust_lapper::Lapper;
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
+
 use crate::cli::*;
 use crate::utils::*;
 
@@ -43,8 +46,8 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
 
     let tracks = packbed::pack(vec![args.query], vec![Role::Query], OverlapType::Exon)
         .unwrap_or_else(|e| panic!("ERROR: Could not pack query -> {e}!"));
-    let (index, reference_introns) = load_introns(&args.refs)
-        .unwrap_or_else(|| panic!("ERROR: Could not load introns from {:?}!", args.refs));
+    let (index, reference_introns) = load_introns(&args.introns)
+        .unwrap_or_else(|| panic!("ERROR: Could not load introns from {:?}!", args.introns));
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
     let accumulator = DashSet::new();
@@ -59,6 +62,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
         let binding = HashSet::new();
         let banned = blacklist.get(chr.as_bytes()).unwrap_or(&binding);
 
+        // INFO: necessary to keep it strand-aware -> avoids retentions on the wrong strand
         let local_index = index
             .get(chr.as_bytes())
             .unwrap_or_else(|| panic!("ERROR: Could not find introns for chromosome -> {chr:?}!"));
@@ -73,6 +77,13 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
             args.recover,
         );
     });
+
+    let mut writer = BufWriter::new(File::create(format!("{}.tsv", args.prefix)).unwrap());
+    for schema in accumulator.into_iter() {
+        writer
+            .write_all(&schema)
+            .unwrap_or_else(|e| panic!("ERROR: Could not write schema -> {e}!"));
+    }
 
     info!("Reads with retained introns: {}", counter.num_retentions());
     Ok(())
@@ -248,10 +259,92 @@ struct Schema<'a> {
 
 impl Schema<'_> {
     /// INFO: fmt -> id\tstatus\tcode\thtml
+    ///
+    /// # Arguments
+    ///
+    /// * `&self` - This function takes a reference to a `Schema` struct.
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<u8>` - A vector of bytes representing the RT introns in the schema.
+    ///
+    /// # Notes
+    ///
+    /// html format is:
+    ///
+    /// /h2 Intron retentions
+    /// - status: {value}
+    /// - code: {value} [R: retention, T: RT retention, X: has RT intron, A: no events]
+    /// - events: {value}
+    /// - ratio: {value}
+    ///
+    /// /h3 True retentions:
+    ///
+    /// {table}
+    ///
+    /// /h3 RT retentions:
+    ///
+    /// {table}
+    ///
+    /// /h3 Spliced RT introns in read:
+    ///
+    /// {table}
+    ///
     pub fn to_line(&self) -> Vec<u8> {
-        let mut html = Vec::new();
+        let mut body = String::new();
 
-        html
+        body.push_str("<h2>Intron retentions</h2><br>");
+        body.push_str(&format!(
+            "- status: {}<br>",
+            std::str::from_utf8(&self.status).unwrap_or("NULL")
+        ));
+        body.push_str(&format!(
+            "- code: {} [R: retention, T: RT retention, X: has RT intron, A: no events]<br>",
+            std::str::from_utf8(&self.code).unwrap_or("NULL")
+        ));
+        body.push_str(&format!("- events: {}<br>", self.events));
+        body.push_str(&format!("- ratio: {}<br>", self.ratio));
+
+        body.push_str("<h3>True retentions:</h3><br>");
+        if self.ir_html.is_empty() {
+            body.push_str("none<br>");
+        } else {
+            for intron in &self.ir_html {
+                // Replace any newlines the Display impl might emit
+                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+            }
+        }
+
+        body.push_str("<h3>RT retentions:</h3><br>");
+        if self.fr_html.is_empty() {
+            body.push_str("none<br>");
+        } else {
+            for intron in &self.fr_html {
+                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+            }
+        }
+
+        body.push_str("<h3>Spliced RT introns in read:</h3><br>");
+        if self.rt_html.is_empty() {
+            body.push_str("none<br>");
+        } else {
+            for intron in &self.rt_html {
+                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+            }
+        }
+
+        // fmt: id\tstatus\tcode\thtml  — all on one line
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.id);
+        out.push(b'\t');
+        out.extend_from_slice(&self.status);
+        out.push(b'\t');
+        out.extend_from_slice(&self.code);
+        out.push(b'\t');
+        out.extend_from_slice(body.as_bytes());
+        out.push(b'\n'); // single trailing newline for the TSV row
+
+        out
     }
 }
 
@@ -357,8 +450,9 @@ fn detect_retention<'a, 'b>(
 
             let info = reference_introns.get(&key).unwrap_or_else(|| {
                 panic!(
-                    "ERROR: Intron not found, this is likely a bug! -> {}",
-                    std::str::from_utf8(&key).unwrap()
+                    "ERROR: Intron not found, this is likely a bug! -> {} from {}",
+                    std::str::from_utf8(&key).unwrap(),
+                    read
                 );
             });
 

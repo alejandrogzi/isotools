@@ -362,7 +362,7 @@ fn process_component(
     let chr = queries[0].chrom();
     let strand = queries[0]
         .strand()
-        .unwrap_or_else(|| panic!("ERROR: Could not get strand from {}!", refs[0]));
+        .unwrap_or_else(|| panic!("ERROR: Could not get strand from {}!", queries[0]));
 
     // INFO: getting stranded spliceAi scores
     let splice_scores = match strand {
@@ -918,15 +918,21 @@ fn process_nag_pattern(
         descriptor.is_nag_intron = true;
 
         log::debug!(
-            "DEBUG: Will replace seen intron with NULLG flag -> {:?}",
+            "DEBUG: Will replace seen intron with NAG flag -> {:?}",
             intron
         );
     } else {
-        log::debug!("DEBUG: Found and insert potential NULLG {:?}!", intron);
+        log::debug!("DEBUG: Found and insert potential NAG {:?}!", intron);
 
         let mut new_descriptor = Intron::new();
+
+        new_descriptor.chrom = chr.to_vec();
+        new_descriptor.start = intron.0;
+        new_descriptor.end = intron.1;
+        new_descriptor.strand = *strand;
+
         get_sj_context(
-            &intron,
+            &(intron.0 + 1, intron.1 - 1),
             &mut new_descriptor,
             strand,
             chr,
