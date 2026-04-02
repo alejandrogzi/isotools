@@ -1,0 +1,24 @@
+[package]
+name = "iso-pas"
+version = "0.0.1"
+authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
+description = "detect real 3' ends on isoseq reads"
+keywords = ["polyA", "retention", "transcript", "isoseq"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+dashmap.workspace = true
+rayon.workspace = true
+log.workspace = true
+clap.workspace = true
+num_cpus.workspace = true
+hashbrown.workspace = true
+simple_logger.workspace = true
+rust-lapper.workspace = true
+packbed.workspace = true
+genepred.workspace = true
+bigtools.workspace = true

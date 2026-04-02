@@ -11,16 +11,6 @@
 //! ab initio gene prediction, and other heuristics. The process is heavily
 //! parallelized to offer fast performance on large datasets.
 
-use config::ModuleMap;
-use dashmap::DashMap;
-use std::sync::Arc;
-
 pub mod cli;
 pub mod core;
 pub mod utils;
-
-pub fn lib_iso_intron(args: Arc<Vec<String>>) -> DashMap<String, Box<dyn ModuleMap>> {
-    let args = cli::Args::from(args);
-    crate::core::detect_intron_retentions(args)
-        .unwrap_or_else(|e| panic!("ERROR: Failed to detect intron retentions -> {e}"))
-}

@@ -9,7 +9,7 @@ RUN cargo build --manifest-path Cargo.toml --release --locked --workspace && \
     strip target/release/iso-segment && \
     strip target/release/iso-split && \
     strip target/release/iso-utr && \
-    strip target/release/iso-polya && \
+    strip target/release/iso-pas && \
     strip target/release/iso-intron && \
     strip target/release/iso-nmd && \
     strip target/release/iso-fusion && \
@@ -28,7 +28,7 @@ RUN apt-get update \
 COPY --from=builder /app/target/release/iso-segment /usr/local/bin/iso-segment
 COPY --from=builder /app/target/release/iso-split /usr/local/bin/iso-split
 COPY --from=builder /app/target/release/iso-utr /usr/local/bin/iso-utr
-COPY --from=builder /app/target/release/iso-polya /usr/local/bin/iso-polya
+COPY --from=builder /app/target/release/iso-pas /usr/local/bin/iso-pas
 COPY --from=builder /app/target/release/iso-intron /usr/local/bin/iso-intron
 COPY --from=builder /app/target/release/iso-nmd /usr/local/bin/iso-nmd
 COPY --from=builder /app/target/release/iso-fusion /usr/local/bin/iso-fusion
@@ -40,7 +40,7 @@ RUN useradd -m -u 1000 isotoolsuser && \
     chmod +x /usr/local/bin/iso-segment && \
     chmod +x /usr/local/bin/iso-split && \
     chmod +x /usr/local/bin/iso-utr && \
-    chmod +x /usr/local/bin/iso-polya && \
+    chmod +x /usr/local/bin/iso-pas && \
     chmod +x /usr/local/bin/iso-intron && \
     chmod +x /usr/local/bin/iso-nmd && \
     chmod +x /usr/local/bin/iso-fusion && \
@@ -53,7 +53,7 @@ WORKDIR /data
 RUN iso-segment --help && \
     iso-split --help && \
     iso-utr --help && \
-    iso-polya --help && \
+    iso-pas --help && \
     iso-intron --help && \
     iso-nmd --help && \
     iso-fusion --help && \
