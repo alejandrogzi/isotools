@@ -1074,23 +1074,18 @@ dependencies = [
 
 [[package]]
 name = "iso-intron"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
- "anyhow",
- "bigtools",
  "clap",
- "config",
  "dashmap",
+ "genepred",
  "hashbrown 0.16.1",
- "iso-classify",
- "iso-pack",
  "log",
  "num_cpus",
+ "packbed",
  "rayon",
- "serde_json",
+ "rust-lapper",
  "simple_logger",
- "tempfile",
- "thiserror 2.0.11",
 ]
 
 [[package]]
@@ -1110,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "clap",
  "config",
@@ -1140,34 +1135,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "iso-polya"
-version = "0.0.9"
+name = "iso-pas"
+version = "0.0.1"
 dependencies = [
- "anyhow",
  "bigtools",
- "bio",
  "clap",
- "config",
  "dashmap",
+ "genepred",
  "hashbrown 0.16.1",
- "iso-classify",
- "iso-pack",
- "iso-utr",
- "lazy_static",
  "log",
- "ndarray",
- "noodles-bam",
- "noodles-core",
- "noodles-sam",
  "num_cpus",
- "rand",
+ "packbed",
  "rayon",
- "serde",
- "serde_json",
+ "rust-lapper",
  "simple_logger",
- "thiserror 2.0.11",
- "tokio",
- "twobit",
 ]
 
 [[package]]
@@ -1219,26 +1200,6 @@ dependencies = [
  "serde_json",
  "simple_logger",
  "tempfile",
-]
-
-[[package]]
-name = "isotools"
-version = "0.0.1"
-dependencies = [
- "clap",
- "config",
- "dashmap",
- "hashbrown 0.16.1",
- "iso-classify",
- "iso-fusion",
- "iso-intron",
- "iso-pack",
- "iso-polya",
- "iso-utr",
- "log",
- "rayon",
- "serde_json",
- "simple_logger",
 ]
 
 [[package]]
@@ -1426,17 +1387,6 @@ checksum = "3be647b768db090acb35d5ec5db2b0e1f1de11133ca123b9eacf5137868f892a"
 dependencies = [
  "adler2",
  "simd-adler32",
-]
-
-[[package]]
-name = "mio"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2886843bf800fba2e3377cff24abf6379b4c4d5c6681eaf9ea5b0d15090450bd"
-dependencies = [
- "libc",
- "wasi",
- "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1679,16 +1629,6 @@ dependencies = [
  "num_cpus",
  "rayon",
  "simple_logger",
-]
-
-[[package]]
-name = "parking_lot"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1bf18183cf54e8d6059647fc3063646a1801cf30896933ec2311622cc4b9a27"
-dependencies = [
- "lock_api",
- "parking_lot_core",
 ]
 
 [[package]]
@@ -2151,15 +2091,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
-name = "signal-hook-registry"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9e9e0b4211b72e7b8b6e85c807d36c212bdb33ea8587f7569562a84df5465b1"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "simba"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2204,16 +2135,6 @@ name = "smallvec"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
-
-[[package]]
-name = "socket2"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c970269d99b64e60ec3bd6ad27270092a5394c4e309314b18ae3fe575695fbe8"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
-]
 
 [[package]]
 name = "spin"
@@ -2417,26 +2338,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5cec9b21b0450273377fc97bd4c33a8acffc8c996c987a7c5b319a0083707551"
 dependencies = [
  "backtrace",
- "bytes",
- "libc",
- "mio",
- "parking_lot",
  "pin-project-lite",
- "signal-hook-registry",
- "socket2",
- "tokio-macros",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "tokio-macros"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "693d596312e88961bc67d7f1f97af8a70227d9f90c31bba5806eec004978d752"
-dependencies = [
- "proc-macro2 1.0.93",
- "quote 1.0.37",
- "syn 2.0.117",
 ]
 
 [[package]]

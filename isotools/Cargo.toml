@@ -1,17 +1,16 @@
 [workspace]
 members = [
-    "entry",
     "config",
     "iso-intron",
     "iso-utr",
     "iso-pack",
     "iso-fusion",
     "iso-classify",
-    "iso-polya",
     "iso-split",
     "iso-nmd",
     "iso-orphan",
     "iso-segment",
+    "iso-pas",
 ]
 resolver = "2"
 
@@ -20,7 +19,7 @@ authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70.0"
-version = "0.0.10"
+version = "0.0.11"
 
 [workspace.dependencies]
 dashmap = { version = "6", features = ["rayon"] }
@@ -41,7 +40,6 @@ num-traits = "0.2.19"
 bigtools = "=0.5.4"
 twobit = "0.2.1"
 tokio = { version = "1.16", features = ["full"] }
-lazy_static = "1.5.0"
 bio = "3.0.0"
 ndarray = "0.16.1"
 noodles-bam = "0.79.0"
