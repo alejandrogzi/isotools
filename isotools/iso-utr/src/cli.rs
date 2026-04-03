@@ -1,7 +1,17 @@
+//! Core module for detecting intron retentions in a query set of reads
+//! Alejandro Gonzales-Irribarren, 2026
+//!
+//! This module contains the main algorithm for detecting truncations
+//! in a query set of reads.
+//!
+//! In short it takes a set of query reads and a set of reference reads and
+//! detects truncations in the query reads. It does this by checking if the
+//! query reads overlap with any middle exon from the reference set of reads.
+//! A recovery step can be performed by evaluating the support of the middle
+//! exon in the reference set of reads.
+
 use clap::{ArgAction, Parser};
-use config::ArgCheck;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(Debug, Parser)]
 pub struct Args {
@@ -37,29 +47,6 @@ pub struct Args {
     pub threads: usize,
 
     #[arg(
-        long = "ignore-exon",
-        help = "Flag to ignore upstream 5' end",
-        value_name = "FLAG",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
-    )]
-    pub skip_exon: bool,
-
-    #[arg(
-        short = 'b',
-        long = "blacklist",
-        required = false,
-        value_name = "PATH",
-        value_delimiter = ',',
-        num_args = 1..,
-        help = "Path to BED12 file with blacklisted transcripts"
-    )]
-    pub blacklist: Vec<PathBuf>,
-
-    #[arg(
         long = "recover",
         help = "Flag to recover from disputed truncations",
         value_name = "FLAG",
@@ -72,76 +59,52 @@ pub struct Args {
     pub recover: bool,
 
     #[arg(
-        long = "im",
-        long = "in-memory",
-        help = "Flag to avoid writing output files",
-        value_name = "FLAG",
-        default_missing_value("true"),
-        default_value("false"),
-        num_args(0..=1),
-        require_equals(true),
-        action = ArgAction::Set,
-    )]
-    pub in_memory: bool,
-
-    #[arg(
         short = 'p',
         long = "prefix",
         required = false,
         value_name = "PATH",
-        help = "Prefix for output files"
+        help = "Prefix for output files",
+        default_value = "isotools"
     )]
-    pub prefix: Option<PathBuf>,
-}
+    pub prefix: PathBuf,
 
-impl ArgCheck for Args {
-    fn get_blacklist(&self) -> &Vec<PathBuf> {
-        &self.blacklist
-    }
+    #[arg(
+        long = "outdir",
+        short = 'o',
+        required = false,
+        value_name = "PATH",
+        num_args = 1,
+        help = "Path to output directory",
+        default_value = "."
+    )]
+    pub outdir: PathBuf,
 
-    fn get_ref(&self) -> &Vec<PathBuf> {
-        &self.refs
-    }
+    #[arg(
+        short = 'L',
+        long = "level",
+        help = "Logging level",
+        value_name = "LEVEL",
+        default_value_t = log::Level::Info,
+    )]
+    pub level: log::Level,
 
-    fn get_query(&self) -> &Vec<PathBuf> {
-        &self.query
-    }
-}
+    #[arg(
+        short = 'R',
+        long = "recovery-threshold",
+        required = false,
+        help = "Recovery threshold for truncations",
+        value_name = "VALUE",
+        default_value_t = 0.5
+    )]
+    pub recovery_threshold: f32,
 
-impl Args {
-    pub fn from(args: Arc<Vec<String>>) -> Self {
-        let drop = vec!["--introns", "--toga", "--aparent", "--bigwig", "--twobit"];
-
-        let mut local_args = Vec::new();
-        let mut iter = args.iter().peekable();
-
-        while let Some(arg) = iter.next() {
-            // INFO: skipping useless args + value
-            if drop.contains(&arg.as_str()) {
-                iter.next();
-                continue;
-            }
-
-            if arg == "--query" {
-                local_args.push("--query".to_string());
-
-                let val = iter
-                    .next()
-                    .expect("ERROR: Missing value for --query")
-                    .to_owned();
-
-                local_args.push(val.clone());
-                local_args.push("--ref".to_string());
-                local_args.push(val);
-            } else {
-                local_args.push(arg.clone());
-            }
-        }
-
-        let mut full_args = vec![env!("CARGO_PKG_NAME").to_string()];
-        full_args.extend(local_args);
-        full_args.push("--recover".to_string());
-
-        Args::parse_from(full_args)
-    }
+    #[arg(
+        short = 'E',
+        long = "exon-recovery-threshold",
+        required = false,
+        help = "Recovery threshold for exons",
+        value_name = "VALUE",
+        default_value_t = 0.5
+    )]
+    pub exon_recovery_threshold: f32,
 }

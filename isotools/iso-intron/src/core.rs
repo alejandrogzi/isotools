@@ -394,8 +394,8 @@ fn detect_rt_intron<'a>(
                 // INFO: add 'X' to code representing that read has RT intron
                 schema.code.push(b'X');
 
-                if schema.status != b"FLAWED" {
-                    schema.status = b"FLAWED".to_vec();
+                if schema.status != b"RETENTION" {
+                    schema.status = b"RETENTION".to_vec();
                 }
             }
 
@@ -468,8 +468,8 @@ fn detect_retention<'a, 'b>(
                         schema.code.push(b'R');
                         flawed = true;
 
-                        if schema.status != b"FLAWED" {
-                            schema.status = b"FLAWED".to_vec();
+                        if schema.status != b"RETENTION" {
+                            schema.status = b"RETENTION".to_vec();
                         }
                     }
 

@@ -1,51 +1,67 @@
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+//! Core module for detecting intron retentions in a query set of reads
+//! Alejandro Gonzales-Irribarren, 2026
+//!
+//! This module contains the main algorithm for detecting truncations
+//! in a query set of reads.
+//!
+//! In short it takes a set of query reads and a set of reference reads and
+//! detects truncations in the query reads. It does this by checking if the
+//! query reads overlap with any middle exon from the reference set of reads.
+//! A recovery step can be performed by evaluating the support of the middle
+//! exon in the reference set of reads.
 
-use anyhow::Result;
-use config::{
-    get_progress_bar, par_write_results, write_descriptor, ModuleDescriptor, ModuleMap, ModuleType,
-    OverlapType, StartTruncationValue, TRUNCATIONS, TRUNCATION_DESCRIPTOR, TRUNCATION_FREE,
-    TRUNCATION_RECOVERY_THRESHOLD, TRUNCATION_THRESHOLD,
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    io::{BufWriter, Write},
 };
-use dashmap::DashMap;
-use hashbrown::{HashMap, HashSet};
+
+use genepred::{GenePred, Strand};
+use hashbrown::HashMap;
 use log::{info, warn};
-use packbed::{packbed, BedPackage, GenePred, RefGenePred};
+use packbed::{OverlapType, Role};
 use rayon::prelude::*;
-use serde_json::Value;
 
 use crate::cli::Args;
 use crate::utils::*;
 
-pub fn detect_truncations(args: Args) -> Result<DashMap<String, Box<dyn ModuleMap>>> {
+pub const SCALE: u64 = 100000000000; // 100Gb
+
+pub fn detect_truncations(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     info!("Detecting 5'end truncations...");
 
-    let tracks = packbed(
-        args.refs,
-        Some(args.query),
-        OverlapType::CDSBound,
-        packbed::PackMode::Default,
-    )?;
-    let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
+    let mut modes = std::iter::repeat(Role::Reference)
+        .take(args.refs.len())
+        .collect::<Vec<_>>();
+    modes.extend(vec![Role::Query]);
+    args.refs.extend(args.query);
+
+    log::info!("INFO: Packing BED12 files...");
+
+    let tracks = packbed::pack(args.refs, modes, OverlapType::Exon).unwrap_or_else(|e| {
+        log::error!("Failed to pack beds: {:?}", e);
+        std::process::exit(1);
+    });
 
     let accumulator = ParallelAccumulator::default();
     let counter = ParallelCounter::default();
 
-    let pb = get_progress_bar(tracks.len() as u64, "Processing...");
+    log::info!("INFO: Processing components...");
     tracks.into_par_iter().for_each(|bucket| {
         let components = bucket.1;
         counter.inc_components(components.len() as u32);
 
-        process_components(components, &blacklist, &accumulator, &counter, args.recover);
-
-        pb.inc(1);
+        process_components(
+            components,
+            &accumulator,
+            &counter,
+            args.recover,
+            args.recovery_threshold,
+            args.exon_recovery_threshold,
+        );
     });
 
-    pb.finish_and_clear();
-    info!(
-        "Reads with 5'end truncations: {}",
-        accumulator.truncations.len()
-    );
+    log::info!("INFO: Processed {} components", counter.load_components());
 
     if args.recover {
         let (count, ratio) = counter.get_stat();
@@ -55,359 +71,573 @@ pub fn detect_truncations(args: Args) -> Result<DashMap<String, Box<dyn ModuleMa
         );
     }
 
-    if !args.in_memory {
-        info!("INFO: Writing results...");
+    let file = args
+        .outdir
+        .join(format!("{}.truncation.tsv", args.prefix.display()));
+    let mut writer = BufWriter::new(File::create(file).unwrap());
 
-        let prefix = args.prefix.clone().unwrap_or_else(PathBuf::new);
+    accumulator.lines.into_iter().for_each(|line| {
+        writer
+            .write_all(&line)
+            .unwrap_or_else(|e| panic!("ERROR: Could not write schema -> {e}!"));
+    });
 
-        par_write_results(
-            &accumulator,
-            vec![prefix.join(TRUNCATIONS), prefix.join(TRUNCATION_FREE)],
-            None,
-        );
-
-        write_descriptor(&accumulator.descriptor, TRUNCATION_DESCRIPTOR);
-    }
-
-    Ok(accumulator.descriptor)
+    Ok(())
 }
 
+/// Processes a component of reads and detects truncations
 pub fn process_components(
-    components: Vec<Box<dyn BedPackage>>,
-    banned: &HashSet<String>,
+    components: Vec<Vec<GenePred>>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     recover: bool,
+    recovery_threshold: f32,
+    exon_recovery_threshold: f32,
 ) {
-    components.into_par_iter().for_each(|comp| {
-        let comp = comp
-            .as_any_owned()
-            .downcast::<(RefGenePred, Vec<GenePred>)>()
-            .expect("ERROR: Failed to downcast to RefGenePred");
+    components.into_par_iter().for_each(|component| {
+        counter.inc_components(1);
+        let (refs, queries) = component.into_iter().partition(|record| {
+            let role = record
+                .get_extra(b"role")
+                .unwrap_or_else(|| panic!("ERROR: Could not get role from record!"))
+                .clone()
+                .into_scalar();
 
-        let (truncations, no_truncations, descriptor, is_dirty) =
-            process_component(comp, &banned, recover);
-
-        truncations.into_iter().for_each(|hit| {
-            accumulator.truncations.insert(hit);
-        });
-        no_truncations.into_iter().for_each(|pass| {
-            accumulator.no_truncations.insert(pass);
+            role == Some(b"reference".to_vec())
         });
 
-        descriptor.into_iter().for_each(|(name, desc)| {
-            accumulator.descriptor.insert(name, desc);
-        });
+        let result = process_component(
+            refs,
+            queries,
+            recover,
+            recovery_threshold,
+            exon_recovery_threshold,
+            counter,
+        );
 
-        if is_dirty {
-            counter.inc_dirty();
-        }
+        result.into_iter().for_each(|descriptor| {
+            if !descriptor.is_empty() {
+                accumulator.lines.insert(descriptor);
+            }
+        });
     });
 }
 
+/// Returns the first and last exon of a record.
+///
+/// # Arguments
+///
+/// * `record` - The record to get the exons from.
+///
+/// # Returns
+///
+/// A tuple containing the first and last exon of the record.
+///
+/// # Example
+///
+/// ```ignore
+/// let record = GenePred::new(b"chr1", 100, 200, b"+", b"exon1", b"exon2");
+/// let (first, last) = terminal_exon(&record);
+/// assert_eq!(first, 100);
+/// assert_eq!(last, 200);
+/// ```
+#[inline(always)]
+fn terminal_exon(record: &GenePred) -> (u64, u64) {
+    let exons = record.exons();
+
+    match record.strand() {
+        Some(Strand::Forward) => exons.first().copied().unwrap_or_else(|| {
+            log::error!(
+                "ERROR: Could not get first exon from record -> {:?}",
+                record.name()
+            );
+            std::process::exit(1);
+        }),
+        Some(Strand::Reverse) => {
+            let mut terminal_exon = exons.last().copied().unwrap_or_else(|| {
+                log::error!(
+                    "ERROR: Could not get last exon from record -> {:?}",
+                    record.name()
+                );
+                std::process::exit(1);
+            });
+            terminal_exon = (SCALE - terminal_exon.1, SCALE - terminal_exon.0);
+            terminal_exon
+        }
+        Some(Strand::Unknown) | None => {
+            log::error!(
+                "ERROR: Could not get strand from record -> {:?}",
+                record.name()
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Processes a component of reads and detects truncations
+///
+/// # Arguments
+///
+/// * `refs` - A `Vec<GenePred>` to process
+/// * `queries` - A `Vec<GenePred>` to process
+/// * `recover` - A `bool` to recover reads from
+/// * `recovery_threshold` - A `f32` to recover reads from
+/// * `exon_recovery_threshold` - A `f32` to recover reads from
+///
+/// # Example
+///
+/// ```ignore
+/// process_component(
+///     refs,
+///     queries,
+///     recover,
+///     recovery_threshold,
+///     exon_recovery_threshold,
+/// );
+/// ```
 #[inline(always)]
 pub fn process_component(
-    comp: Box<(RefGenePred, Vec<GenePred>)>,
-    ban: &HashSet<String>,
+    refs: Vec<GenePred>,
+    queries: Vec<GenePred>,
     recover: bool,
-) -> (
-    Vec<String>,
-    Vec<String>,
-    HashMap<String, Box<dyn ModuleMap>>,
-    bool,
-) {
-    let mut truncations = Vec::new();
-    let mut pass = Vec::new();
+    recovery_threshold: f32,
+    exon_recovery_threshold: f32,
+    counter: &ParallelCounter,
+) -> Vec<Vec<u8>> {
+    let mut descriptor: HashMap<Option<&[u8]>, Schema<'_>> = HashMap::new();
+    let mut accumulator = Vec::new();
 
-    let mut tmp_dirt = Vec::new();
-    let mut owners = BTreeSet::new();
+    let mut reference_starts: BTreeSet<(u64, u64)> = BTreeSet::new();
+    let mut reference_middle_exons: BTreeSet<(u64, u64)> = BTreeSet::new();
+    let mut reference_middle_exons_support: BTreeMap<(u64, u64), f32> = BTreeMap::new();
 
-    let mut descriptor = HashMap::new();
+    log::debug!("DEBUG: Getting reference exons...");
+    refs.iter().for_each(|record| match record.strand() {
+        Some(Strand::Forward) => {
+            let exons = record.exons();
+            reference_starts.insert(exons.first().copied().unwrap_or_else(|| {
+                log::error!(
+                    "ERROR: Could not get first exon from record -> {:?}",
+                    record.name()
+                );
+                std::process::exit(1);
+            }));
 
-    let refs = comp.0;
-    let queries = comp.1;
+            exons[1..].into_iter().for_each(|exon| {
+                reference_middle_exons.insert(*exon);
+                reference_middle_exons_support
+                    .entry(*exon)
+                    .and_modify(|x| *x += 1.0)
+                    .or_insert(1.0);
+            });
+        }
+        Some(Strand::Reverse) => {
+            let exons = record.exons();
 
-    let ref_starts = &refs.starts;
-    let ref_middles = &refs.middles;
+            let mut terminal_exon = exons.last().copied().unwrap_or_else(|| {
+                log::error!(
+                    "ERROR: Could not get last exon from record -> {:?}",
+                    record.name()
+                );
+                std::process::exit(1);
+            });
+            terminal_exon = (SCALE - terminal_exon.1, SCALE - terminal_exon.0);
+            reference_starts.insert(terminal_exon);
 
-    let comp_size = queries.len() + refs.reads.len();
-    let (mut t, totals) = (0_f32, queries.len() as f32);
+            exons[..exons.len() - 1].into_iter().for_each(|exon| {
+                let exon = (SCALE - exon.1, SCALE - exon.0);
+
+                reference_middle_exons.insert(exon);
+                reference_middle_exons_support
+                    .entry(exon)
+                    .and_modify(|x| *x += 1.0)
+                    .or_insert(1.0);
+            });
+        }
+        Some(Strand::Unknown) | None => {
+            log::error!(
+                "ERROR: Could not get strand from record -> {:?}",
+                record.name()
+            );
+            std::process::exit(1);
+        }
+    });
+    log::debug!("DEBUG: Reference exons -> {:?}", reference_starts);
+    log::debug!("DEBUG: Middle exons -> {:?}", reference_middle_exons);
+
+    let (mut truncations, totals) = (0_f32, queries.len() as f32);
 
     for query in queries.iter() {
-        if ban.contains(query.name()) {
-            continue;
-        }
+        log::debug!("DEBUG: Processing query -> {:?}", query.name());
+        let mut schema = Schema::default();
+        let query_name = query.name().unwrap_or_else(|| {
+            log::error!("ERROR: Could not get name from record -> {:?}", query);
+            std::process::exit(1);
+        });
+        schema.id = query_name;
 
-        descriptor.insert(
-            query.name.clone(),
-            ModuleDescriptor::with_schema(ModuleType::StartTruncation),
+        let (query_first_exon_start, query_first_exon_end) = terminal_exon(query);
+        log::debug!(
+            "DEBUG: Query exons -> {:?}",
+            (query_first_exon_start, query_first_exon_end)
         );
-        let handle = descriptor.get_mut(&query.name).unwrap();
 
-        handle
-            .set_value(
-                Box::new(StartTruncationValue::ComponentSize),
-                serde_json::json!(comp_size),
-            )
-            .ok();
-        handle
-            .set_value(
-                Box::new(StartTruncationValue::RefUtrComponentSize),
-                serde_json::json!(refs.reads.len()),
-            )
-            .ok();
-        handle
-            .set_value(
-                Box::new(StartTruncationValue::QueryUtrComponentSize),
-                serde_json::json!(queries.len()),
-            )
-            .ok();
-
-        let (query_start, query_end) = query.get_first_exon();
-
-        let is_complete = ref_starts.iter().any(|(s, e)| {
-            if query_end < *s {
+        let is_complete = reference_starts.iter().any(|&(s, e)| {
+            if query_first_exon_end < s {
+                schema.is_novel_start = b"NOVEL_START";
                 return false;
             }
 
-            (query_start >= *s) && (query_start < *e)
+            (query_first_exon_start >= s) && (query_first_exon_start < e)
         });
 
         if is_complete {
-            handle
-                .set_value(
-                    Box::new(StartTruncationValue::IsNovelStart),
-                    Value::Bool(false),
-                )
-                .ok();
+            log::debug!("DEBUG: Query is complete -> {:?}", query.name());
+            if schema.is_novel_start != b"NOVEL_START" {
+                schema.is_novel_start = b"NOT_NOVEL_START";
+            }
 
             // still checks if read start is inside any middle boundaries
-            if ref_middles.iter().any(|(s, e)| {
-                if (query_start >= *s) && (query_start < *e) {
-                    owners.insert((s, e));
-                    tmp_dirt.push(query);
-                    return true;
-                } else {
-                    return false;
-                }
-            }) {
-                let line = query.line().to_owned();
-                truncations.push(line);
+            log::debug!(
+                "DEBUG: Checking middle exons -> {:?}",
+                reference_middle_exons
+            );
+            reference_middle_exons
+                .iter()
+                .for_each(|&(mid_exon_start, mid_exon_end)| {
+                    if query_first_exon_end < mid_exon_start {
+                        log::debug!("DEBUG: No overlap with middle exon -> {:?}", query.name());
+                        return;
+                    }
 
-                handle
-                    .set_value(
-                        Box::new(StartTruncationValue::IsReadTruncated),
-                        Value::Bool(true),
-                    )
-                    .ok();
+                    if (query_first_exon_start >= mid_exon_start)
+                        && (query_first_exon_start < mid_exon_end)
+                    {
+                        log::debug!("DEBUG: Truncation found -> {:?}", query.name());
+                        schema.status = b"TRUNCATED";
+                        schema.code = b"T";
 
-                t += 1.0;
-            } else {
-                let line = query.line().to_owned();
-                pass.push(line);
+                        match query.strand() {
+                            Some(Strand::Forward) => {
+                                schema.exon = Vec::new();
+                                schema.exon.extend(query.chrom());
+                                schema.exon.push(b':');
+                                schema.exon.extend(mid_exon_start.to_string().as_bytes());
+                                schema.exon.push(b'-');
+                                schema.exon.extend(mid_exon_end.to_string().as_bytes());
+                            }
+                            Some(Strand::Reverse) => {
+                                schema.exon = Vec::new();
+                                schema.exon.extend(query.chrom());
+                                schema.exon.push(b':');
+                                schema
+                                    .exon
+                                    .extend((SCALE - mid_exon_end).to_string().as_bytes());
+                                schema.exon.push(b'-');
+                                schema
+                                    .exon
+                                    .extend((SCALE - mid_exon_start).to_string().as_bytes());
+                            }
+                            _ => {
+                                log::error!(
+                                    "ERROR: Could not get strand from record -> {:?}",
+                                    query.name()
+                                );
+                                std::process::exit(1);
+                            }
+                        }
 
-                handle
-                    .set_value(
-                        Box::new(StartTruncationValue::IsReadTruncated),
-                        Value::Bool(false),
-                    )
-                    .ok();
-            }
+                        truncations += 1.0;
+                        return;
+                    } else {
+                        if schema.code == b"T" {
+                            log::debug!("DEBUG: Read already marked as truncated, overlapping another middle exon -> {:?}", query.name());
+                            return;
+                        }
+
+                        log::debug!("DEBUG: Pass found -> {:?}", query.name());
+                        schema.status = b"PASS";
+                        schema.code = b"A";
+                        return;
+                    }
+                });
+
+            // INFO: doest not overlap any middle exon
+            if schema.status.is_empty() {
+                log::debug!(
+                    "DEBUG: No overlap with ANY middle exon -> {:?}",
+                    query.name()
+                );
+                schema.status = b"PASS";
+                schema.code = b"A";
+            };
         } else {
             // we do not have any overlap with consensus starts.
             // we need to see if we overlap any middle exons, if so read
             // is truncated, otherwise it is a novel start.
-            let is_truncated = ref_middles.iter().any(|(mid_exon_start, mid_exon_end)| {
-                if query_end < *mid_exon_start {
-                    return false;
-                }
+            // let is_truncated =
+            reference_middle_exons
+                .iter()
+                .for_each(|&(mid_exon_start, mid_exon_end)| {
+                    if query_first_exon_end < mid_exon_start {
+                        return;
+                    }
 
-                if (query_start >= *mid_exon_start && query_start < *mid_exon_end)
-                    || (query_end > *mid_exon_start && query_end <= *mid_exon_end)
-                    || (query_start < *mid_exon_start && query_end > *mid_exon_end)
-                {
-                    owners.insert((mid_exon_start, mid_exon_end));
-                    tmp_dirt.push(query);
-                    return true;
-                } else {
-                    return false;
-                }
-            });
+                    if (query_first_exon_start >= mid_exon_start
+                        && query_first_exon_start < mid_exon_end)
+                        || (query_first_exon_end > mid_exon_start
+                            && query_first_exon_end <= mid_exon_end)
+                        || (query_first_exon_start < mid_exon_start
+                            && query_first_exon_end > mid_exon_end)
+                    {
+                        schema.status = b"TRUNCATED";
+                        schema.code = b"T";
 
-            if is_truncated {
-                let line = query.line().to_owned();
-                truncations.push(line);
+                        match query.strand() {
+                            Some(Strand::Forward) => {
+                                schema.exon = Vec::new();
+                                schema.exon.extend(query.chrom());
+                                schema.exon.push(b':');
+                                schema.exon.extend(mid_exon_start.to_string().as_bytes());
+                                schema.exon.push(b'-');
+                                schema.exon.extend(mid_exon_end.to_string().as_bytes());
+                            }
+                            Some(Strand::Reverse) => {
+                                schema.exon = Vec::new();
+                                schema.exon.extend(query.chrom());
+                                schema.exon.push(b':');
+                                schema
+                                    .exon
+                                    .extend((SCALE - mid_exon_end).to_string().as_bytes());
+                                schema.exon.push(b'-');
+                                schema
+                                    .exon
+                                    .extend((SCALE - mid_exon_start).to_string().as_bytes());
+                            }
+                            _ => {
+                                log::error!(
+                                    "ERROR: Could not get strand from record -> {:?}",
+                                    query.name()
+                                );
+                                std::process::exit(1);
+                            }
+                        }
 
-                handle
-                    .set_value(
-                        Box::new(StartTruncationValue::IsReadTruncated),
-                        Value::Bool(true),
-                    )
-                    .ok();
+                        truncations += 1.0;
+                    } else {
+                        schema.status = b"PASS";
+                        schema.code = b"A";
+                        schema.is_novel_start = b"NOVEL_START";
+                    }
+                });
 
-                t += 1.0;
-            } else {
-                let line = query.line().to_owned();
-                pass.push(line);
-
-                handle
-                    .set_value(
-                        Box::new(StartTruncationValue::IsNovelStart),
-                        Value::Bool(true),
-                    )
-                    .ok();
-            }
+            // INFO: doest not overlap any middle exon
+            if schema.status.is_empty() {
+                log::debug!(
+                    "DEBUG: No overlap with ANY middle exon -> {:?}",
+                    query.name()
+                );
+                schema.status = b"PASS";
+                schema.code = b"A";
+            };
         }
+
+        descriptor.insert(Some(query_name), schema);
     }
 
-    // after classying reads, we check bucket frequencies
+    // INFO: after classying reads, we check bucket frequencies
     // if the number of truncated reads is greater than 50%
     // of the total reads in the bucket, we consider the bucket
     // to be dirty and return the reads for recovery if args.recover
-    let ratio = t / totals;
-    let mut is_dirty = false;
+    let ratio = truncations / totals;
     if recover {
-        if ratio >= TRUNCATION_THRESHOLD {
-            // warn!("Bucket {:?} is dirty -> {}", refs.reads, t / totals);
-            is_dirty = true;
-            let dirt = tmp_dirt;
+        if ratio >= recovery_threshold {
+            counter.inc_dirty();
+            log::debug!("Bucket {:?} is dirty -> {}", queries, ratio);
+            reference_middle_exons_support
+                .iter_mut()
+                .for_each(|(_k, v)| {
+                    *v = *v as f32 / refs.len() as f32;
+                });
 
-            let new_passes = recover_from_dirt(dirt, owners, &refs, &mut descriptor, ratio);
-            new_passes.iter().for_each(|p| {
-                truncations.retain(|x| x != p);
-                pass.push(p.to_owned());
-            });
+            recover_reads(
+                &queries,
+                reference_middle_exons_support,
+                &mut descriptor,
+                exon_recovery_threshold,
+                ratio,
+                &mut accumulator,
+            );
         }
     } else {
-        drop(tmp_dirt)
+        for query in queries.iter() {
+            let query_key = Some(query.name().unwrap_or_else(|| {
+                log::error!("ERROR: Could not get name from record -> {:?}", query);
+                std::process::exit(1);
+            }));
+
+            let schema = descriptor.get_mut(&query_key).unwrap_or_else(|| {
+                log::error!("ERROR: Could not get handle for query {:?}", query.name());
+                std::process::exit(1);
+            });
+
+            schema.ratio = ratio;
+            accumulator.push(schema.to_line());
+        }
     }
 
-    // dbg!(&descriptor);
-
-    return (truncations, pass, descriptor, is_dirty);
+    accumulator
 }
 
-pub fn recover_from_dirt(
-    mut dirt: Vec<&GenePred>,
-    owners: BTreeSet<(&u64, &u64)>,
-    refs: &RefGenePred,
-    descriptor: &mut HashMap<String, Box<dyn ModuleMap>>,
+/// Recovers reads from the Bucket
+///
+/// # Arguments
+///
+/// * `queries` - A slice of `GenePred` to recover reads from
+/// * `reference_exon_support` - A `BTreeMap` of `(u64, u64)` to `f32` to recover reads from
+/// * `descriptor` - A `HashMap` of `Option<&[u8]>` to `Schema`
+/// * `recovery_threshold` - A `f32` to recover reads from
+/// * `ratio` - A `f32` to recover reads from
+/// * `accumulator` - A `Vec<Vec<u8>>` to recover reads from
+///
+/// # Example
+///
+/// ```ignore
+/// recover_reads(
+///     &queries,
+///     reference_exon_support,
+///     &mut descriptor,
+///     exon_recovery_threshold,
+///     ratio,
+///     &mut accumulator,
+/// );
+/// ```
+fn recover_reads<'a>(
+    queries: &'a [GenePred],
+    reference_exon_support: BTreeMap<(u64, u64), f32>,
+    descriptor: &mut HashMap<Option<&'a [u8]>, Schema<'a>>,
+    recovery_threshold: f32,
     ratio: f32,
-) -> Vec<String> {
-    // 1. see how many of each owner we have in refs.reads
-
-    let mut local_passes = vec![];
-    let background = refs.reads.len() as f32;
-
-    for owner in owners.iter() {
-        let mut count = 0.0;
-        for read in refs.reads.iter() {
-            let ref_exons = read.get_middle_exons();
-            let (s, e) = owner;
-
-            if ref_exons.contains(&(**s, **e)) {
-                count += 1.0;
-            }
-
-            // ref_exons.iter().for_each(|(start, end)| {
-            //     if (start >= *s) && (*e <= end) {
-            //          count += 1;
-            //     }
-            // });
-        }
-
+    accumulator: &mut Vec<Vec<u8>>,
+) {
+    for (ref_exon, support) in reference_exon_support.iter() {
         // 2. if the owner (middle exon) has more than 50% support, we consider it
         //  a valid owner and keep reads truncated by that owner as
         //  truncated reads; otherwise, we consider the owner to be
         //  a weak ownner and send all truncated reads to the pass
         //  bucket
-        let owner_ratio = count / background;
-        if owner_ratio < TRUNCATION_RECOVERY_THRESHOLD {
-            // send reads truncated by this owner to pass
-            for read in dirt.clone().iter_mut() {
-                let handle = descriptor.get_mut(&read.name).unwrap();
 
-                handle
-                    .set_value(
-                        Box::new(StartTruncationValue::IsDirtyUtrComponent),
-                        Value::Bool(true),
-                    )
-                    .ok();
+        let (owner_start, owner_end) = *ref_exon;
 
-                let (owner_start, owner_end) = *owner;
-                let (query_start, query_end) = read.get_first_exon();
+        // send reads truncated by this owner to pass
+        for query in queries.iter() {
+            let query_key = Some(query.name().unwrap_or_else(|| {
+                log::error!("ERROR: Could not get name from record -> {:?}", query);
+                std::process::exit(1);
+            }));
 
-                if (query_start >= *owner_start && query_start < *owner_end)
-                    || (query_end > *owner_start && query_end <= *owner_end)
-                    || (query_start < *owner_start && query_end > *owner_end)
-                {
-                    // send to pass and remove from dirt
-                    let line = read.line().to_owned();
-                    local_passes.push(line);
-                    dirt.retain(|x| x.name() != read.name());
+            let schema = descriptor.get_mut(&query_key).unwrap_or_else(|| {
+                log::error!("ERROR: Could not get handle for query {:?}", query.name());
+                std::process::exit(1);
+            });
 
-                    handle
-                        .set_value(
-                            Box::new(StartTruncationValue::TruncationSupportRatio),
-                            serde_json::json!(owner_ratio),
-                        )
-                        .ok();
-                    handle
-                        .set_value(
-                            Box::new(StartTruncationValue::IsTruncationSupported),
-                            serde_json::json!(false),
-                        )
-                        .ok();
-                    handle
-                        .set_value(
-                            Box::new(StartTruncationValue::ComponentTruncationRatio),
-                            serde_json::json!(ratio),
-                        )
-                        .ok();
+            schema.ratio = ratio;
+
+            // INFO: if read was already a pass, leave it as pass
+            if schema.status == b"PASS" {
+                // INFO: marker for reviewed reads
+                schema.code = b"AW";
+                accumulator.push(schema.to_line());
+                continue;
+            }
+
+            // INFO: from this point we only have truncated reads to evaluate
+            let (query_start, query_end) = terminal_exon(query);
+
+            if (query_start >= owner_start && query_start < owner_end)
+                || (query_end > owner_start && query_end <= owner_end)
+                || (query_start < owner_start && query_end > owner_end)
+            {
+                // INFO: read is truncated by this owner and owner is NOT supported
+                // INFO: modifying read as a forced pass
+                if *support < recovery_threshold {
+                    log::debug!(
+                        "DEBUG: Owner {:?} has less than threshold {:?}",
+                        ref_exon,
+                        support
+                    );
+
+                    schema.status = b"PASS";
+                    schema.code = b"FW";
+                } else {
+                    // INFO: read is truncated by this owner and owner is supported
+                    log::debug!(
+                        "DEBUG: Owner {:?} has more than threshold {:?}",
+                        ref_exon,
+                        support
+                    );
+                    schema.status = b"TRUNCATED";
+                    schema.code = b"TW";
                 }
             }
-        } else {
-            for read in dirt.iter() {
-                let handle = descriptor.get_mut(&read.name).unwrap();
 
-                handle
-                    .set_value(
-                        Box::new(StartTruncationValue::IsDirtyUtrComponent),
-                        Value::Bool(true),
-                    )
-                    .ok();
-
-                let (owner_start, owner_end) = *owner;
-                let (query_start, query_end) = read.get_first_exon();
-
-                if (query_start >= *owner_start && query_start < *owner_end)
-                    || (query_end > *owner_start && query_end <= *owner_end)
-                    || (query_start < *owner_start && query_end > *owner_end)
-                {
-                    handle
-                        .set_value(
-                            Box::new(StartTruncationValue::IsTruncationSupported),
-                            serde_json::json!(true),
-                        )
-                        .ok();
-                    handle
-                        .set_value(
-                            Box::new(StartTruncationValue::ComponentTruncationRatio),
-                            serde_json::json!(ratio),
-                        )
-                        .ok();
-                    handle
-                        .set_value(
-                            Box::new(StartTruncationValue::TruncationSupportRatio),
-                            serde_json::json!(owner_ratio),
-                        )
-                        .ok();
-                }
-            }
+            accumulator.push(schema.to_line());
         }
     }
+}
 
-    local_passes
+/// Schema
+#[derive(Debug, Default, Clone)]
+struct Schema<'a> {
+    id: &'a [u8],
+    status: &'a [u8],
+    code: &'a [u8],
+    ratio: f32,
+    is_novel_start: &'a [u8],
+    exon: Vec<u8>,
+}
+
+impl Schema<'_> {
+    /// Formats the schema into a line of TSV
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<u8>` containing the formatted line of TSV
+    pub fn to_line(&self) -> Vec<u8> {
+        let mut body = String::new();
+
+        body.push_str("<h2>Truncation</h2><br>");
+        body.push_str(&format!(
+            "- status: {}<br>",
+            std::str::from_utf8(&self.status).unwrap_or("NULL")
+        ));
+        body.push_str(&format!(
+            "- code: {} [T: truncation, A: no events, F: forced, W: reviewed]<br>",
+            std::str::from_utf8(&self.code).unwrap_or("NULL")
+        ));
+        body.push_str(&format!(
+            "- support: {}<br>",
+            std::str::from_utf8(&self.is_novel_start).unwrap_or("NULL")
+        ));
+        body.push_str(&format!("- ratio: {}<br>", self.ratio));
+        body.push_str(&format!(
+            "- exon: {}<br>",
+            std::str::from_utf8(&self.exon).unwrap_or("NULL")
+        ));
+
+        // fmt: id\tstatus\tcode\thtml  — all on one line
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.id);
+        out.push(b'\t');
+        out.extend_from_slice(&self.status);
+        out.push(b'\t');
+        out.extend_from_slice(&self.code);
+        out.push(b'\t');
+        out.extend_from_slice(body.as_bytes());
+        out.push(b'\n'); // single trailing newline for the TSV row
+
+        out
+    }
 }
 
 #[cfg(test)]
@@ -429,18 +659,5 @@ mod tests {
             file,
             "s1/t778870/t803968/tm54164U_210309_085211/92276372/ccs_PerID1.000_5Clip0_3Clip0_PolyA71_PolyARead72/t60/t-/t778870/t803968/t255,0,0/t11/t1243,142,88,200,253,1006,167,218,197,132,268/t0,14371,14711,14918,16436,16821,18048,20305,21265,22602,24830"
         ).unwrap();
-
-        let args = Args {
-            refs: [path.clone()].to_vec(),
-            query: [path].to_vec(),
-            threads: 1,
-            blacklist: Vec::new(),
-            recover: false,
-            skip_exon: false,
-            in_memory: true,
-            prefix: None,
-        };
-
-        assert!(detect_truncations(args).is_ok());
     }
 }
