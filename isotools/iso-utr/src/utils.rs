@@ -1,34 +1,17 @@
-use std::path::PathBuf;
+//! Core module for detecting intron retentions in a query set of reads
+//! Alejandro Gonzales-Irribarren, 2026
+//!
+//! This module contains the main algorithm for detecting truncations
+//! in a query set of reads.
+//!
+//! In short it takes a set of query reads and a set of reference reads and
+//! detects truncations in the query reads. It does this by checking if the
+//! query reads overlap with any middle exon from the reference set of reads.
+//! A recovery step can be performed by evaluating the support of the middle
+//! exon in the reference set of reads.
+
+use dashmap::DashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
-
-use dashmap::{DashMap, DashSet};
-use hashbrown::HashSet;
-use packbed::par_reader;
-use rayon::iter::ParallelIterator;
-use rayon::prelude::*;
-use rayon::str::ParallelString;
-
-use config::{write_objs, ModuleMap, ParallelCollector, TRUNCATIONS, TRUNCATION_FREE};
-
-pub fn unpack_blacklist<'a>(paths: Vec<PathBuf>) -> Option<HashSet<String>> {
-    if paths.is_empty() {
-        return None;
-    }
-
-    let contents = par_reader(paths).unwrap();
-    let tracks = contents
-        .par_lines()
-        .filter_map(|line| {
-            if line.is_empty() {
-                return None;
-            };
-
-            Some(line.to_string())
-        })
-        .collect::<HashSet<String>>();
-
-    Some(tracks)
-}
 
 pub struct ParallelCounter {
     pub dirties: AtomicU32,
@@ -62,6 +45,10 @@ impl ParallelCounter {
         let (dirties, components) = self.get_counters();
         (dirties, (dirties / components) * 100.0)
     }
+
+    pub fn load_components(&self) -> u32 {
+        self.components.load(Ordering::Relaxed)
+    }
 }
 
 impl Default for ParallelCounter {
@@ -71,53 +58,13 @@ impl Default for ParallelCounter {
 }
 
 pub struct ParallelAccumulator {
-    pub truncations: DashSet<String>,
-    pub no_truncations: DashSet<String>,
-    pub miscellaneous: DashSet<String>,
-    pub descriptor: DashMap<String, Box<dyn ModuleMap>>,
+    pub lines: DashSet<Vec<u8>>,
 }
 
 impl Default for ParallelAccumulator {
     fn default() -> Self {
         Self {
-            truncations: DashSet::new(),
-            no_truncations: DashSet::new(),
-            miscellaneous: DashSet::new(),
-            descriptor: DashMap::new(),
+            lines: DashSet::new(),
         }
     }
-}
-
-/// ParallelCollector trait for ParallelAccumulator
-impl ParallelCollector for ParallelAccumulator {
-    /// Get the number of fields in the accumulator
-    fn len(&self) -> usize {
-        ParallelAccumulator::NUM_FIELDS
-    }
-
-    /// Get the a collection of items from the accumulator
-    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn std::error::Error>> {
-        let mut collections = Vec::with_capacity(ParallelAccumulator::NUM_FIELDS);
-
-        collections.push(&self.truncations);
-        collections.push(&self.no_truncations);
-
-        std::result::Result::Ok(collections)
-    }
-}
-
-impl ParallelAccumulator {
-    /// Number of fields in the accumulator of type DashSet<String>
-    pub const NUM_FIELDS: usize = 2;
-
-    pub fn num_truncations(&self) -> usize {
-        self.truncations.len()
-    }
-}
-
-pub fn write_results(accumulator: &ParallelAccumulator) {
-    [&accumulator.truncations, &accumulator.no_truncations]
-        .par_iter()
-        .zip([TRUNCATIONS, TRUNCATION_FREE].par_iter())
-        .for_each(|(acc, path)| write_objs(acc, path));
 }

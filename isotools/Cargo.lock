@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "clap",
  "config",
@@ -1186,20 +1186,17 @@ dependencies = [
 
 [[package]]
 name = "iso-utr"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
- "anyhow",
  "clap",
- "config",
  "dashmap",
+ "genepred",
  "hashbrown 0.16.1",
- "iso-pack",
  "log",
  "num_cpus",
+ "packbed",
  "rayon",
- "serde_json",
  "simple_logger",
- "tempfile",
 ]
 
 [[package]]

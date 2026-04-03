@@ -189,6 +189,7 @@ pub struct IntronArgs {
     pub intron_freq_threshold: f32,
 
     #[arg(
+        short = 'M',
         long = "maxent_min_ss_signal",
         required = false,
         value_name = "FLOAT",
