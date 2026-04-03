@@ -77,4 +77,15 @@ pub struct Args {
         default_value = "retention_classification"
     )]
     pub prefix: String,
+
+    #[arg(
+        long = "outdir",
+        short = 'o',
+        required = false,
+        value_name = "PATH",
+        num_args = 1,
+        help = "Path to output directory",
+        default_value = "."
+    )]
+    pub outdir: PathBuf,
 }

@@ -62,11 +62,11 @@ pub struct Args {
         short = 'p',
         long = "prefix",
         required = false,
-        value_name = "PATH",
+        value_name = "PREFIX",
         help = "Prefix for output files",
         default_value = "isotools"
     )]
-    pub prefix: PathBuf,
+    pub prefix: String,
 
     #[arg(
         long = "outdir",

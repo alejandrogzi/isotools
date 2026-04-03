@@ -78,7 +78,8 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
         );
     });
 
-    let mut writer = BufWriter::new(File::create(format!("{}.tsv", args.prefix)).unwrap());
+    let file = args.outdir.join(format!("{}.retentions.tsv", args.prefix));
+    let mut writer = BufWriter::new(File::create(file).unwrap());
     for schema in accumulator.into_iter() {
         writer
             .write_all(&schema)

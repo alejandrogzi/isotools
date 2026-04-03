@@ -71,9 +71,7 @@ pub fn detect_truncations(mut args: Args) -> Result<(), Box<dyn std::error::Erro
         );
     }
 
-    let file = args
-        .outdir
-        .join(format!("{}.truncation.tsv", args.prefix.display()));
+    let file = args.outdir.join(format!("{}.truncation.tsv", args.prefix));
     let mut writer = BufWriter::new(File::create(file).unwrap());
 
     accumulator.lines.into_iter().for_each(|line| {
