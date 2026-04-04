@@ -74,7 +74,7 @@ pub struct Args {
         required = false,
         value_name = "PATH",
         help = "Prefix for output files",
-        default_value = "retention_classification"
+        default_value = "isotools"
     )]
     pub prefix: String,
 

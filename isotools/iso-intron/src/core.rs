@@ -62,10 +62,26 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
         let binding = HashSet::new();
         let banned = blacklist.get(chr.as_bytes()).unwrap_or(&binding);
 
+        let lapper = Lapper::new(vec![Iv {
+            start: 0,
+            stop: 0,
+            val: (),
+        }]);
+
         // INFO: necessary to keep it strand-aware -> avoids retentions on the wrong strand
-        let local_index = index
-            .get(chr.as_bytes())
-            .unwrap_or_else(|| panic!("ERROR: Could not find introns for chromosome -> {chr:?}!"));
+        let local_index = index.get(chr.as_bytes()).unwrap_or_else(|| {
+            // INFO: check if intron collection is empty -> input was empty
+            if reference_introns.is_empty() {
+                log::warn!(
+                    "WARN: No introns found in input -> {}. All reads will be free of IRs!",
+                    args.introns.display()
+                );
+                return &lapper;
+            } else {
+                log::error!("ERROR: Could not find introns for chromosome -> {chr:?}!");
+                std::process::exit(1);
+            }
+        });
 
         process_components(
             components,
@@ -300,7 +316,7 @@ impl Schema<'_> {
             std::str::from_utf8(&self.status).unwrap_or("NULL")
         ));
         body.push_str(&format!(
-            "- code: {} [R: retention, T: RT retention, X: has RT intron, A: no events]<br>",
+            "- code: {} [R: retention, K: RT retention, X: has RT intron, A: no events]<br>",
             std::str::from_utf8(&self.code).unwrap_or("NULL")
         ));
         body.push_str(&format!("- events: {}<br>", self.events));
@@ -393,7 +409,9 @@ fn detect_rt_intron<'a>(
             if !rt {
                 rt = true;
                 // INFO: add 'X' to code representing that read has RT intron
-                schema.code.push(b'X');
+                if !schema.code.contains(&b'X') {
+                    schema.code.push(b'X');
+                }
 
                 if schema.status != b"RETENTION" {
                     schema.status = b"RETENTION".to_vec();
@@ -458,14 +476,16 @@ fn detect_retention<'a, 'b>(
             });
 
             match info.support {
-                // INFO: add 'T' to code representing that read has true RT intron
+                // INFO: add 'T' to code representing that read retains true RT intron
                 SupportType::StrongRT | SupportType::WeakRT => {
-                    schema.code.push(b'T');
+                    if !schema.code.contains(&b'K') {
+                        schema.code.push(b'K');
+                    }
                     schema.fr_html.push(info);
                 }
                 SupportType::Unclear | SupportType::Splicing => {
                     if schema.events == 0 {
-                        // INFO: add 'R' to code representing that read has RT intron
+                        // INFO: add 'R' to code representing that reads retains a true intron
                         schema.code.push(b'R');
                         flawed = true;
 
@@ -483,5 +503,6 @@ fn detect_retention<'a, 'b>(
 
     if !flawed {
         schema.code.push(b'A');
+        schema.status = b"PASS".to_vec();
     }
 }
