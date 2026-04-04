@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "iso-intron"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "clap",
  "dashmap",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "clap",
  "config",
