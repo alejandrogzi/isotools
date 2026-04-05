@@ -138,7 +138,6 @@ pub struct ParallelAccumulator {
     pub fusions: DashSet<String>,
     pub review: DashSet<String>,
     pub passes: DashSet<String>,
-    pub fakes: DashSet<String>,
     pub descriptor: DashMap<String, FusionSchema>,
 }
 
@@ -161,7 +160,6 @@ impl Default for ParallelAccumulator {
             fusions: DashSet::new(),
             review: DashSet::new(),
             passes: DashSet::new(),
-            fakes: DashSet::new(),
             descriptor: DashMap::new(),
         }
     }
@@ -186,7 +184,6 @@ impl ParallelCollector for ParallelAccumulator {
         collections.push(&self.fusions);
         collections.push(&self.passes);
         collections.push(&self.review);
-        collections.push(&self.fakes);
 
         std::result::Result::Ok(collections)
     }
@@ -194,7 +191,7 @@ impl ParallelCollector for ParallelAccumulator {
 
 impl ParallelAccumulator {
     /// Number of fields in the accumulator of type DashSet<String>
-    pub const NUM_FIELDS: usize = 4;
+    pub const NUM_FIELDS: usize = 3;
 
     /// Add items to the accumulator
     ///
@@ -230,7 +227,6 @@ impl ParallelAccumulator {
         fusions: Vec<String>,
         passes: Vec<String>,
         review: Option<Vec<String>>,
-        fakes: Vec<String>,
         descriptor: HashMap<String, FusionSchema>,
     ) {
         fusions.into_iter().for_each(|fusion| {
@@ -244,12 +240,6 @@ impl ParallelAccumulator {
                 self.review.insert(r);
             });
         }
-
-        if !fakes.is_empty() {
-            fakes.into_iter().for_each(|fake| {
-                self.fakes.insert(fake);
-            });
-        };
 
         descriptor.into_iter().for_each(|(k, v)| {
             self.descriptor.insert(k, v);

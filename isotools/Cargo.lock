@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "iso-fusion"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "clap",
  "config",

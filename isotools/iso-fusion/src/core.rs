@@ -101,7 +101,6 @@ pub fn detect_fusions(args: Args) {
             args.prefix.join(FUSIONS),
             args.prefix.join(FUSION_FREE),
             args.prefix.join(FUSION_REVIEW),
-            args.prefix.join(FUSION_FAKES),
         ],
         None,
     );
@@ -202,7 +201,7 @@ fn process_components(
                 matches!(role.as_slice(), b"reference")
             });
 
-        let (fusions, no_fusions, fake_fusions, review, descriptor, is_dirty) = process_component(
+        let (fusions, no_fusions, review, descriptor, is_dirty) = process_component(
             reference_regions,
             query_regions,
             reference_map,
@@ -213,7 +212,7 @@ fn process_components(
         )
         .unwrap_or_default();
 
-        accumulator.add(fusions, no_fusions, review, fake_fusions, descriptor);
+        accumulator.add(fusions, no_fusions, review, descriptor);
 
         if is_dirty {
             counter.inc_dirty(1);
@@ -266,7 +265,6 @@ fn process_component(
 ) -> Option<(
     Vec<String>,
     Vec<String>,
-    Vec<String>,
     Option<Vec<String>>,
     HashMap<String, FusionSchema>,
     bool,
@@ -279,7 +277,6 @@ fn process_component(
     let mut descriptor = HashMap::new();
 
     let mut fusions = Vec::new();
-    let mut fake_fusions = Vec::new();
     let mut no_fusions = Vec::new();
 
     let mut genes = HashSet::new();
@@ -328,7 +325,6 @@ fn process_component(
             &mut counter,
             &mut no_fusions,
             &mut fusions,
-            &mut fake_fusions,
             match_type,
             tag,
         );
@@ -349,11 +345,11 @@ fn process_component(
         // INFO: mark all queries as dirty and submit them for review
         if counter.get_real_ratio() >= threshold {
             let review = recover_component(&mut query_regions, &mut descriptor);
-            return Some((vec![], vec![], vec![], Some(review), descriptor, true));
+            return Some((vec![], vec![], Some(review), descriptor, true));
         }
     }
 
-    Some((fusions, no_fusions, fake_fusions, None, descriptor, false))
+    Some((fusions, no_fusions, None, descriptor, false))
 }
 
 /// Recover reads from a fusion component
@@ -521,12 +517,11 @@ fn identify_fusions(
     counter: &mut LocalCounter,
     no_fusions: &mut Vec<String>,
     fusions: &mut Vec<String>,
-    fake_fusions: &mut Vec<String>,
     match_type: MatchType,
-    tag: bool,
+    _tag: bool,
 ) {
     query_regions.iter_mut().for_each(|query| {
-        let query_name =
+        let mut query_name =
             unsafe { std::str::from_utf8_unchecked(query.name().unwrap()) }.to_string();
         let query_exons = query.exons().clone();
         let query_introns = query.introns().clone();
@@ -578,16 +573,19 @@ fn identify_fusions(
                 // fake_fusion_count += 1.0;
                 // INFO: append fake tag to read {:FK}
 
-                if tag {
-                    let name = format!("{}{SEP}FK", query_name);
-                    query.set_name(Some(name.as_bytes().to_vec()));
-                }
+                // if tag {
+                query_name = format!("{}{SEP}FK", query_name);
+                query.set_name(Some(query_name.as_bytes().to_vec()));
+                // }
 
                 let query_line =
                     unsafe { std::str::from_utf8_unchecked(&query.to_bed::<Bed12>()) }.to_string();
 
-                fake_fusions.push(query_line);
+                no_fusions.push(query_line);
                 schema.is_fused_read = false;
+
+                descriptor.insert(query_name, schema);
+                return;
             }
         } else {
             let query_line =
