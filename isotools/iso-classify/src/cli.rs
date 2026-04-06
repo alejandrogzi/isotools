@@ -173,7 +173,7 @@ pub struct IntronArgs {
         value_name = "FLOAT",
         num_args = 1,
         help = "SpliceAI minimum splice signal threshold",
-        default_value_t = 0.01
+        default_value_t = 0.02
     )]
     pub spliceai_min_ss_signal: f32,
 

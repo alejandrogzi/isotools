@@ -1,6 +1,6 @@
 [package]
 name = "iso-intron"
-version = "0.0.9"
+version = "0.0.10"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "detect intron retentions on iso-seq reads"
 keywords = ["intron", "retention", "transcript", "isoseq"]

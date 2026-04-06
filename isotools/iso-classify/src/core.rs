@@ -584,8 +584,8 @@ pub fn __veredict(
                             SpanRepeat::Null => {
                                 // INFO: UTR TOGA2 support with small repeats but not within
                                 // INFO: test spliceAi score and decide
-                                if descriptor.splice_ai_donor >= 0.001
-                                    && descriptor.splice_ai_acceptor >= 0.001
+                                if descriptor.splice_ai_donor >= spliceai_min_ss_signal
+                                    && descriptor.splice_ai_acceptor >= spliceai_min_ss_signal
                                 {
                                     descriptor.support = SupportType::Splicing;
                                 } else {
@@ -614,8 +614,8 @@ pub fn __veredict(
                             } else {
                                 // INFO: low frequency RT intron -> spliceAi scores decide
                                 // strong/weak
-                                if descriptor.splice_ai_donor >= 0.001
-                                    && descriptor.splice_ai_acceptor >= 0.001
+                                if descriptor.splice_ai_donor >= spliceai_min_ss_signal
+                                    && descriptor.splice_ai_acceptor >= spliceai_min_ss_signal
                                 {
                                     descriptor.support = SupportType::WeakRT;
                                 } else {
@@ -635,16 +635,29 @@ pub fn __veredict(
                     >= intron_frequency_threshold)
                     || ((descriptor.max_ent_donor >= maxent_min_ss_signal
                         && descriptor.max_ent_acceptor >= maxent_min_ss_signal)
-                        && (descriptor.splice_ai_donor > 0.0
-                            && descriptor.splice_ai_acceptor > 0.0))
+                        && (descriptor.splice_ai_donor > 0.01
+                            && descriptor.splice_ai_acceptor > 0.01))
                 {
                     // WARN: how do we deal with 1/2 (50%) cases?
                     // INFO: new branch for MaxEnt only -> not trusting it alone
                     // INFO: here we test if maxEnt is significant + if there is
                     // INFO: spliceAi signal [> 0.0]
-                    descriptor.support = SupportType::Splicing;
+                    if descriptor.splice_u_type == USpliceType::U2
+                        || descriptor.splice_u_type == USpliceType::U12
+                    {
+                        descriptor.support = SupportType::Splicing;
+                    } else {
+                        // INFO: intron type is unknown but is high frequency OR has ss signal -> unclear
+                        descriptor.support = SupportType::Unclear;
+                    }
                 } else {
-                    descriptor.support = SupportType::Unclear;
+                    // INFO: if intron is U12 -> unclear directly
+                    if descriptor.splice_u_type == USpliceType::U12 {
+                        descriptor.support = SupportType::Unclear;
+                    } else {
+                        // INFO: intron is U2 or unknown + low freq + low ss signal
+                        descriptor.support = SupportType::Artifact
+                    }
                 }
             }
         });
@@ -1487,6 +1500,7 @@ pub enum SupportType {
     StrongRT,
     WeakRT,
     Unclear,
+    Artifact,
 }
 
 impl std::fmt::Display for SupportType {
@@ -1496,6 +1510,7 @@ impl std::fmt::Display for SupportType {
             SupportType::StrongRT => write!(f, "STRONG_RT"),
             SupportType::WeakRT => write!(f, "WEAK_RT"),
             SupportType::Unclear => write!(f, "UNCLEAR"),
+            SupportType::Artifact => write!(f, "ARTIFACT"),
         }
     }
 }
@@ -1509,14 +1524,15 @@ impl std::str::FromStr for SupportType {
             "STRONG_RT" => Ok(SupportType::StrongRT),
             "WEAK_RT" => Ok(SupportType::WeakRT),
             "UNCLEAR" => Ok(SupportType::Unclear),
+            "ARTIFACT" => Ok(SupportType::Artifact),
             _ => Err("ERROR: Cannot parse support type!".into()),
         }
     }
 }
 
-/// Support type
+/// Span repeat type
 ///
-/// This enum is used to store the type of support.
+/// This enum is used to store the type of span repeat.
 ///
 /// # Example
 ///
