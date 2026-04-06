@@ -320,6 +320,7 @@ pub enum SupportType {
     StrongRT,
     WeakRT,
     Unclear,
+    Artifact,
 }
 
 impl std::fmt::Display for SupportType {
@@ -329,6 +330,7 @@ impl std::fmt::Display for SupportType {
             SupportType::StrongRT => write!(f, "STRONG_RT"),
             SupportType::WeakRT => write!(f, "WEAK_RT"),
             SupportType::Unclear => write!(f, "UNCLEAR"),
+            SupportType::Artifact => write!(f, "ARTIFACT"),
         }
     }
 }
@@ -342,6 +344,7 @@ impl std::str::FromStr for SupportType {
             "STRONG_RT" => Ok(SupportType::StrongRT),
             "WEAK_RT" => Ok(SupportType::WeakRT),
             "UNCLEAR" => Ok(SupportType::Unclear),
+            "ARTIFACT" => Ok(SupportType::Artifact),
             _ => Err("ERROR: Cannot parse support type!".into()),
         }
     }

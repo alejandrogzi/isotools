@@ -316,7 +316,7 @@ impl Schema<'_> {
             std::str::from_utf8(&self.status).unwrap_or("NULL")
         ));
         body.push_str(&format!(
-            "- code: {} [R: retention, K: RT retention, X: has RT intron, A: no events]<br>",
+            "- code: {} [R: retention, K: RT retention, X: has RT intron, G: retains artifact, A: no events]<br>",
             std::str::from_utf8(&self.code).unwrap_or("NULL")
         ));
         body.push_str(&format!("- events: {}<br>", self.events));
@@ -476,10 +476,17 @@ fn detect_retention<'a, 'b>(
             });
 
             match info.support {
-                // INFO: add 'T' to code representing that read retains true RT intron
+                // INFO: add 'K' to code representing that read retains true RT intron
                 SupportType::StrongRT | SupportType::WeakRT => {
                     if !schema.code.contains(&b'K') {
                         schema.code.push(b'K');
+                    }
+                    schema.fr_html.push(info);
+                }
+                // INFO: add 'G' to code representing that read retains artifact intron
+                SupportType::Artifact => {
+                    if !schema.code.contains(&b'G') {
+                        schema.code.push(b'G');
                     }
                     schema.fr_html.push(info);
                 }
