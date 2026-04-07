@@ -14,7 +14,7 @@
 use clap::{ArgAction, ArgGroup, Parser};
 use std::path::PathBuf;
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[clap(
     name="iso-orphan",
     author = env!("CARGO_PKG_AUTHORS"),
@@ -34,31 +34,29 @@ use std::path::PathBuf;
         ArgGroup::new("guided")
         .required(true)
         .multiple(true)
-        .args(&["toga", "overlapping"])
+        .args(&["refs", "overlapping"])
     )
 )]
 pub struct Args {
     #[arg(
-        short = 'b',
-        long = "bed",
+        short = 'q',
+        long = "query",
         required = true,
-        value_name = "PATHS",
-        value_delimiter = ',',
-        num_args = 1..,
-        help = "Paths to BED12 files delimited by comma"
+        value_name = "PATH",
+        help = "Path to BED12 file"
     )]
-    pub bed: Vec<PathBuf>,
+    pub query: PathBuf,
 
     #[arg(
-        short = 't',
-        long = "toga",
+        short = 'r',
+        long = "ref",
         required = false,
         value_name = "PATHS",
         value_delimiter = ',',
         num_args = 1..,
-        help = "Paths to TOGA BED12 files delimited by comma"
+        help = "Paths to reference BED12 files delimited by comma"
     )]
-    pub toga: Option<Vec<PathBuf>>,
+    pub refs: Option<Vec<PathBuf>>,
 
     #[arg(
         short = 'A',
@@ -101,7 +99,7 @@ pub struct Args {
     pub min_read_num_denovo: usize,
 
     #[arg(
-        short = 'p',
+        short = 'P',
         long = "min-discard-percent",
         help = "Threshold for minimum percentage of discards to apply splice match rescueing",
         value_name = "NUM",
@@ -120,14 +118,14 @@ pub struct Args {
     pub outdir: PathBuf,
 
     #[arg(
-        short = 'n',
-        long = "name",
+        short = 'p',
+        long = "prefix",
         help = "Name of the output file without any extension",
         value_name = "NAME",
         required = false,
         default_value = "output"
     )]
-    pub name: String,
+    pub prefix: String,
 
     #[arg(
         short = 't',

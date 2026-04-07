@@ -1,17 +1,17 @@
 [package]
 name = "iso-orphan"
-authors.workspace = true
+version = "0.0.2"
+authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
+description = "detect orphan reads in isoseq data"
 license.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-version.workspace = true
 
 [dependencies]
-iso-pack = { path = "../iso-pack" }
-config.workspace = true
 dashmap.workspace = true
 rayon.workspace = true
 log.workspace = true
 clap.workspace = true
 num_cpus.workspace = true
 simple_logger.workspace = true
+genepred.workspace = true
+packbed.workspace = true

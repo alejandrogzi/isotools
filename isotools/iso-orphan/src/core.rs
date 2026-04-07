@@ -13,18 +13,22 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::{
+    fs::File,
+    io::{BufWriter, Write},
+};
 
 use crate::{
     cli::{Args, Mode},
     utils::*,
 };
 
-use config::{get_progress_bar, par_write_results, OverlapType};
 use dashmap::DashMap;
-use packbed::{packbed, BedPackage, GenePred, RefGenePred};
+use genepred::{Bed12, GenePred};
+use packbed::{OverlapType, Role};
 use rayon::prelude::*;
 
-pub type Components = DashMap<String, Vec<Box<dyn BedPackage>>>;
+pub type Components = DashMap<String, Vec<Vec<GenePred>>>;
 
 /// Detects orphans in a dataset of reads
 ///
@@ -59,7 +63,7 @@ pub type Components = DashMap<String, Vec<Box<dyn BedPackage>>>;
 /// __detect_orphans(args);
 /// ```
 pub fn __detect_orphans(args: Args) {
-    log::info!("INFO: Detecting orphans in dataset -> {:?}", args.bed);
+    log::info!("INFO: Detecting orphans in dataset -> {:?}", args.query);
 
     let mode = Mode::from(&args);
 
@@ -73,10 +77,16 @@ pub fn __detect_orphans(args: Args) {
         Mode::Guided => {
             log::info!("INFO: Running using guided mode");
 
-            let toga = args.toga.unwrap_or_else(|| {
+            let mut inputs = args.refs.unwrap_or_else(|| {
                 log::error!("ERROR: No TOGA file provided while using reference guided mode!");
                 std::process::exit(1);
             });
+
+            let mut modes = std::iter::repeat(Role::Reference)
+                .take(inputs.len())
+                .collect::<Vec<_>>();
+            modes.extend(vec![Role::Query]);
+            inputs.extend(vec![args.query]);
 
             // CASE: single-exon-component reads with non-single-exon TOGA refs [SOLVED]
             // INFO:  the following case is presented:
@@ -95,23 +105,19 @@ pub fn __detect_orphans(args: Args) {
             // Note that the same case but with CDS overlap is not a problem and
             // represents a case of a real transcription of a shorter isoform or a
             // truncated one.
-            let tracks = packbed(
-                toga,
-                Some(args.bed),
-                OverlapType::CDS,
-                packbed::PackMode::Default,
-            )
-            .unwrap_or_else(|e| {
-                log::error!("ERROR: Failed to packed reads: {:?}", e);
-                std::process::exit(1);
-            });
+            let tracks =
+                packbed::pack(inputs, vec![Role::Reference, Role::Query], OverlapType::CDS)
+                    .unwrap_or_else(|e| {
+                        log::error!("ERROR: Failed to packed reads: {:?}", e);
+                        std::process::exit(1);
+                    });
 
             __process(
                 tracks,
                 &mode,
                 args.min_read_num_denovo,
                 outdir,
-                args.name,
+                args.prefix,
                 args.min_discard_percentage,
             );
         }
@@ -170,7 +176,7 @@ pub fn __detect_orphans(args: Args) {
             //
             // SOLVED: CDS overlap mode would make isolate read1, then will be discarded
             // because it is a single-exon component.
-            let tracks = packbed(args.bed, None, OverlapType::CDS, packbed::PackMode::Query)
+            let tracks = packbed::pack(vec![args.query], vec![Role::Query], OverlapType::CDS)
                 .unwrap_or_else(|e| {
                     log::error!("ERROR: Failed to packed reads: {:?}", e);
                     std::process::exit(1);
@@ -181,7 +187,7 @@ pub fn __detect_orphans(args: Args) {
                 &mode,
                 args.min_read_num_denovo,
                 outdir,
-                args.name,
+                args.prefix,
                 args.min_discard_percentage,
             );
         }
@@ -225,8 +231,6 @@ fn __process(
     filename: String,
     min_discard_percentage: f32,
 ) {
-    let pb = get_progress_bar(tracks.len() as u64, "Processing...");
-
     let accumulator = ParallelAccumulator::default();
     let counter = ParallelCounter::default();
 
@@ -244,23 +248,25 @@ fn __process(
             min_read_num_denovo,
             min_discard_percentage,
         );
-
-        pb.inc(1);
     });
 
-    pb.finish_and_clear();
     log::info!("INFO: Orphans found: {}", accumulator.num_orphans());
 
     __report_stats(&counter);
 
-    let orphan_free = format!("{}.orphan_free.bed", filename);
+    let pass = format!("{}.orphan_free.bed", filename);
     let orphans = format!("{}.orphans.bed", &filename);
 
-    par_write_results(
-        &accumulator,
-        vec![outdir.join(orphan_free), outdir.join(orphans)],
-        None,
-    );
+    let mut p_writer = BufWriter::new(File::create(outdir.join(pass)).unwrap());
+    let mut o_writer = BufWriter::new(File::create(outdir.join(orphans)).unwrap());
+
+    accumulator.keep.into_iter().for_each(|line| {
+        p_writer.write_all(&line).unwrap();
+    });
+
+    accumulator.orphans.into_iter().for_each(|line| {
+        o_writer.write_all(&line).unwrap();
+    });
 }
 
 /// Parallel processing of components
@@ -293,31 +299,46 @@ fn __process(
 /// __process_components(components, &accumulator, &counter, &mode, min_read_num_denovo);
 /// ```
 fn __process_components(
-    components: Vec<Box<dyn BedPackage>>,
+    components: Vec<Vec<GenePred>>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     mode: &Mode,
     min_read_num_denovo: usize,
     min_discard_percentage: f32,
 ) {
-    components.into_par_iter().for_each(|comp| match mode {
+    components.into_par_iter().for_each(|component| match mode {
         Mode::Guided => {
-            let comp = comp
-                .as_any_owned()
-                .downcast::<(RefGenePred, Vec<GenePred>)>()
-                .expect("ERROR: Could not downcast to RefGenePred and GenePred!");
+            let (refs, queries) = component.into_iter().partition(|record| {
+                let role = record
+                    .get_extra(b"role")
+                    .unwrap_or_else(|| panic!("ERROR: Could not get role from record!"))
+                    .clone()
+                    .into_scalar();
 
-            let (keep, orphans) =
-                guided(comp, counter, min_read_num_denovo, min_discard_percentage);
+                role == Some(b"reference".to_vec())
+            });
+
+            let (keep, orphans) = guided(
+                refs,
+                queries,
+                counter,
+                min_read_num_denovo,
+                min_discard_percentage,
+            );
             accumulator.add(keep, orphans);
         }
         Mode::DeNovo => {
-            let comp = comp
-                .as_any_owned()
-                .downcast::<(Vec<GenePred>, Vec<GenePred>)>()
-                .expect("ERROR: Could not downcast to GenePred and GenePred!");
+            let (_refs, queries) = component.into_iter().partition(|record| {
+                let role = record
+                    .get_extra(b"role")
+                    .unwrap_or_else(|| panic!("ERROR: Could not get role from record!"))
+                    .clone()
+                    .into_scalar();
 
-            let (keep, orphans) = self_guided(comp, counter, min_read_num_denovo);
+                role == Some(b"reference".to_vec())
+            });
+
+            let (keep, orphans) = self_guided(queries, counter, min_read_num_denovo);
             accumulator.add(keep, orphans);
         }
     });
@@ -349,19 +370,17 @@ fn __process_components(
 /// ```
 #[allow(clippy::boxed_local)]
 fn guided(
-    components: Box<(RefGenePred, Vec<GenePred>)>,
+    references: Vec<GenePred>,
+    mut queries: Vec<GenePred>,
     counter: &ParallelCounter,
     min_read_num_denovo: usize,
     min_discard_percentage: f32,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let mut keep = Vec::new();
     let mut orphans = Vec::new();
 
-    let toga = components.0;
-    let mut reads = components.1;
-
     // INFO: single component reads -> no TOGA
-    if toga.reads.is_empty() {
+    if references.is_empty() {
         // CASE: single-exon-component reads [PARTIALLY SOLVED]
         // INFO: the following case is presented:
         //
@@ -389,28 +408,30 @@ fn guided(
         //
         // For a clearer illustration go to HLpteAle1A HAP1_SUPER_1:112,985,006-112,991,219
         // or mm39 chr3:118,192,628-118,376,044 or mm39 chr3:141,166,307-141,389,231
-        do_self_guided_check(&mut reads, counter, min_read_num_denovo);
+        do_self_guided_check(&mut queries, counter, min_read_num_denovo);
     }
 
     // INFO: ask if ANY TOGA is a single-exon
     // INFO: single-exon signifies no introns
-    let is_toga_single_exon = toga
-        .reads
+    let is_reference_single_exon = references
         .iter()
-        .any(|projection| projection.introns.is_empty());
+        .any(|projection| projection.introns().is_empty());
 
-    let mut ref_exons = toga.starts;
-    ref_exons.extend(toga.middles);
+    let reference_exons = references
+        .iter()
+        .flat_map(|record| record.exons())
+        .collect::<Vec<(u64, u64)>>();
 
-    if reads.len() > 1 {
+    if queries.len() > 1 {
         let mut discards = 0; // INFO: only in common branch
-        reads.sort_by(|a, b| a.exon_len.cmp(&b.exon_len));
+        queries.sort_by(|a, b| a.exonic_length().cmp(&b.exonic_length()));
 
-        for read in reads.iter() {
-            let is_single_exon_read = read.introns.is_empty();
+        for read in queries.iter() {
+            let is_single_exon_read = read.introns().is_empty();
+            let line = read.to_bed::<Bed12>();
 
             if is_single_exon_read {
-                if is_toga_single_exon {
+                if is_reference_single_exon {
                     counter.inc_read_se_mc_toga_se();
 
                     // CASE: single-exon read(s) with single-exon TOGA refs
@@ -427,14 +448,17 @@ fn guided(
                     // at least one CDS coordinate + all of them are within TOGA boundaries
                     //
                     // For a clearer illustration go to mm39 chr3:61,269,596-61,278,844
-                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
+                    let is_match = read
+                        .exons()
+                        .iter()
+                        .any(|exon| reference_exons.contains(exon));
 
                     if is_match {
                         log::debug!(
                             "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA single-exon CDS -> keep!",
                             &read,
                         );
-                        keep.push(read.line.clone());
+                        keep.push(line);
                     } else {
                         log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA single-exon CDS -> orphan!", &read);
                         discards += 1;
@@ -457,21 +481,24 @@ fn guided(
                     //
                     // For a clearer illustration go to mm39 chr3:65,014,198-65,019,415
                     // or mm39 chr3:117,366,942-117,374,421
-                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
+                    let is_match = read
+                        .exons()
+                        .iter()
+                        .any(|exon| reference_exons.contains(exon));
 
                     if is_match {
                         log::debug!(
                             "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA multi-exon CDS -> keep!",
                             &read,
                         );
-                        keep.push(read.line.clone());
+                        keep.push(read.to_bed::<Bed12>());
                     } else {
                         log::debug!("INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA multi-exon CDS -> orphan!", &read);
                         discards += 1;
                     }
                 }
             } else {
-                if is_toga_single_exon {
+                if is_reference_single_exon {
                     counter.inc_read_me_mc_toga_se();
                 } else {
                     counter.inc_read_me_mc_toga_me();
@@ -507,10 +534,10 @@ fn guided(
                 //
                 // For a clearer illustration go to mm39 chr3:65,435,178-65,440,499
 
-                // WARN: not making is_toga_single_exon check because it is not needed
+                // WARN: not making is_reference_single_exon check because it is not needed
                 let mut matches = 0;
-                for read_exon in read.exons.iter() {
-                    if ref_exons.contains(read_exon) {
+                for read_exon in read.exons().iter() {
+                    if reference_exons.contains(read_exon) {
                         matches += 1;
                     }
 
@@ -520,7 +547,7 @@ fn guided(
                             &read
                         );
 
-                        keep.push(read.line.clone());
+                        keep.push(line);
                         break;
                     }
                 }
@@ -538,16 +565,19 @@ fn guided(
         }
 
         // INFO: if we are discarding more than 50% of reads, perform splice site matching
-        if (discards as f32) / reads.len() as f32 >= min_discard_percentage {
+        if (discards as f32) / queries.len() as f32 >= min_discard_percentage {
             counter.inc_component_above_discards();
 
-            let ref_exons_flat: BTreeSet<u64> =
-                ref_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
+            let reference_exons_flat: BTreeSet<u64> =
+                reference_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
 
-            for read in reads.iter() {
-                let is_splice_match = read.exons.iter().any(|(exon_start, exon_end)| {
-                    ref_exons_flat.contains(exon_start) || ref_exons_flat.contains(exon_end)
+            for read in queries.iter() {
+                let is_splice_match = read.exons().iter().any(|(exon_start, exon_end)| {
+                    reference_exons_flat.contains(exon_start)
+                        || reference_exons_flat.contains(exon_end)
                 });
+
+                let line = read.to_bed::<Bed12>();
 
                 if is_splice_match {
                     log::debug!(
@@ -556,8 +586,8 @@ fn guided(
                     );
 
                     counter.inc_rescue();
-                    if !keep.contains(&read.line) {
-                        keep.push(read.line.clone());
+                    if !keep.contains(&line) {
+                        keep.push(line);
                     }
                 } else {
                     log::debug!(
@@ -566,31 +596,33 @@ fn guided(
                     );
                     counter.inc_read_no_splice_match();
 
-                    if !orphans.contains(&read.line) {
-                        orphans.push(read.line.clone());
+                    if !orphans.contains(&line) {
+                        orphans.push(line);
                     }
                 }
             }
         } else {
             // INFO: likely real drop
-            for read in reads.iter() {
-                if !orphans.contains(&read.line) && !keep.contains(&read.line) {
-                    orphans.push(read.line.clone());
+            for read in queries.iter() {
+                let line = read.to_bed::<Bed12>();
+                if !orphans.contains(&line) && !keep.contains(&line) {
+                    orphans.push(line);
                     counter.inc_read_no_splice_match();
                 }
             }
         }
     } else {
-        if reads.is_empty() {
+        if queries.is_empty() {
             // INFO: TOGA projection without reads
-            let projections = toga.reads.iter().map(|p| &p.name).collect::<Vec<&String>>();
+            let projections: Vec<Option<&[u8]>> = references.iter().map(|p| p.name()).collect();
             log::trace!("DEBUG: TOGA projection without reads -> {:?}", projections);
         }
 
         // INFO: weird case of TOGA-single-exon and single-read component
-        if is_toga_single_exon {
-            for read in reads {
-                let is_single_exon_read = read.introns.is_empty();
+        if is_reference_single_exon {
+            for read in queries {
+                let is_single_exon_read = read.introns().is_empty();
+                let line = read.to_bed::<Bed12>();
 
                 if is_single_exon_read {
                     counter.inc_read_se_sc_toga_se();
@@ -609,7 +641,10 @@ fn guided(
                     // toga: xxxxXXXXXXxxxx
                     //         ^^|||
                     // read1: xXXXXXxxx <- likely not a supporting transcript
-                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
+                    let is_match = read
+                        .exons()
+                        .iter()
+                        .any(|exon| reference_exons.contains(exon));
 
                     if is_match {
                         log::debug!(
@@ -617,13 +652,13 @@ fn guided(
                             &read,
                         );
 
-                        keep.push(read.line.clone());
+                        keep.push(line);
                     } else {
                         log::debug!(
                             "DEBUG: read: {:?} single-exon and does not match exactly with TOGA single-exon -> orphan!",
                             &read,
                         );
-                        orphans.push(read.line.clone());
+                        orphans.push(line);
                     }
                 } else {
                     counter.inc_read_me_sc_toga_se();
@@ -643,11 +678,12 @@ fn guided(
                     //         ^^|||
                     // read1: xXXXXXxxx-------xxxxx <- likely not a supporting transcript
 
-                    let ref_exons_flat: BTreeSet<u64> =
-                        ref_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
+                    let reference_exons_flat: BTreeSet<u64> =
+                        reference_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
 
-                    let is_splice_match = read.exons.iter().any(|(exon_start, exon_end)| {
-                        ref_exons_flat.contains(exon_start) || ref_exons_flat.contains(exon_end)
+                    let is_splice_match = read.exons().iter().any(|(exon_start, exon_end)| {
+                        reference_exons_flat.contains(exon_start)
+                            || reference_exons_flat.contains(exon_end)
                     });
 
                     if is_splice_match {
@@ -656,14 +692,14 @@ fn guided(
                             &read,
                         );
 
-                        keep.push(read.line.clone());
+                        keep.push(line);
                     } else {
                         log::debug!(
                             "DEBUG: read: {:?} multi-exon does not match any splice site with TOGA single-exon -> orphan!",
                             &read,
                         );
 
-                        orphans.push(read.line.clone());
+                        orphans.push(line);
                     }
                 }
             }
@@ -671,8 +707,9 @@ fn guided(
             // INFO: TOGA multi-exon, single-read component
             // INFO: ask if CDS matches are more than 1 OR is within TOGA boundaries
 
-            for read in reads {
-                let is_single_exon_read = read.introns.is_empty();
+            for read in queries {
+                let is_single_exon_read = read.introns().is_empty();
+                let line = read.to_bed::<Bed12>();
 
                 if is_single_exon_read {
                     counter.inc_read_se_sc_toga_me();
@@ -691,20 +728,23 @@ fn guided(
                     //
                     // Here, we ask for specific exon match otherwise would be hard
                     // to distinguish with a single-exon read component
-                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
+                    let is_match = read
+                        .exons()
+                        .iter()
+                        .any(|exon| reference_exons.contains(exon));
 
                     if is_match {
                         log::debug!(
                             "DEBUG: read: {:?} single-exon in single-read component and match exactly with TOGA multi-exon -> keep!",
                             &read,
                         );
-                        keep.push(read.line.clone());
+                        keep.push(line);
                     } else {
                         log::debug!(
                             "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with TOGA multi-exon -> orphan!",
                             &read,
                         );
-                        orphans.push(read.line.clone());
+                        orphans.push(line);
                     }
                 } else {
                     counter.inc_read_me_sc_toga_me();
@@ -713,7 +753,10 @@ fn guided(
                     //
                     // Here, we ask for at least one specific exon match otherwise would be hard
                     // to distinguish with a single-read component
-                    let is_match = read.exons.iter().any(|exon| ref_exons.contains(exon));
+                    let is_match = read
+                        .exons()
+                        .iter()
+                        .any(|exon| reference_exons.contains(exon));
 
                     if is_match {
                         log::debug!(
@@ -721,13 +764,13 @@ fn guided(
                                 &read,
                             );
 
-                        keep.push(read.line.clone());
+                        keep.push(line);
                     } else {
                         log::debug!(
                                     "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with TOGA multi-exon -> orphan!",
                                     &read,
                                 );
-                        orphans.push(read.line.clone());
+                        orphans.push(line);
                     }
                 }
             }
@@ -763,12 +806,11 @@ fn guided(
 /// ```
 #[allow(clippy::boxed_local)]
 fn self_guided(
-    components: Box<(Vec<GenePred>, Vec<GenePred>)>,
+    mut queries: Vec<GenePred>,
     counter: &ParallelCounter,
     min_read_num_denovo: usize,
-) -> (Vec<String>, Vec<String>) {
-    let mut reads = components.0;
-    do_self_guided_check(&mut reads, counter, min_read_num_denovo)
+) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    do_self_guided_check(&mut queries, counter, min_read_num_denovo)
 }
 
 /// Self-guided mode executor
@@ -799,7 +841,7 @@ fn do_self_guided_check(
     reads: &mut Vec<GenePred>,
     counter: &ParallelCounter,
     min_read_num_denovo: usize,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let mut keep = Vec::new();
     let mut orphans = Vec::new();
 
@@ -843,7 +885,8 @@ fn do_self_guided_check(
         counter.inc_read_se_sc_no_toga();
 
         for read in reads {
-            orphans.push(read.line.clone());
+            let line = read.to_bed::<Bed12>();
+            orphans.push(line);
         }
 
         return (keep, orphans);
@@ -874,7 +917,8 @@ fn do_self_guided_check(
         counter.inc_component_less_than_threshold();
 
         for read in reads {
-            orphans.push(read.line.clone());
+            let line = read.to_bed::<Bed12>();
+            orphans.push(line);
         }
 
         return (keep, orphans);
@@ -882,7 +926,7 @@ fn do_self_guided_check(
 
     // INFO: sorting reads by absolute exonic_len to allow group single-exons
     // INFO: while collection information from bigger reads
-    reads.sort_by(|a, b| a.exon_len.cmp(&b.exon_len));
+    reads.sort_by(|a, b| a.exonic_length().cmp(&b.exonic_length()));
 
     // INFO: establishing exonic matches from reads
     // INFO: { exon -> matches }, then rank by matches and keep if reads with exon > 50% ocurrence
@@ -923,8 +967,10 @@ fn do_self_guided_check(
     // or mm39 chr8:73,174,008-73,179,856
     let mut rank = HashMap::new();
     for read in reads.iter() {
-        for exon in read.exons.iter() {
-            rank.entry(exon).and_modify(|e| *e += 1).or_insert(1);
+        for exon in read.exons().iter() {
+            rank.entry(exon.clone())
+                .and_modify(|e| *e += 1)
+                .or_insert(1);
         }
     }
 
@@ -941,11 +987,12 @@ fn do_self_guided_check(
             );
 
             for read in reads.iter() {
-                if read.exons.contains(exon) {
+                let line = read.to_bed::<Bed12>();
+                if read.exons().contains(exon) {
                     log::debug!("DEBUG: read: {:?} has exon: {:?} -> keep!", read, exon);
 
-                    if !keep.contains(&read.line) {
-                        keep.push(read.line.clone());
+                    if !keep.contains(&line) {
+                        keep.push(line);
                     }
                 } else {
                     log::debug!(
@@ -954,9 +1001,9 @@ fn do_self_guided_check(
                         exon
                     );
 
-                    if !orphans.contains(&read.line) {
+                    if !orphans.contains(&line) {
                         counter.inc_read_de_novo_unsupported();
-                        orphans.push(read.line.clone());
+                        orphans.push(line);
                     }
                 }
             }

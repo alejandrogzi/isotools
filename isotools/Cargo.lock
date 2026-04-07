@@ -1105,14 +1105,14 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.16"
+version = "0.0.2"
 dependencies = [
  "clap",
- "config",
  "dashmap",
- "iso-pack",
+ "genepred",
  "log",
  "num_cpus",
+ "packbed",
  "rayon",
  "simple_logger",
 ]
