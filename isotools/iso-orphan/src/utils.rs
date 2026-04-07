@@ -11,10 +11,8 @@
 //! the assumption that they do not represent a valid source of evidence for transcription.
 //! The process is heavily parallellized to offer fast performance on large datasets.
 
-use std::sync::atomic::{AtomicU32, Ordering};
-
-use config::ParallelCollector;
 use dashmap::DashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Parallel accumulator for the processing function
 ///
@@ -31,8 +29,8 @@ use dashmap::DashSet;
 /// let accumulator = ParallelAccumulator::default();
 /// ```
 pub struct ParallelAccumulator {
-    pub keep: DashSet<String>,
-    pub orphans: DashSet<String>,
+    pub keep: DashSet<Vec<u8>>,
+    pub orphans: DashSet<Vec<u8>>,
 }
 
 /// Default implementation for the parallel accumulator
@@ -50,24 +48,6 @@ impl Default for ParallelAccumulator {
             keep: DashSet::new(),
             orphans: DashSet::new(),
         }
-    }
-}
-
-/// ParallelCollector trait for ParallelAccumulator
-impl ParallelCollector for ParallelAccumulator {
-    /// Get the number of fields in the accumulator
-    fn len(&self) -> usize {
-        ParallelAccumulator::NUM_FIELDS
-    }
-
-    /// Get the a collection of items from the accumulator
-    fn get_collections(&self) -> Result<Vec<&DashSet<String>>, Box<dyn std::error::Error>> {
-        let mut collections = Vec::with_capacity(ParallelAccumulator::NUM_FIELDS);
-
-        collections.push(&self.keep);
-        collections.push(&self.orphans);
-
-        Ok(collections)
     }
 }
 
@@ -91,7 +71,7 @@ impl ParallelAccumulator {
     ///
     /// assert_eq!(accumulator.num_retentions(), 1);
     /// ```
-    pub fn add(&self, keep: Vec<String>, discard: Vec<String>) {
+    pub fn add(&self, keep: Vec<Vec<u8>>, discard: Vec<Vec<u8>>) {
         for item in keep {
             self.keep.insert(item);
         }
