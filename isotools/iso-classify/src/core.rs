@@ -1269,6 +1269,8 @@ pub fn read_iic(path: PathBuf) -> HashMap<String, USpliceType> {
         let splice_type = match splice_type {
             "u2" => USpliceType::U2,
             "u12" => USpliceType::U12,
+            // INFO: SUPER_6:7202593-7202620(-);[o:s] NA tt-AC ... NA NA NA omitted_short
+            "NA" => USpliceType::Unknown,
             _ => panic!("ERROR: Unknown intronIC type -> {splice_type}!"),
         };
 
