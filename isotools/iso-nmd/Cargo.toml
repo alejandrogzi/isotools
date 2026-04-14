@@ -7,7 +7,6 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-config.workspace = true
 dashmap.workspace = true
 rayon.workspace = true
 log.workspace = true

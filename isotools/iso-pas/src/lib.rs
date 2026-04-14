@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Alejandro Gonzales-Irribarren <alejandrxgzi@gmail.com>
+// Distributed under the terms of the Apache License, Version 2.0.
+
 //! Core module for detecting real 3' ends on isoseq reads
 //! Alejandro Gonzales-Irribarren, 2025
 //!
