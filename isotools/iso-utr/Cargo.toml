@@ -20,3 +20,6 @@ hashbrown.workspace = true
 dashmap.workspace = true
 packbed.workspace = true
 genepred.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

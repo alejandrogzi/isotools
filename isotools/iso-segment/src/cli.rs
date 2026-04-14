@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Alejandro Gonzales-Irribarren <alejandrxgzi@gmail.com>
+// Distributed under the terms of the Apache License, Version 2.0.
+
 //! Core module for segmenting reads based on their polyA features
 //! Alejandro Gonzales-Irribarren, 2025
 //!
@@ -186,6 +189,15 @@ pub struct Args {
         action = ArgAction::SetTrue,
     )]
     pub singleton: bool,
+
+    #[arg(
+        short = 'C',
+        long = "cigar",
+        help = "Flag to add CIGAR-corrected (CG) tag to read",
+        value_name = "FLAG",
+        action = ArgAction::SetTrue,
+    )]
+    pub cigar: bool,
 
     #[arg(
         global = true,
