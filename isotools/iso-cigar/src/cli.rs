@@ -12,7 +12,7 @@
 //! A minimap2-aligned transcript can end exactly at an exon boundary
 //! but carry a small 3' soft-clipped sequence that was not placed anywhere.
 //! The hypothesis is: that clipped sequence is the start of the next downstream
-//! exon, but the aligner missed the intron.
+//! exon (or any other downstream), but the aligner missed the intron.
 //!
 //! In short, iso-cigar identifies candidate reads: those ending ±wiggle bp from a
 //! known internal exon boundary, with soft-clip ≥ cutoff; retrieves the sequence of
@@ -70,26 +70,26 @@ pub struct Cli {
     pub outdir: PathBuf,
 
     #[arg(
-        long, 
-        short = 'S', 
-        action = ArgAction::SetTrue, 
+        long,
+        short = 'S',
+        action = ArgAction::SetTrue,
         help = "Split output BAM file by category: extended, aligned"
     )]
     pub split_bam: bool,
 
     #[arg(
-        long, 
-        short = 't', 
-        default_value_t = num_cpus::get(), 
-        help = "Number of threads", 
+        long,
+        short = 't',
+        default_value_t = num_cpus::get(),
+        help = "Number of threads",
         required = false
     )]
     pub threads: usize,
 
     #[arg(
-        long, 
-        short = 'L', 
-        value_enum, 
+        long,
+        short = 'L',
+        value_enum,
         default_value_t = LogLevel::Info
     )]
     pub level: LogLevel,
@@ -119,6 +119,14 @@ pub struct Cli {
         help = "Keep additional corrections"
     )]
     pub keep_additional_corrections: bool,
+
+    #[arg(
+        long = "extend-alignment",
+        short = 'E',
+        action = ArgAction::SetTrue,
+        help = "Allow rescue across successive downstream exons in the same transcript"
+    )]
+    pub extend_alignment: bool,
 }
 
 /// Log level enum for CLI.
@@ -143,5 +151,43 @@ impl From<LogLevel> for LevelFilter {
             LogLevel::Error => LevelFilter::Error,
             LogLevel::Off => LevelFilter::Off,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_extend_alignment_defaults_off() {
+        let cli = Cli::try_parse_from([
+            "iso-cigar",
+            "--bam",
+            "input.bam",
+            "--annotation",
+            "annotation.bed",
+            "--sequence",
+            "genome.fa",
+        ])
+        .unwrap();
+
+        assert!(!cli.extend_alignment);
+    }
+
+    #[test]
+    fn cli_parses_extend_alignment_short_flag() {
+        let cli = Cli::try_parse_from([
+            "iso-cigar",
+            "--bam",
+            "input.bam",
+            "--annotation",
+            "annotation.bed",
+            "--sequence",
+            "genome.fa",
+            "-E",
+        ])
+        .unwrap();
+
+        assert!(cli.extend_alignment);
     }
 }
