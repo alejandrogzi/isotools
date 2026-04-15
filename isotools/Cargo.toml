@@ -17,7 +17,7 @@ authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70.0"
-version = "0.0.19"
+version = "0.0.20"
 
 [workspace.dependencies]
 dashmap = { version = "6", features = ["rayon"] }
@@ -42,6 +42,7 @@ ndarray = "0.16.1"
 noodles-bam = "0.79.0"
 noodles-core = "0.17.0"
 noodles-sam = "0.75.0"
+noodles-csi = "0.47.0"
 memchr = "2.7.4"
 memmap2 = "0.9.4"
 genepred = { version = "0.0.11", features = ["mmap", "rayon", "gzip"] }

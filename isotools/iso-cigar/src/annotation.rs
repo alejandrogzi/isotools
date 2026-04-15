@@ -12,7 +12,7 @@
 //! A minimap2-aligned transcript can end exactly at an exon boundary
 //! but carry a small 3' soft-clipped sequence that was not placed anywhere.
 //! The hypothesis is: that clipped sequence is the start of the next downstream
-//! exon, but the aligner missed the intron.
+//! exon (or any other downstream), but the aligner missed the intron.
 //!
 //! In short, iso-cigar identifies candidate reads: those ending ±wiggle bp from a
 //! known internal exon boundary, with soft-clip ≥ cutoff; retrieves the sequence of
@@ -52,6 +52,22 @@ pub struct Junction {
     pub intron_len: u64,
 }
 
+/// A transcript model in transcript exon order.
+#[derive(Clone, Debug)]
+pub struct TranscriptModel {
+    pub id: usize,
+    pub contig_id: u32,
+    pub strand: Strand,
+    pub exons: Vec<Exon>,
+}
+
+/// Identifies a transcript-aware starting junction.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TranscriptJunctionRef {
+    pub transcript_id: usize,
+    pub upstream_exon_index: usize,
+}
+
 /// Key for looking up junctions by genomic boundary.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BoundaryKey {
@@ -70,12 +86,28 @@ struct JunctionGeometry {
     boundary: u64,
 }
 
+/// Returns intron length between adjacent exons in transcript order.
+pub fn intron_len_between(strand: Strand, upstream: Exon, downstream: Exon) -> Option<u64> {
+    let intron_len = match strand {
+        Strand::Forward => downstream.start.checked_sub(upstream.end)?,
+        Strand::Reverse => upstream.start.checked_sub(downstream.end)?,
+    };
+
+    if intron_len == 0 {
+        None
+    } else {
+        Some(intron_len)
+    }
+}
+
 /// An index of genomic annotations for junction lookup.
 #[derive(Clone, Debug)]
 pub struct AnnotationIndex {
     contigs: Vec<Vec<u8>>,
     contig_ids: HashMap<Vec<u8>, u32>,
+    transcripts: Vec<TranscriptModel>,
     junctions: Vec<Junction>,
+    junction_transcripts: Vec<Vec<TranscriptJunctionRef>>,
     boundaries: HashMap<BoundaryKey, Vec<usize>>,
 }
 
@@ -139,6 +171,19 @@ impl AnnotationIndex {
         &self.contigs[contig_id as usize]
     }
 
+    /// Gets a transcript model by ID.
+    pub fn transcript(&self, transcript_id: usize) -> Option<&TranscriptModel> {
+        self.transcripts.get(transcript_id)
+    }
+
+    /// Gets transcript junction references for a deduplicated junction.
+    pub fn transcript_refs(&self, junction_id: usize) -> &[TranscriptJunctionRef] {
+        self.junction_transcripts
+            .get(junction_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     /// Finds junctions near a genomic boundary.
     ///
     /// # Arguments
@@ -187,7 +232,9 @@ impl AnnotationIndex {
 struct IndexBuilder {
     contigs: Vec<Vec<u8>>,
     contig_ids: HashMap<Vec<u8>, u32>,
+    transcripts: Vec<TranscriptModel>,
     junctions: Vec<Junction>,
+    junction_transcripts: Vec<Vec<TranscriptJunctionRef>>,
     boundaries: HashMap<BoundaryKey, Vec<usize>>,
     seen: HashMap<JunctionGeometry, usize>,
 }
@@ -216,21 +263,18 @@ impl IndexBuilder {
             transcript_exons.reverse();
         }
 
-        for pair in transcript_exons.windows(2) {
+        let transcript_id = self.transcripts.len();
+
+        for (upstream_exon_index, pair) in transcript_exons.windows(2).enumerate() {
             let upstream = pair[0];
             let downstream = pair[1];
             let boundary = match strand {
                 Strand::Forward => upstream.end,
                 Strand::Reverse => upstream.start,
             };
-            let intron_len = match strand {
-                Strand::Forward => downstream.start.saturating_sub(upstream.end),
-                Strand::Reverse => upstream.start.saturating_sub(downstream.end),
-            };
-
-            if intron_len == 0 {
+            let Some(intron_len) = intron_len_between(strand, upstream, downstream) else {
                 continue;
-            }
+            };
 
             let geometry = JunctionGeometry {
                 contig_id,
@@ -240,8 +284,8 @@ impl IndexBuilder {
                 boundary,
             };
 
-            let junction_id = if let Some(id) = self.seen.get(&geometry).copied() {
-                id
+            let (junction_id, is_new) = if let Some(id) = self.seen.get(&geometry).copied() {
+                (id, false)
             } else {
                 let id = self.junctions.len();
                 self.seen.insert(geometry, id);
@@ -254,16 +298,31 @@ impl IndexBuilder {
                     boundary,
                     intron_len,
                 });
-                id
+                self.junction_transcripts.push(Vec::new());
+                (id, true)
             };
 
-            let key = BoundaryKey {
-                contig_id,
-                strand,
-                boundary,
-            };
-            self.boundaries.entry(key).or_default().push(junction_id);
+            self.junction_transcripts[junction_id].push(TranscriptJunctionRef {
+                transcript_id,
+                upstream_exon_index,
+            });
+
+            if is_new {
+                let key = BoundaryKey {
+                    contig_id,
+                    strand,
+                    boundary,
+                };
+                self.boundaries.entry(key).or_default().push(junction_id);
+            }
         }
+
+        self.transcripts.push(TranscriptModel {
+            id: transcript_id,
+            contig_id,
+            strand,
+            exons: transcript_exons,
+        });
 
         Ok(())
     }
@@ -277,7 +336,9 @@ impl IndexBuilder {
         Ok(AnnotationIndex {
             contigs: self.contigs,
             contig_ids: self.contig_ids,
+            transcripts: self.transcripts,
             junctions: self.junctions,
+            junction_transcripts: self.junction_transcripts,
             boundaries: self.boundaries,
         })
     }
@@ -361,5 +422,36 @@ mod tests {
     fn normalized_extension_handles_gzip_suffix() {
         let ext = normalized_extension(Path::new("annotations.gtf.gz")).unwrap();
         assert_eq!(ext, "gtf");
+    }
+
+    #[test]
+    fn intron_len_follows_transcript_order() {
+        let upstream = Exon {
+            start: 100,
+            end: 108,
+        };
+        let downstream = Exon {
+            start: 118,
+            end: 122,
+        };
+
+        assert_eq!(
+            intron_len_between(Strand::Forward, upstream, downstream),
+            Some(10)
+        );
+        assert_eq!(
+            intron_len_between(
+                Strand::Reverse,
+                Exon {
+                    start: 122,
+                    end: 130
+                },
+                Exon {
+                    start: 100,
+                    end: 110
+                }
+            ),
+            Some(12)
+        );
     }
 }

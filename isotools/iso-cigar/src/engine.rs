@@ -12,7 +12,7 @@
 //! A minimap2-aligned transcript can end exactly at an exon boundary
 //! but carry a small 3' soft-clipped sequence that was not placed anywhere.
 //! The hypothesis is: that clipped sequence is the start of the next downstream
-//! exon, but the aligner missed the intron.
+//! exon (or any other downstream), but the aligner missed the intron.
 //!
 //! In short, iso-cigar identifies candidate reads: those ending ±wiggle bp from a
 //! known internal exon boundary, with soft-clip ≥ cutoff; retrieves the sequence of
@@ -20,10 +20,12 @@
 //! soft-clipped bases match the beginning of that downstream exon; if yes: rewrites
 //! the CIGAR to add an N intron gap and converts the soft-clip into a = match
 
+use std::cmp::Reverse;
 use std::collections::{hash_map::Entry, BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
@@ -32,13 +34,15 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use log::{debug, info, warn};
 use noodles_bam as bam;
 use noodles_core::Position;
+use noodles_csi::binning_index::index::reference_sequence::{bin::Chunk, index::LinearIndex, Bin};
+use noodles_csi::binning_index::index::ReferenceSequence as BinningReferenceSequence;
 use noodles_sam as sam;
-use noodles_sam::alignment::io::Write as _;
 use noodles_sam::alignment::record::cigar::{op::Kind, Op};
 use noodles_sam::alignment::record::data::field::Tag;
 use noodles_sam::alignment::record::Flags;
 use noodles_sam::alignment::record_buf::data::field::Value;
 use noodles_sam::alignment::RecordBuf;
+use noodles_sam::alignment::{io::Write as _, Record as _};
 use noodles_sam::header::record::value::{
     map::{
         self, header::sort_order, header::tag as header_tag, program::tag as program_tag, Program,
@@ -46,7 +50,9 @@ use noodles_sam::header::record::value::{
     Map,
 };
 
-use crate::annotation::{AnnotationIndex, Junction, Strand};
+use crate::annotation::{
+    intron_len_between, AnnotationIndex, Junction, Strand, TranscriptJunctionRef, TranscriptModel,
+};
 use crate::cli::Cli;
 use crate::genome::{GenomeSession, GenomeSource};
 use crate::logging::elapsed;
@@ -62,11 +68,12 @@ const TAG_CS_LOWER: Tag = Tag::new(b'c', b's');
 /// Runs the iso-cigar correction pipeline.
 pub fn run(cli: Cli) -> Result<()> {
     info!(
-        "[{}] start threads={} split_bam={} keep_additional={}",
+        "[{}] start threads={} split_bam={} keep_additional={} extend_alignment={}",
         elapsed(),
         cli.threads,
         cli.split_bam,
-        cli.keep_additional_corrections
+        cli.keep_additional_corrections,
+        cli.extend_alignment
     );
 
     fs::create_dir_all(&cli.outdir)
@@ -143,7 +150,7 @@ pub fn run(cli: Cli) -> Result<()> {
             .collect(),
     );
 
-    let config = Config::from(cli);
+    let config = Config::from(cli.clone());
     let worker_count = config.threads.max(1);
     let queue_capacity = (worker_count * 8).max(16);
     let (work_tx, work_rx) = bounded(queue_capacity);
@@ -204,6 +211,11 @@ pub fn run(cli: Cli) -> Result<()> {
         writer.try_finish()?;
     }
 
+    write_bam_index(&extended_path)?;
+    if cli.split_bam {
+        write_bam_index(&aligned_path)?;
+    }
+
     info!(
         "[{}] done input={} corrected={} unchanged={} additional={}",
         elapsed(),
@@ -215,7 +227,20 @@ pub fn run(cli: Cli) -> Result<()> {
 
     if stats.corrected_input == 0 {
         warn!("[{}] no primary alignments were corrected", elapsed());
+
+        // INFO: remove extended if --split-bam is set
+        if cli.split_bam {
+            info!(
+                "[{}] removing extended BAM {} of size 0",
+                elapsed(),
+                extended_path.display()
+            );
+
+            remove_bam_and_index(&extended_path)?;
+        }
     }
+
+    info!("[{}] done!", elapsed());
 
     Ok(())
 }
@@ -356,6 +381,7 @@ struct Config {
     wiggle: u32,
     clip_cutoff: u32,
     keep_additional_corrections: bool,
+    extend_alignment: bool,
 }
 
 impl From<Cli> for Config {
@@ -367,6 +393,7 @@ impl From<Cli> for Config {
             wiggle: value.wiggle,
             clip_cutoff: value.clip_cutoff,
             keep_additional_corrections: value.keep_additional_corrections,
+            extend_alignment: value.extend_alignment,
         }
     }
 }
@@ -378,6 +405,7 @@ struct Engine {
     genome: GenomeSession,
     program_id: String,
     exon_cache: HashMap<(usize, ExonSide), Vec<u8>>,
+    transcript_exon_cache: HashMap<(usize, usize), Vec<u8>>,
 }
 
 impl Engine {
@@ -394,6 +422,7 @@ impl Engine {
             genome: genome_source.session()?,
             program_id,
             exon_cache: HashMap::new(),
+            transcript_exon_cache: HashMap::new(),
         })
     }
 
@@ -443,7 +472,7 @@ impl Engine {
 
         let mut best_by_geometry: HashMap<CorrectionKey, CandidateCorrection> = HashMap::new();
         for junction in &candidate_junctions {
-            if let Some(candidate) = self.try_candidate(&context, junction)? {
+            for candidate in self.try_candidates(&context, junction)? {
                 let key = candidate.key();
                 match best_by_geometry.entry(key) {
                     Entry::Vacant(slot) => {
@@ -483,12 +512,12 @@ impl Engine {
         })
     }
 
-    /// Tries a candidate correction for a record and junction.
-    fn try_candidate(
+    /// Tries candidate corrections for a record and starting junction.
+    fn try_candidates(
         &mut self,
         context: &RecordContext,
         junction: &Junction,
-    ) -> Result<Option<CandidateCorrection>> {
+    ) -> Result<Vec<CandidateCorrection>> {
         let delta = strand_normalized_delta(
             context.strand,
             context.aligned_three_prime_boundary,
@@ -496,15 +525,15 @@ impl Engine {
         );
 
         if delta.unsigned_abs() > u64::from(self.config.wiggle) {
-            return Ok(None);
+            return Ok(Vec::new());
         }
 
         if delta > context.context_len as i64 {
-            return Ok(None);
+            return Ok(Vec::new());
         }
 
         if delta < 0 && delta.unsigned_abs() as usize > context.softclip_len {
-            return Ok(None);
+            return Ok(Vec::new());
         }
 
         let window_start = context.softclip_query_start - context.context_len;
@@ -515,28 +544,165 @@ impl Engine {
             let upstream_span = delta.unsigned_abs() as usize;
             let upstream_seq = self.exon_sequence(junction, ExonSide::Upstream)?;
             if upstream_span > upstream_seq.len() {
-                return Ok(None);
+                return Ok(Vec::new());
             }
 
             let expected = &upstream_seq[upstream_seq.len() - upstream_span..];
             let observed = &window[context.context_len..context.context_len + upstream_span];
             if observed != expected {
-                return Ok(None);
+                return Ok(Vec::new());
             }
         }
 
         let downstream_start = (context.context_len as i64 - delta) as usize;
         if downstream_start > window.len() {
+            return Ok(Vec::new());
+        }
+
+        let (first_rescue_len, first_exon_len) = {
+            let downstream_seq = self.exon_sequence(junction, ExonSide::Downstream)?;
+            (
+                longest_common_prefix(&window[downstream_start..], downstream_seq),
+                downstream_seq.len(),
+            )
+        };
+        if first_rescue_len == 0 {
+            return Ok(Vec::new());
+        }
+
+        let base_path = RescuePath::single(junction.intron_len, first_rescue_len);
+        if !self.config.extend_alignment
+            || first_rescue_len < first_exon_len
+            || downstream_start + first_rescue_len >= window.len()
+        {
+            return Ok(self
+                .build_candidate(context, junction.id, junction.id, delta, &base_path)?
+                .into_iter()
+                .collect());
+        }
+
+        let transcript_refs: Vec<_> = self.annotation.transcript_refs(junction.id).to_vec();
+        if transcript_refs.is_empty() {
+            return Ok(self
+                .build_candidate(context, junction.id, junction.id, delta, &base_path)?
+                .into_iter()
+                .collect());
+        }
+
+        let mut candidates = Vec::with_capacity(transcript_refs.len());
+        for transcript_ref in transcript_refs {
+            let Some(path) = self.walk_transcript_rescue(
+                window,
+                downstream_start,
+                junction,
+                transcript_ref,
+                first_rescue_len,
+                first_exon_len,
+            )?
+            else {
+                continue;
+            };
+
+            if let Some(candidate) = self.build_candidate(
+                context,
+                junction.id,
+                transcript_ref.transcript_id,
+                delta,
+                &path,
+            )? {
+                candidates.push(candidate);
+            }
+        }
+
+        if candidates.is_empty() {
+            Ok(self
+                .build_candidate(context, junction.id, junction.id, delta, &base_path)?
+                .into_iter()
+                .collect())
+        } else {
+            Ok(candidates)
+        }
+    }
+
+    /// Walks downstream exons for a transcript-aware rescue path.
+    fn walk_transcript_rescue(
+        &mut self,
+        window: &[u8],
+        downstream_start: usize,
+        junction: &Junction,
+        transcript_ref: TranscriptJunctionRef,
+        first_rescue_len: usize,
+        first_exon_len: usize,
+    ) -> Result<Option<RescuePath>> {
+        let Some(transcript) = self
+            .annotation
+            .transcript(transcript_ref.transcript_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+
+        if transcript.contig_id != junction.contig_id || transcript.strand != junction.strand {
             return Ok(None);
         }
 
-        let downstream_seq = self.exon_sequence(junction, ExonSide::Downstream)?;
-        let rescue_len = longest_common_prefix(&window[downstream_start..], downstream_seq);
-        if rescue_len == 0 {
+        let Some(&upstream_exon) = transcript.exons.get(transcript_ref.upstream_exon_index) else {
+            return Ok(None);
+        };
+        let Some(&first_downstream_exon) =
+            transcript.exons.get(transcript_ref.upstream_exon_index + 1)
+        else {
+            return Ok(None);
+        };
+
+        if upstream_exon != junction.upstream || first_downstream_exon != junction.downstream {
             return Ok(None);
         }
 
-        let rescued_from_softclip = rescue_len.saturating_sub(delta.max(0) as usize);
+        let mut path = RescuePath::single(junction.intron_len, first_rescue_len);
+        if first_rescue_len < first_exon_len {
+            return Ok(Some(path));
+        }
+
+        let mut query_pos = downstream_start + first_rescue_len;
+        let mut exon_index = transcript_ref.upstream_exon_index + 2;
+        while exon_index < transcript.exons.len() && query_pos < window.len() {
+            let upstream = transcript.exons[exon_index - 1];
+            let downstream = transcript.exons[exon_index];
+            let Some(intron_len) = intron_len_between(transcript.strand, upstream, downstream)
+            else {
+                break;
+            };
+
+            let exon_seq = self.transcript_exon_sequence(&transcript, exon_index)?;
+            let rescue_len = longest_common_prefix(&window[query_pos..], exon_seq);
+            if rescue_len == 0 {
+                break;
+            }
+
+            path.push(intron_len, rescue_len)?;
+            query_pos += rescue_len;
+
+            if rescue_len < exon_seq.len() {
+                break;
+            }
+
+            exon_index += 1;
+        }
+
+        Ok(Some(path))
+    }
+
+    /// Builds a concrete corrected candidate from a rescue path.
+    fn build_candidate(
+        &self,
+        context: &RecordContext,
+        junction_id: usize,
+        tie_breaker: usize,
+        delta: i64,
+        path: &RescuePath,
+    ) -> Result<Option<CandidateCorrection>> {
+        let rescued_from_softclip = path.rescued_total.saturating_sub(delta.max(0) as usize);
         if rescued_from_softclip < self.config.clip_cutoff as usize {
             return Ok(None);
         }
@@ -546,7 +712,7 @@ impl Engine {
             return Ok(None);
         }
 
-        let new_softclip_len = context.softclip_len as i64 - rescue_len as i64 + delta;
+        let new_softclip_len = context.softclip_len as i64 - path.rescued_total as i64 + delta;
         if new_softclip_len < 0 {
             return Ok(None);
         }
@@ -557,8 +723,12 @@ impl Engine {
         } else if transcript_ops.is_empty() {
             return Ok(None);
         }
-        transcript_ops.push(Op::new(Kind::Skip, junction.intron_len as usize));
-        transcript_ops.push(Op::new(Kind::SequenceMatch, rescue_len));
+
+        for segment in &path.segments {
+            transcript_ops.push(Op::new(Kind::Skip, segment.intron_len as usize));
+            transcript_ops.push(Op::new(Kind::SequenceMatch, segment.rescue_len));
+        }
+
         if new_softclip_len > 0 {
             transcript_ops.push(Op::new(Kind::SoftClip, new_softclip_len as usize));
         }
@@ -577,17 +747,23 @@ impl Engine {
             transcript_ops
         };
 
+        let total_intron_len = path.total_intron_len()?;
+        let total_reference_extension = total_intron_len
+            .checked_add(path.rescued_total as u64)
+            .ok_or_else(|| anyhow!("rescued reference span overflow"))?;
         let new_start0 = if context.strand == Strand::Forward {
             context.start0
         } else {
-            reverse_corrected_start(context.start0, junction.intron_len, rescue_len, delta)?
+            reverse_corrected_start(context.start0, total_reference_extension, delta)?
         };
 
         Ok(Some(CandidateCorrection {
-            junction_id: junction.id,
+            junction_id,
             delta,
-            intron_len: junction.intron_len,
+            intron_len: total_intron_len,
             rescued_from_softclip,
+            rescued_exons: path.rescued_exons,
+            tie_breaker,
             new_start0,
             genomic_ops,
         }))
@@ -638,31 +814,65 @@ impl Engine {
     /// Gets the exon sequence for a junction side.
     fn exon_sequence(&mut self, junction: &Junction, side: ExonSide) -> Result<&Vec<u8>> {
         let key = (junction.id, side);
-        match self.exon_cache.entry(key) {
-            Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => {
-                let exon = match side {
-                    ExonSide::Upstream => junction.upstream,
-                    ExonSide::Downstream => junction.downstream,
-                };
-                let contig = self.annotation.contig_name(junction.contig_id);
-                let mut seq = self
-                    .genome
-                    .fetch(contig, exon.start, exon.end)
-                    .with_context(|| {
-                        format!(
-                            "failed to fetch exon {}:{}-{}",
-                            String::from_utf8_lossy(contig),
-                            exon.start,
-                            exon.end
-                        )
-                    })?;
-                if junction.strand == Strand::Reverse {
-                    seq = reverse_complement(&seq);
-                }
-                Ok(entry.insert(seq))
-            }
+        if !self.exon_cache.contains_key(&key) {
+            let exon = match side {
+                ExonSide::Upstream => junction.upstream,
+                ExonSide::Downstream => junction.downstream,
+            };
+            let seq = self.fetch_exon_sequence(
+                junction.contig_id,
+                junction.strand,
+                exon,
+                "junction exon",
+            )?;
+            self.exon_cache.insert(key, seq);
         }
+        Ok(self.exon_cache.get(&key).unwrap())
+    }
+
+    /// Gets a transcript exon sequence in transcript orientation.
+    fn transcript_exon_sequence(
+        &mut self,
+        transcript: &TranscriptModel,
+        exon_index: usize,
+    ) -> Result<&Vec<u8>> {
+        let key = (transcript.id, exon_index);
+        if !self.transcript_exon_cache.contains_key(&key) {
+            let exon = transcript.exons[exon_index];
+            let seq = self.fetch_exon_sequence(
+                transcript.contig_id,
+                transcript.strand,
+                exon,
+                "transcript exon",
+            )?;
+            self.transcript_exon_cache.insert(key, seq);
+        }
+        Ok(self.transcript_exon_cache.get(&key).unwrap())
+    }
+
+    fn fetch_exon_sequence(
+        &mut self,
+        contig_id: u32,
+        strand: Strand,
+        exon: crate::annotation::Exon,
+        label: &str,
+    ) -> Result<Vec<u8>> {
+        let contig = self.annotation.contig_name(contig_id);
+        let mut seq = self
+            .genome
+            .fetch(contig, exon.start, exon.end)
+            .with_context(|| {
+                format!(
+                    "failed to fetch {label} {}:{}-{}",
+                    String::from_utf8_lossy(contig),
+                    exon.start,
+                    exon.end
+                )
+            })?;
+        if strand == Strand::Reverse {
+            seq = reverse_complement(&seq);
+        }
+        Ok(seq)
     }
 }
 
@@ -671,6 +881,55 @@ impl Engine {
 enum ExonSide {
     Upstream,
     Downstream,
+}
+
+#[derive(Clone, Debug)]
+struct RescueSegment {
+    intron_len: u64,
+    rescue_len: usize,
+}
+
+#[derive(Clone, Debug)]
+struct RescuePath {
+    segments: Vec<RescueSegment>,
+    rescued_total: usize,
+    rescued_exons: usize,
+}
+
+impl RescuePath {
+    fn single(intron_len: u64, rescue_len: usize) -> Self {
+        Self {
+            segments: vec![RescueSegment {
+                intron_len,
+                rescue_len,
+            }],
+            rescued_total: rescue_len,
+            rescued_exons: 1,
+        }
+    }
+
+    fn push(&mut self, intron_len: u64, rescue_len: usize) -> Result<()> {
+        self.rescued_total = self
+            .rescued_total
+            .checked_add(rescue_len)
+            .ok_or_else(|| anyhow!("rescued length overflow"))?;
+        self.rescued_exons = self
+            .rescued_exons
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("rescued exon count overflow"))?;
+        self.segments.push(RescueSegment {
+            intron_len,
+            rescue_len,
+        });
+        Ok(())
+    }
+
+    fn total_intron_len(&self) -> Result<u64> {
+        self.segments.iter().try_fold(0_u64, |sum, segment| {
+            sum.checked_add(segment.intron_len)
+                .ok_or_else(|| anyhow!("rescued intron length overflow"))
+        })
+    }
 }
 
 /// Outcome of correcting a record.
@@ -840,6 +1099,8 @@ struct CandidateCorrection {
     delta: i64,
     intron_len: u64,
     rescued_from_softclip: usize,
+    rescued_exons: usize,
+    tie_breaker: usize,
     new_start0: u64,
     genomic_ops: Vec<Op>,
 }
@@ -859,11 +1120,12 @@ impl CandidateCorrection {
     }
 
     /// Returns scoring tuple for comparison.
-    fn score_tuple(&self) -> (usize, i64, i64) {
+    fn score_tuple(&self) -> (usize, usize, Reverse<u64>, Reverse<usize>) {
         (
             self.rescued_from_softclip,
-            -(self.delta.unsigned_abs() as i64),
-            -(self.junction_id as i64),
+            self.rescued_exons,
+            Reverse(self.delta.unsigned_abs()),
+            Reverse(self.tie_breaker),
         )
     }
 }
@@ -873,6 +1135,30 @@ impl CandidateCorrection {
 struct CorrectionKey {
     start0: u64,
     cigar: Vec<(u8, u32)>,
+}
+
+const BAI_MIN_SHIFT: u8 = 14;
+const BAI_DEPTH: u8 = 5;
+
+#[derive(Clone, Default)]
+struct ReferenceSequenceIndexBuilder {
+    bins: BTreeMap<usize, Vec<Chunk>>,
+}
+
+impl ReferenceSequenceIndexBuilder {
+    fn add_record(&mut self, start: Position, end: Position, chunk: Chunk) {
+        let bin_id = reg2bin(start, end, BAI_MIN_SHIFT, BAI_DEPTH);
+        push_chunk(self.bins.entry(bin_id).or_default(), chunk);
+    }
+
+    fn build(self) -> BinningReferenceSequence<LinearIndex> {
+        let bins = self
+            .bins
+            .into_iter()
+            .map(|(id, chunks)| (id, Bin::new(chunks)))
+            .collect();
+        BinningReferenceSequence::new(bins, LinearIndex::default(), None)
+    }
 }
 
 /// Removes stale tags from corrected records.
@@ -896,6 +1182,109 @@ fn output_basename(path: &Path) -> Result<String> {
         .ok_or_else(|| anyhow!("cannot determine BAM basename for {}", path.display()))
 }
 
+/// Returns the associated BAM index path (`<bam>.bai`).
+fn bam_index_path(path: &Path) -> PathBuf {
+    let mut value = OsString::from(path.as_os_str());
+    value.push(".bai");
+    PathBuf::from(value)
+}
+
+/// Builds and writes a BAI for a BAM file.
+fn write_bam_index(path: &Path) -> Result<()> {
+    info!(
+        "[{}] write index {}",
+        elapsed(),
+        bam_index_path(path).display()
+    );
+    let index = build_bam_index(path)?;
+    bam::bai::fs::write(bam_index_path(path), &index)
+        .with_context(|| format!("failed to write BAM index for {}", path.display()))?;
+    Ok(())
+}
+
+/// Removes a BAM and its associated index if present.
+fn remove_bam_and_index(path: &Path) -> Result<()> {
+    fs::remove_file(path).with_context(|| format!("failed to remove BAM {}", path.display()))?;
+
+    let index_path = bam_index_path(path);
+    if index_path.exists() {
+        fs::remove_file(&index_path)
+            .with_context(|| format!("failed to remove BAM index {}", index_path.display()))?;
+    }
+
+    Ok(())
+}
+
+/// Builds a BAM index from an output BAM without assuming coordinate sort order.
+fn build_bam_index(path: &Path) -> Result<bam::bai::Index> {
+    let mut reader = bam::io::reader::Builder
+        .build_from_path(path)
+        .with_context(|| format!("failed to open BAM for indexing {}", path.display()))?;
+    let header = reader
+        .read_header()
+        .with_context(|| format!("failed to read BAM header from {}", path.display()))?;
+
+    let mut reference_sequences =
+        vec![ReferenceSequenceIndexBuilder::default(); header.reference_sequences().len()];
+    let mut unplaced_unmapped_record_count = 0_u64;
+    let mut record = bam::Record::default();
+    let mut start_position = reader.get_ref().virtual_position();
+
+    while reader.read_record(&mut record)? != 0 {
+        let end_position = reader.get_ref().virtual_position();
+        let chunk = Chunk::new(start_position, end_position);
+
+        match record_alignment_context(&record)? {
+            Some((reference_sequence_id, start, end, _)) => {
+                if let Some(reference_sequence) = reference_sequences.get_mut(reference_sequence_id)
+                {
+                    reference_sequence.add_record(start, end, chunk);
+                } else {
+                    return Err(anyhow!(
+                        "record reference sequence {reference_sequence_id} exceeds header references"
+                    ));
+                }
+            }
+            None => {
+                unplaced_unmapped_record_count += 1;
+            }
+        }
+
+        start_position = end_position;
+    }
+
+    let reference_sequences = reference_sequences
+        .into_iter()
+        .map(ReferenceSequenceIndexBuilder::build)
+        .collect();
+
+    Ok(bam::bai::Index::builder()
+        .set_reference_sequences(reference_sequences)
+        .set_unplaced_unmapped_record_count(unplaced_unmapped_record_count)
+        .build())
+}
+
+/// Returns the alignment context used for BAM indexing.
+fn record_alignment_context(
+    record: &bam::Record,
+) -> Result<Option<(usize, Position, Position, bool)>> {
+    Ok(
+        match (
+            record.reference_sequence_id().transpose()?,
+            record.alignment_start().transpose()?,
+            record.alignment_end().transpose()?,
+        ) {
+            (Some(reference_sequence_id), Some(start), Some(end)) => Some((
+                reference_sequence_id,
+                start,
+                end,
+                !record.flags().is_unmapped(),
+            )),
+            _ => None,
+        },
+    )
+}
+
 /// Installs program line in BAM header.
 fn install_program_line(header: &mut sam::Header, cli: &Cli) -> Result<String> {
     let mut id = PROGRAM_ID_PREFIX.to_string();
@@ -908,7 +1297,7 @@ fn install_program_line(header: &mut sam::Header, cli: &Cli) -> Result<String> {
     }
 
     let cmdline = format!(
-        "{} --bam {} --annotation {} --sequence {} --outdir {}{}{} --threads {} --wiggle {} --clip-cutoff {} --level {}",
+        "{} --bam {} --annotation {} --sequence {} --outdir {}{}{}{} --threads {} --wiggle {} --clip-cutoff {} --level {}",
         PROGRAM_ID_PREFIX,
         cli.bam.display(),
         cli.annotation.display(),
@@ -917,6 +1306,11 @@ fn install_program_line(header: &mut sam::Header, cli: &Cli) -> Result<String> {
         if cli.split_bam { " --split-bam" } else { "" },
         if cli.keep_additional_corrections {
             " --keep-additional-corrections"
+        } else {
+            ""
+        },
+        if cli.extend_alignment {
+            " --extend-alignment"
         } else {
             ""
         },
@@ -952,15 +1346,9 @@ fn mark_header_unsorted(header: &mut sam::Header) {
 }
 
 /// Calculates corrected start position for reverse strand.
-fn reverse_corrected_start(
-    start0: u64,
-    intron_len: u64,
-    rescue_len: usize,
-    delta: i64,
-) -> Result<u64> {
+fn reverse_corrected_start(start0: u64, reference_extension: u64, delta: i64) -> Result<u64> {
     let shifted = start0
-        .checked_sub(intron_len)
-        .and_then(|value| value.checked_sub(rescue_len as u64))
+        .checked_sub(reference_extension)
         .ok_or_else(|| anyhow!("corrected reverse-strand position underflow"))?;
 
     if delta >= 0 {
@@ -1078,14 +1466,50 @@ fn kind_code(kind: Kind) -> u8 {
     }
 }
 
+/// Adds a chunk to a bin, merging directly adjacent overlaps in file order.
+fn push_chunk(chunks: &mut Vec<Chunk>, chunk: Chunk) {
+    if let Some(last_chunk) = chunks.last_mut() {
+        if chunk.start() <= last_chunk.end() {
+            *last_chunk = Chunk::new(last_chunk.start(), chunk.end());
+            return;
+        }
+    }
+
+    chunks.push(chunk);
+}
+
+/// Maps an alignment interval to its BAI bin.
+fn reg2bin(start: Position, end: Position, min_shift: u8, depth: u8) -> usize {
+    let beg = usize::from(start) - 1;
+    let end = usize::from(end) - 1;
+
+    let mut level = depth;
+    let mut shift = min_shift;
+    let mut offset = ((1 << (depth * 3)) - 1) / 7;
+
+    while level > 0 {
+        if beg >> shift == end >> shift {
+            return offset + (beg >> shift);
+        }
+
+        level -= 1;
+        shift += 3;
+        offset -= 1 << (level * 3);
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::num::NonZeroUsize;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     use super::*;
     use noodles_sam::alignment::record_buf::{Cigar, Sequence};
+    use noodles_sam::header::record::value::{map::ReferenceSequence, Map};
     use tempfile::tempdir;
 
     fn make_record(flags: Flags, start1: usize, cigar: &[Op], seq: &[u8]) -> RecordBuf {
@@ -1121,7 +1545,25 @@ mod tests {
             .collect()
     }
 
-    fn test_engine(annotation_path: &Path, genome_path: &Path) -> Engine {
+    fn test_header() -> sam::Header {
+        sam::Header::builder()
+            .set_reference_sequences(
+                [(
+                    "chr1".into(),
+                    Map::<ReferenceSequence>::new(NonZeroUsize::try_from(512).unwrap()),
+                )]
+                .into_iter()
+                .collect(),
+            )
+            .build()
+    }
+
+    fn test_engine_with_options(
+        annotation_path: &Path,
+        genome_path: &Path,
+        extend_alignment: bool,
+        keep_additional_corrections: bool,
+    ) -> Engine {
         let annotation = Arc::new(AnnotationIndex::load(annotation_path).unwrap());
         let genome = GenomeSource::open(genome_path).unwrap();
         Engine::new(
@@ -1130,13 +1572,28 @@ mod tests {
                 split_bam: false,
                 wiggle: 2,
                 clip_cutoff: 5,
-                keep_additional_corrections: false,
+                keep_additional_corrections,
+                extend_alignment,
             },
             annotation,
             genome,
             "iso-cigar".to_string(),
         )
         .unwrap()
+    }
+
+    fn test_engine(annotation_path: &Path, genome_path: &Path) -> Engine {
+        test_engine_with_options(annotation_path, genome_path, false, false)
+    }
+
+    fn expect_corrected(outcome: CorrectionOutcome) -> (RecordBuf, Vec<RecordBuf>) {
+        match outcome {
+            CorrectionOutcome::Corrected {
+                primary,
+                additional,
+            } => (primary, additional),
+            CorrectionOutcome::Unchanged(_) => panic!("expected corrected record"),
+        }
     }
 
     #[test]
@@ -1183,6 +1640,59 @@ mod tests {
     }
 
     #[test]
+    fn bam_index_path_appends_bai_suffix() {
+        assert_eq!(
+            bam_index_path(Path::new("reads.extended.bam")),
+            PathBuf::from("reads.extended.bam.bai")
+        );
+    }
+
+    #[test]
+    fn write_bam_index_creates_associated_bai() {
+        let temp = tempdir().unwrap();
+        let bam_path = temp.path().join("out.bam");
+        let header = test_header();
+
+        let mut writer = bam::io::Writer::new(File::create(&bam_path).unwrap());
+        writer.write_header(&header).unwrap();
+        writer
+            .write_alignment_record(
+                &header,
+                &make_record(Flags::empty(), 101, &[Op::new(Kind::Match, 8)], b"ACGTACGT"),
+            )
+            .unwrap();
+        writer
+            .write_alignment_record(
+                &header,
+                &make_record(Flags::empty(), 21, &[Op::new(Kind::Match, 8)], b"TTTTGGGG"),
+            )
+            .unwrap();
+        writer.try_finish().unwrap();
+
+        write_bam_index(&bam_path).unwrap();
+
+        let index_path = bam_index_path(&bam_path);
+        assert!(index_path.exists());
+        let index = bam::bai::fs::read(&index_path).unwrap();
+        assert_eq!(index.reference_sequences().len(), 1);
+    }
+
+    #[test]
+    fn remove_bam_and_index_removes_both_files() {
+        let temp = tempdir().unwrap();
+        let bam_path = temp.path().join("out.bam");
+        let bai_path = bam_index_path(&bam_path);
+
+        fs::write(&bam_path, b"bam").unwrap();
+        fs::write(&bai_path, b"bai").unwrap();
+
+        remove_bam_and_index(&bam_path).unwrap();
+
+        assert!(!bam_path.exists());
+        assert!(!bai_path.exists());
+    }
+
+    #[test]
     fn reverse_complement_uppercases_unknowns() {
         assert_eq!(reverse_complement(b"acgtn"), b"NACGT");
     }
@@ -1194,12 +1704,14 @@ mod tests {
     }
 
     #[test]
-    fn candidate_scoring_prefers_more_rescue_then_smaller_delta() {
+    fn candidate_scoring_prefers_more_exons_then_smaller_delta() {
         let a = CandidateCorrection {
             junction_id: 3,
             delta: 0,
             intron_len: 10,
             rescued_from_softclip: 6,
+            rescued_exons: 2,
+            tie_breaker: 3,
             new_start0: 10,
             genomic_ops: vec![Op::new(Kind::Match, 10)],
         };
@@ -1207,7 +1719,9 @@ mod tests {
             junction_id: 2,
             delta: 2,
             intron_len: 10,
-            rescued_from_softclip: 5,
+            rescued_from_softclip: 6,
+            rescued_exons: 1,
+            tie_breaker: 2,
             new_start0: 10,
             genomic_ops: vec![Op::new(Kind::Match, 10)],
         };
@@ -1289,6 +1803,347 @@ mod tests {
         assert_eq!(
             cigar_signature(&corrected),
             vec![(b'=', 5), (b'N', 15), (b'M', 8)]
+        );
+    }
+
+    #[test]
+    fn correct_record_requires_extend_alignment_for_forward_multi_exon_rescue() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 220];
+        set_bases(&mut genome, 100, b"ACGTACGT");
+        set_bases(&mut genome, 118, b"TTGC");
+        set_bases(&mut genome, 130, b"GGAAC");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            b"chr1\t100\t135\ttx1\t0\t+\t100\t135\t0,0,0\t3\t8,4,5\t0,18,30\n",
+        )
+        .unwrap();
+
+        let record = make_record(
+            Flags::empty(),
+            101,
+            &[Op::new(Kind::Match, 8), Op::new(Kind::SoftClip, 9)],
+            b"ACGTACGTTTGCGGAAC",
+        );
+
+        let mut engine = test_engine(&annotation_path, &genome_path);
+        let outcome = engine.correct_record(record.clone(), &[Some(0)]).unwrap();
+        assert!(matches!(outcome, CorrectionOutcome::Unchanged(_)));
+
+        let mut extend_engine =
+            test_engine_with_options(&annotation_path, &genome_path, true, false);
+        let (corrected, additional) =
+            expect_corrected(extend_engine.correct_record(record, &[Some(0)]).unwrap());
+
+        assert!(additional.is_empty());
+        assert_eq!(corrected.alignment_start().unwrap().get(), 101);
+        assert_eq!(
+            cigar_signature(&corrected),
+            vec![(b'M', 8), (b'N', 10), (b'=', 4), (b'N', 8), (b'=', 5)]
+        );
+        assert_eq!(
+            corrected.data().get(&TAG_RESCUED),
+            Some(&Value::from(9_u32))
+        );
+        assert_eq!(
+            corrected.data().get(&TAG_INTRON),
+            Some(&Value::from(18_u32))
+        );
+    }
+
+    #[test]
+    fn correct_record_keeps_one_exon_rescue_with_extend_alignment_enabled() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 200];
+        set_bases(&mut genome, 100, b"ACGTACGT");
+        set_bases(&mut genome, 118, b"TTGCAAAAAA");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            b"chr1\t100\t128\ttx1\t0\t+\t100\t128\t0,0,0\t2\t8,10\t0,18\n",
+        )
+        .unwrap();
+
+        let record = make_record(
+            Flags::empty(),
+            101,
+            &[Op::new(Kind::Match, 8), Op::new(Kind::SoftClip, 5)],
+            b"ACGTACGTTTGCA",
+        );
+
+        let mut engine = test_engine(&annotation_path, &genome_path);
+        let (baseline, _) =
+            expect_corrected(engine.correct_record(record.clone(), &[Some(0)]).unwrap());
+
+        let mut extend_engine =
+            test_engine_with_options(&annotation_path, &genome_path, true, false);
+        let (corrected, additional) =
+            expect_corrected(extend_engine.correct_record(record, &[Some(0)]).unwrap());
+
+        assert!(additional.is_empty());
+        assert_eq!(
+            corrected.alignment_start().unwrap().get(),
+            baseline.alignment_start().unwrap().get()
+        );
+        assert_eq!(cigar_signature(&corrected), cigar_signature(&baseline));
+        assert_eq!(
+            corrected.data().get(&TAG_RESCUED),
+            baseline.data().get(&TAG_RESCUED)
+        );
+    }
+
+    #[test]
+    fn correct_record_rescues_reverse_two_downstream_exons() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 240];
+        set_bases(&mut genome, 100, b"GTTCC");
+        set_bases(&mut genome, 113, b"GCAA");
+        set_bases(&mut genome, 125, b"ACGTACGT");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            b"chr1\t100\t133\ttx1\t0\t-\t100\t133\t0,0,0\t3\t5,4,8\t0,13,25\n",
+        )
+        .unwrap();
+
+        let mut engine = test_engine_with_options(&annotation_path, &genome_path, true, false);
+        let record = make_record(
+            Flags::REVERSE_COMPLEMENTED,
+            126,
+            &[Op::new(Kind::SoftClip, 9), Op::new(Kind::Match, 8)],
+            b"GTTCCGCAAACGTACGT",
+        );
+
+        let (corrected, additional) =
+            expect_corrected(engine.correct_record(record, &[Some(0)]).unwrap());
+
+        assert!(additional.is_empty());
+        assert_eq!(corrected.alignment_start().unwrap().get(), 101);
+        assert_eq!(
+            cigar_signature(&corrected),
+            vec![(b'=', 5), (b'N', 8), (b'=', 4), (b'N', 8), (b'M', 8)]
+        );
+        assert_eq!(
+            corrected.data().get(&TAG_RESCUED),
+            Some(&Value::from(9_u32))
+        );
+    }
+
+    #[test]
+    fn correct_record_stops_after_partial_second_downstream_exon() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 220];
+        set_bases(&mut genome, 100, b"ACGTACGT");
+        set_bases(&mut genome, 118, b"TTGC");
+        set_bases(&mut genome, 130, b"GGAAC");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            b"chr1\t100\t135\ttx1\t0\t+\t100\t135\t0,0,0\t3\t8,4,5\t0,18,30\n",
+        )
+        .unwrap();
+
+        let mut engine = test_engine_with_options(&annotation_path, &genome_path, true, false);
+        let mut record = make_record(
+            Flags::empty(),
+            101,
+            &[Op::new(Kind::Match, 8), Op::new(Kind::SoftClip, 8)],
+            b"ACGTACGTTTGCGGTT",
+        );
+        record
+            .data_mut()
+            .insert(Tag::EDIT_DISTANCE, Value::from(3_u8));
+        record
+            .data_mut()
+            .insert(Tag::MISMATCHED_POSITIONS, Value::from("9A1"));
+
+        let (corrected, additional) =
+            expect_corrected(engine.correct_record(record, &[Some(0)]).unwrap());
+
+        assert!(additional.is_empty());
+        assert_eq!(
+            cigar_signature(&corrected),
+            vec![
+                (b'M', 8),
+                (b'N', 10),
+                (b'=', 4),
+                (b'N', 8),
+                (b'=', 2),
+                (b'S', 2)
+            ]
+        );
+        assert_eq!(
+            corrected.data().get(&TAG_RESCUED),
+            Some(&Value::from(6_u32))
+        );
+        assert!(corrected.data().get(&Tag::EDIT_DISTANCE).is_none());
+        assert!(corrected.data().get(&Tag::MISMATCHED_POSITIONS).is_none());
+    }
+
+    #[test]
+    fn correct_record_rejects_multi_exon_when_second_exon_mismatches_immediately() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 220];
+        set_bases(&mut genome, 100, b"ACGTACGT");
+        set_bases(&mut genome, 118, b"TTGC");
+        set_bases(&mut genome, 130, b"GGAAC");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            b"chr1\t100\t135\ttx1\t0\t+\t100\t135\t0,0,0\t3\t8,4,5\t0,18,30\n",
+        )
+        .unwrap();
+
+        let mut engine = test_engine_with_options(&annotation_path, &genome_path, true, false);
+        let record = make_record(
+            Flags::empty(),
+            101,
+            &[Op::new(Kind::Match, 8), Op::new(Kind::SoftClip, 6)],
+            b"ACGTACGTTTGCTT",
+        );
+
+        let outcome = engine.correct_record(record, &[Some(0)]).unwrap();
+        assert!(matches!(outcome, CorrectionOutcome::Unchanged(_)));
+    }
+
+    #[test]
+    fn correct_record_prefers_best_transcript_when_paths_diverge() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 260];
+        set_bases(&mut genome, 100, b"ACGTACGT");
+        set_bases(&mut genome, 118, b"TTGCA");
+        set_bases(&mut genome, 131, b"GGAA");
+        set_bases(&mut genome, 141, b"CCCC");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            concat!(
+                "chr1\t100\t135\ttxA\t0\t+\t100\t135\t0,0,0\t3\t8,5,4\t0,18,31\n",
+                "chr1\t100\t145\ttxB\t0\t+\t100\t145\t0,0,0\t3\t8,5,4\t0,18,41\n"
+            ),
+        )
+        .unwrap();
+
+        let mut engine = test_engine_with_options(&annotation_path, &genome_path, true, false);
+        let record = make_record(
+            Flags::empty(),
+            101,
+            &[Op::new(Kind::Match, 8), Op::new(Kind::SoftClip, 9)],
+            b"ACGTACGTTTGCAGGAA",
+        );
+
+        let (corrected, additional) =
+            expect_corrected(engine.correct_record(record, &[Some(0)]).unwrap());
+
+        assert!(additional.is_empty());
+        assert_eq!(
+            cigar_signature(&corrected),
+            vec![(b'M', 8), (b'N', 10), (b'=', 5), (b'N', 8), (b'=', 4)]
+        );
+        assert_eq!(
+            corrected.data().get(&TAG_RESCUED),
+            Some(&Value::from(9_u32))
+        );
+    }
+
+    #[test]
+    fn correct_record_suppresses_duplicate_transcript_outcomes() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 220];
+        set_bases(&mut genome, 100, b"ACGTACGT");
+        set_bases(&mut genome, 118, b"TTGC");
+        set_bases(&mut genome, 130, b"GGAAC");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            concat!(
+                "chr1\t100\t135\ttx1\t0\t+\t100\t135\t0,0,0\t3\t8,4,5\t0,18,30\n",
+                "chr1\t100\t135\ttx2\t0\t+\t100\t135\t0,0,0\t3\t8,4,5\t0,18,30\n"
+            ),
+        )
+        .unwrap();
+
+        let mut engine = test_engine_with_options(&annotation_path, &genome_path, true, true);
+        let record = make_record(
+            Flags::empty(),
+            101,
+            &[Op::new(Kind::Match, 8), Op::new(Kind::SoftClip, 9)],
+            b"ACGTACGTTTGCGGAAC",
+        );
+
+        let (corrected, additional) =
+            expect_corrected(engine.correct_record(record, &[Some(0)]).unwrap());
+
+        assert_eq!(
+            cigar_signature(&corrected),
+            vec![(b'M', 8), (b'N', 10), (b'=', 4), (b'N', 8), (b'=', 5)]
+        );
+        assert!(additional.is_empty());
+    }
+
+    #[test]
+    fn correct_record_keeps_distinct_additional_corrections() {
+        let temp = tempdir().unwrap();
+        let genome_path = temp.path().join("genome.fa");
+        let annotation_path = temp.path().join("annotation.bed");
+
+        let mut genome = vec![b'A'; 260];
+        set_bases(&mut genome, 100, b"ACGTACGT");
+        set_bases(&mut genome, 118, b"TTGCA");
+        set_bases(&mut genome, 131, b"GGAA");
+        set_bases(&mut genome, 141, b"CCCC");
+        write_fasta(&genome_path, "chr1", &genome);
+        fs::write(
+            &annotation_path,
+            concat!(
+                "chr1\t100\t135\ttxA\t0\t+\t100\t135\t0,0,0\t3\t8,5,4\t0,18,31\n",
+                "chr1\t100\t145\ttxB\t0\t+\t100\t145\t0,0,0\t3\t8,5,4\t0,18,41\n"
+            ),
+        )
+        .unwrap();
+
+        let mut engine = test_engine_with_options(&annotation_path, &genome_path, true, true);
+        let record = make_record(
+            Flags::empty(),
+            101,
+            &[Op::new(Kind::Match, 8), Op::new(Kind::SoftClip, 9)],
+            b"ACGTACGTTTGCAGGAA",
+        );
+
+        let (corrected, additional) =
+            expect_corrected(engine.correct_record(record, &[Some(0)]).unwrap());
+
+        assert_eq!(
+            cigar_signature(&corrected),
+            vec![(b'M', 8), (b'N', 10), (b'=', 5), (b'N', 8), (b'=', 4)]
+        );
+        assert_eq!(additional.len(), 1);
+        assert!(additional[0].flags().is_secondary());
+        assert_eq!(
+            cigar_signature(&additional[0]),
+            vec![(b'M', 8), (b'N', 10), (b'=', 5), (b'S', 4)]
         );
     }
 

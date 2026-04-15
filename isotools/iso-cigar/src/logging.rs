@@ -12,7 +12,7 @@
 //! A minimap2-aligned transcript can end exactly at an exon boundary
 //! but carry a small 3' soft-clipped sequence that was not placed anywhere.
 //! The hypothesis is: that clipped sequence is the start of the next downstream
-//! exon, but the aligner missed the intron.
+//! exon (or any other downstream), but the aligner missed the intron.
 //!
 //! In short, iso-cigar identifies candidate reads: those ending ±wiggle bp from a
 //! known internal exon boundary, with soft-clip ≥ cutoff; retrieves the sequence of
