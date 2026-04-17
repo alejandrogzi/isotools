@@ -76,7 +76,7 @@ pub struct Args {
         long = "overlapping",
         required = false,
         value_name = "FLAG",
-        help = "Overlapping mode, accounting for reads that overlap a TOGA reference (requires TOGA arg)",
+        help = "Overlapping mode, accounting for reads that overlap a reference (requires --ref arg)",
         action = ArgAction::SetTrue,
     )]
     pub overlapping: bool,

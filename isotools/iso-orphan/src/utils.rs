@@ -8,8 +8,8 @@
 //! and processing the components in a parallel fashion.
 //!
 //! In short, each component of reads is subjected to any of the two modes: guided or
-//! self-guided. Guided mode is the default mode and is used when the user provides a TOGA file
-//! as input. Self-guided mode is used when the user does not provide a TOGA file as input.
+//! self-guided. Guided mode is the default mode and is used when the user provides a reference file
+//! as input. Self-guided mode is used when the user does not provide a reference file as input.
 //! Both, guided and self-guided, cover an extensive amount of curated oprhan cases under
 //! the assumption that they do not represent a valid source of evidence for transcription.
 //! The process is heavily parallellized to offer fast performance on large datasets.
@@ -102,19 +102,19 @@ pub struct ParallelCounter {
     pub components: AtomicU32,
 
     // single-exon categories
-    pub read_se_mc_toga_se: AtomicU32, // multi-comp TOGA single-exon
-    pub read_se_mc_toga_me: AtomicU32, // multi-comp TOGA multi-exon
-    pub read_se_sc_toga_se: AtomicU32, // single-read comp TOGA single-exon
-    pub read_se_sc_toga_me: AtomicU32, // single-read comp TOGA multi-exon
+    pub read_se_mc_reference_se: AtomicU32, // multi-comp reference single-exon
+    pub read_se_mc_reference_me: AtomicU32, // multi-comp reference multi-exon
+    pub read_se_sc_reference_se: AtomicU32, // single-read comp reference single-exon
+    pub read_se_sc_reference_me: AtomicU32, // single-read comp reference multi-exon
 
     // multi-exon categories
-    pub read_me_mc_toga_se: AtomicU32, // multi-comp TOGA single-exon
-    pub read_me_mc_toga_me: AtomicU32, // multi-comp TOGA multi-exon
-    pub read_me_sc_toga_se: AtomicU32, // single-comp TOGA single-exon
-    pub read_me_sc_toga_me: AtomicU32, // single-comp TOGA multi-exon
+    pub read_me_mc_reference_se: AtomicU32, // multi-comp reference single-exon
+    pub read_me_mc_reference_me: AtomicU32, // multi-comp reference multi-exon
+    pub read_me_sc_reference_se: AtomicU32, // single-comp reference single-exon
+    pub read_me_sc_reference_me: AtomicU32, // single-comp reference multi-exon
 
     // de-novo categories
-    pub read_se_sc_no_toga: AtomicU32, // single-exon comp
+    pub read_se_sc_no_reference: AtomicU32, // single-exon comp
     pub component_less_than_threshold: AtomicU32, // less than treshold
     pub read_de_novo_unsupported: AtomicU32, // unsupported exon
 
@@ -137,15 +137,15 @@ impl Default for ParallelCounter {
     fn default() -> Self {
         Self {
             components: AtomicU32::new(0),
-            read_se_mc_toga_se: AtomicU32::new(0),
-            read_se_mc_toga_me: AtomicU32::new(0),
-            read_se_sc_toga_se: AtomicU32::new(0),
-            read_se_sc_toga_me: AtomicU32::new(0),
-            read_me_mc_toga_se: AtomicU32::new(0),
-            read_me_mc_toga_me: AtomicU32::new(0),
-            read_me_sc_toga_se: AtomicU32::new(0),
-            read_me_sc_toga_me: AtomicU32::new(0),
-            read_se_sc_no_toga: AtomicU32::new(0),
+            read_se_mc_reference_se: AtomicU32::new(0),
+            read_se_mc_reference_me: AtomicU32::new(0),
+            read_se_sc_reference_se: AtomicU32::new(0),
+            read_se_sc_reference_me: AtomicU32::new(0),
+            read_me_mc_reference_se: AtomicU32::new(0),
+            read_me_mc_reference_me: AtomicU32::new(0),
+            read_me_sc_reference_se: AtomicU32::new(0),
+            read_me_sc_reference_me: AtomicU32::new(0),
+            read_se_sc_no_reference: AtomicU32::new(0),
             component_less_than_threshold: AtomicU32::new(0),
             read_de_novo_unsupported: AtomicU32::new(0),
             read_no_splice_match: AtomicU32::new(0),
@@ -199,7 +199,7 @@ impl ParallelCounter {
         self.components.load(Ordering::Relaxed)
     }
 
-    /// Increment the number of reads with single-exon multi-component TOGA single-exon
+    /// Increment the number of reads with single-exon multi-component reference single-exon
     ///
     /// # Parameters
     ///
@@ -209,15 +209,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_mc_toga_se();
+    /// counter.inc_read_se_mc_reference_se();
     ///
-    /// assert_eq!(counter.read_se_mc_toga_se(), 1);
+    /// assert_eq!(counter.read_se_mc_reference_se(), 1);
     /// ```
-    pub fn inc_read_se_mc_toga_se(&self) {
-        self.read_se_mc_toga_se.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_se_mc_reference_se(&self) {
+        self.read_se_mc_reference_se.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon multi-component TOGA multi-exon
+    /// Increment the number of reads with single-exon multi-component reference multi-exon
     ///
     /// # Parameters
     ///
@@ -227,15 +227,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_mc_toga_me();
+    /// counter.inc_read_se_mc_reference_me();
     ///
-    /// assert_eq!(counter.read_se_mc_toga_me(), 1);
+    /// assert_eq!(counter.read_se_mc_reference_me(), 1);
     /// ```
-    pub fn inc_read_se_mc_toga_me(&self) {
-        self.read_se_mc_toga_me.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_se_mc_reference_me(&self) {
+        self.read_se_mc_reference_me.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon single-component TOGA single-exon
+    /// Increment the number of reads with single-exon single-component reference single-exon
     ///
     /// # Parameters
     ///
@@ -245,15 +245,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_toga_se();
+    /// counter.inc_read_se_sc_reference_se();
     ///
-    /// assert_eq!(counter.read_se_sc_toga_se(), 1);
+    /// assert_eq!(counter.read_se_sc_reference_se(), 1);
     /// ```
-    pub fn inc_read_se_sc_toga_se(&self) {
-        self.read_se_sc_toga_se.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_se_sc_reference_se(&self) {
+        self.read_se_sc_reference_se.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon single-component TOGA multi-exon
+    /// Increment the number of reads with single-exon single-component reference multi-exon
     ///
     /// # Parameters
     ///
@@ -263,15 +263,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_toga_me();
+    /// counter.inc_read_se_sc_reference_me();
     ///
-    /// assert_eq!(counter.read_se_sc_toga_me(), 1);
+    /// assert_eq!(counter.read_se_sc_reference_me(), 1);
     /// ```
-    pub fn inc_read_se_sc_toga_me(&self) {
-        self.read_se_sc_toga_me.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_se_sc_reference_me(&self) {
+        self.read_se_sc_reference_me.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon multi-component TOGA single-exon
+    /// Increment the number of reads with multi-exon multi-component reference single-exon
     ///
     /// # Parameters
     ///
@@ -281,15 +281,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_mc_toga_se();
+    /// counter.inc_read_me_mc_reference_se();
     ///
-    /// assert_eq!(counter.read_me_mc_toga_se(), 1);
+    /// assert_eq!(counter.read_me_mc_reference_se(), 1);
     /// ```
-    pub fn inc_read_me_mc_toga_se(&self) {
-        self.read_me_mc_toga_se.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_me_mc_reference_se(&self) {
+        self.read_me_mc_reference_se.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon multi-component TOGA multi-exon
+    /// Increment the number of reads with multi-exon multi-component reference multi-exon
     ///
     /// # Parameters
     ///
@@ -299,15 +299,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_mc_toga_me();
+    /// counter.inc_read_me_mc_reference_me();
     ///
-    /// assert_eq!(counter.read_me_mc_toga_me(), 1);
+    /// assert_eq!(counter.read_me_mc_reference_me(), 1);
     /// ```
-    pub fn inc_read_me_mc_toga_me(&self) {
-        self.read_me_mc_toga_me.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_me_mc_reference_me(&self) {
+        self.read_me_mc_reference_me.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon single-component TOGA single-exon
+    /// Increment the number of reads with multi-exon single-component reference single-exon
     ///
     /// # Parameters
     ///
@@ -317,15 +317,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_sc_toga_se();
+    /// counter.inc_read_me_sc_reference_se();
     ///
-    /// assert_eq!(counter.read_me_sc_toga_se(), 1);
+    /// assert_eq!(counter.read_me_sc_reference_se(), 1);
     /// ```
-    pub fn inc_read_me_sc_toga_se(&self) {
-        self.read_me_sc_toga_se.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_me_sc_reference_se(&self) {
+        self.read_me_sc_reference_se.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon single-component TOGA multi-exon
+    /// Increment the number of reads with multi-exon single-component reference multi-exon
     ///
     /// # Parameters
     ///
@@ -335,15 +335,15 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_sc_toga_me();
+    /// counter.inc_read_me_sc_reference_me();
     ///
-    /// assert_eq!(counter.read_me_sc_toga_me(), 1);
+    /// assert_eq!(counter.read_me_sc_reference_me(), 1);
     /// ```
-    pub fn inc_read_me_sc_toga_me(&self) {
-        self.read_me_sc_toga_me.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_me_sc_reference_me(&self) {
+        self.read_me_sc_reference_me.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon single-component TOGA no TOGA
+    /// Increment the number of reads with single-exon single-component reference no reference
     ///
     /// # Parameters
     ///
@@ -353,12 +353,12 @@ impl ParallelCounter {
     ///
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_no_toga();
+    /// counter.inc_read_se_sc_no_reference();
     ///
-    /// assert_eq!(counter.read_se_sc_no_toga(), 1);
+    /// assert_eq!(counter.read_se_sc_no_reference(), 1);
     /// ```
-    pub fn inc_read_se_sc_no_toga(&self) {
-        self.read_se_sc_no_toga.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_read_se_sc_no_reference(&self) {
+        self.read_se_sc_no_reference.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increment the number of reads with less than threshold
@@ -449,14 +449,14 @@ impl ParallelCounter {
     /// ```rust, no_run
     /// let counter = ParallelCounter::new();
     ///
-    /// counter.inc_read_se_mc_toga_se();
-    /// counter.inc_read_se_mc_toga_me();
-    /// counter.inc_read_se_sc_toga_se();
-    /// counter.inc_read_se_sc_toga_me();
-    /// counter.inc_read_me_mc_toga_se();
-    /// counter.inc_read_me_sc_toga_se();
-    /// counter.inc_read_me_sc_toga_me();
-    /// counter.inc_read_se_sc_no_toga();
+    /// counter.inc_read_se_mc_reference_se();
+    /// counter.inc_read_se_mc_reference_me();
+    /// counter.inc_read_se_sc_reference_se();
+    /// counter.inc_read_se_sc_reference_me();
+    /// counter.inc_read_me_mc_reference_se();
+    /// counter.inc_read_me_sc_reference_se();
+    /// counter.inc_read_me_sc_reference_me();
+    /// counter.inc_read_se_sc_no_reference();
     /// counter.inc_component_less_than_threshold();
     /// counter.inc_read_de_novo_unsupported();
     /// counter.inc_read_no_splice_match();
@@ -473,15 +473,15 @@ impl ParallelCounter {
             self.num_components()
         ));
 
-        let inc_read_se_mc_toga_se = self.read_se_mc_toga_se.load(Ordering::Relaxed);
-        let inc_read_se_mc_toga_me = self.read_se_mc_toga_me.load(Ordering::Relaxed);
-        let inc_read_se_sc_toga_se = self.read_se_sc_toga_se.load(Ordering::Relaxed);
-        let inc_read_se_sc_toga_me = self.read_se_sc_toga_me.load(Ordering::Relaxed);
-        let inc_read_me_mc_toga_se = self.read_me_mc_toga_se.load(Ordering::Relaxed);
-        let inc_read_me_mc_toga_me = self.read_me_mc_toga_me.load(Ordering::Relaxed);
-        let inc_read_me_sc_toga_se = self.read_me_sc_toga_se.load(Ordering::Relaxed);
-        let inc_read_me_sc_toga_me = self.read_me_sc_toga_me.load(Ordering::Relaxed);
-        let inc_read_se_sc_no_toga = self.read_se_sc_no_toga.load(Ordering::Relaxed);
+        let inc_read_se_mc_reference_se = self.read_se_mc_reference_se.load(Ordering::Relaxed);
+        let inc_read_se_mc_reference_me = self.read_se_mc_reference_me.load(Ordering::Relaxed);
+        let inc_read_se_sc_reference_se = self.read_se_sc_reference_se.load(Ordering::Relaxed);
+        let inc_read_se_sc_reference_me = self.read_se_sc_reference_me.load(Ordering::Relaxed);
+        let inc_read_me_mc_reference_se = self.read_me_mc_reference_se.load(Ordering::Relaxed);
+        let inc_read_me_mc_reference_me = self.read_me_mc_reference_me.load(Ordering::Relaxed);
+        let inc_read_me_sc_reference_se = self.read_me_sc_reference_se.load(Ordering::Relaxed);
+        let inc_read_me_sc_reference_me = self.read_me_sc_reference_me.load(Ordering::Relaxed);
+        let inc_read_se_sc_no_reference = self.read_se_sc_no_reference.load(Ordering::Relaxed);
         let inc_component_less_than_threshold =
             self.component_less_than_threshold.load(Ordering::Relaxed);
         let inc_read_de_novo_unsupported = self.read_de_novo_unsupported.load(Ordering::Relaxed);
@@ -490,40 +490,40 @@ impl ParallelCounter {
         let inc_component_above_discards = self.component_above_discards.load(Ordering::Relaxed);
 
         report.push_str(&format!(
-            "Total number of reads with single-exon multi-component TOGA single-exon: {}\n",
-            inc_read_se_mc_toga_se
+            "Total number of reads with single-exon multi-component reference single-exon: {}\n",
+            inc_read_se_mc_reference_se
         ));
         report.push_str(&format!(
-            "Total number of reads with single-exon multi-component TOGA multi-exon: {}\n",
-            inc_read_se_mc_toga_me
+            "Total number of reads with single-exon multi-component reference multi-exon: {}\n",
+            inc_read_se_mc_reference_me
         ));
         report.push_str(&format!(
-            "Total number of reads with single-exon single-component TOGA single-exon: {}\n",
-            inc_read_se_sc_toga_se
+            "Total number of reads with single-exon single-component reference single-exon: {}\n",
+            inc_read_se_sc_reference_se
         ));
         report.push_str(&format!(
-            "Total number of reads with single-exon single-component TOGA multi-exon: {}\n",
-            inc_read_se_sc_toga_me
+            "Total number of reads with single-exon single-component reference multi-exon: {}\n",
+            inc_read_se_sc_reference_me
         ));
         report.push_str(&format!(
-            "Total number of reads with multi-exon multi-component TOGA single-exon: {}\n",
-            inc_read_me_mc_toga_se
+            "Total number of reads with multi-exon multi-component reference single-exon: {}\n",
+            inc_read_me_mc_reference_se
         ));
         report.push_str(&format!(
-            "Total number of reads with multi-exon multi-component TOGA multi-exon: {}\n",
-            inc_read_me_mc_toga_me
+            "Total number of reads with multi-exon multi-component reference multi-exon: {}\n",
+            inc_read_me_mc_reference_me
         ));
         report.push_str(&format!(
-            "Total number of reads with multi-exon single-component TOGA single-exon: {}\n",
-            inc_read_me_sc_toga_se
+            "Total number of reads with multi-exon single-component reference single-exon: {}\n",
+            inc_read_me_sc_reference_se
         ));
         report.push_str(&format!(
-            "Total number of reads with multi-exon single-component TOGA multi-exon: {}\n",
-            inc_read_me_sc_toga_me
+            "Total number of reads with multi-exon single-component reference multi-exon: {}\n",
+            inc_read_me_sc_reference_me
         ));
         report.push_str(&format!(
-            "Total number of reads with single-exon single-component TOGA no TOGA: {}\n",
-            inc_read_se_sc_no_toga
+            "Total number of reads with single-exon single-component reference no reference: {}\n",
+            inc_read_se_sc_no_reference
         ));
         report.push_str(&format!(
             "Total number of denovo reads with less than min_read_num_denovo: {}\n",
@@ -559,14 +559,14 @@ impl ParallelCounter {
 /// use isotools::utils::ParallelCounter;
 ///
 /// let counter = ParallelCounter::new();
-/// counter.inc_read_se_mc_toga_se(5);
-/// counter.inc_read_se_mc_toga_me(5);
-/// counter.inc_read_se_sc_toga_se(5);
-/// counter.inc_read_se_sc_toga_me(5);
-/// counter.inc_read_me_mc_toga_se(5);
-/// counter.inc_read_me_sc_toga_se(5);
-/// counter.inc_read_me_sc_toga_me(5);
-/// counter.inc_read_se_sc_no_toga(5);
+/// counter.inc_read_se_mc_reference_se(5);
+/// counter.inc_read_se_mc_reference_me(5);
+/// counter.inc_read_se_sc_reference_se(5);
+/// counter.inc_read_se_sc_reference_me(5);
+/// counter.inc_read_me_mc_reference_se(5);
+/// counter.inc_read_me_sc_reference_se(5);
+/// counter.inc_read_me_sc_reference_me(5);
+/// counter.inc_read_se_sc_no_reference(5);
 /// counter.inc_component_less_than_threshold(5);
 /// counter.inc_read_de_novo_unsupported(5);
 /// counter.inc_read_no_splice_match(5);
