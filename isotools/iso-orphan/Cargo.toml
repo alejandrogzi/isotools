@@ -1,6 +1,6 @@
 [package]
 name = "iso-orphan"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "detect orphan reads in isoseq data"
 license.workspace = true

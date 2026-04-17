@@ -8,8 +8,8 @@
 //! and processing the components in a parallel fashion.
 //!
 //! In short, each component of reads is subjected to any of the two modes: guided or
-//! self-guided. Guided mode is the default mode and is used when the user provides a TOGA file
-//! as input. Self-guided mode is used when the user does not provide a TOGA file as input.
+//! self-guided. Guided mode is the default mode and is used when the user provides a reference file
+//! as input. Self-guided mode is used when the user does not provide a reference file as input.
 //! Both, guided and self-guided, cover an extensive amount of curated orphan cases under
 //! the assumption that they do not represent a valid source of evidence for transcription.
 //! The process is heavily parallellized to offer fast performance on large datasets.
@@ -51,7 +51,7 @@ pub type Components = DashMap<String, Vec<Vec<GenePred>>>;
 ///
 /// let args = Args {
 ///     bed: vec!["tests/data/mm39.bed".into()],
-///     toga: None,
+///     ref:  None,
 ///     all: false,
 ///     overlapping: false,
 ///     non_overlapping: false,
@@ -81,7 +81,7 @@ pub fn __detect_orphans(args: Args) {
             log::info!("INFO: Running using guided mode");
 
             let mut inputs = args.refs.unwrap_or_else(|| {
-                log::error!("ERROR: No TOGA file provided while using reference guided mode!");
+                log::error!("ERROR: No reference file provided while using reference guided mode!");
                 std::process::exit(1);
             });
 
@@ -91,11 +91,11 @@ pub fn __detect_orphans(args: Args) {
             modes.extend(vec![Role::Query]);
             inputs.extend(vec![args.query]);
 
-            // CASE: single-exon-component reads with non-single-exon TOGA refs [SOLVED]
+            // CASE: single-exon-component reads with non-single-exon reference refs [SOLVED]
             // INFO:  the following case is presented:
             //
             // [SOLVED: CDS overlap mode]
-            // toga:  xxx------------XXXX---
+            // ref:   xxx------------XXXX---
             //        |||
             // read1: xxx------XXXXx
             //
@@ -257,18 +257,20 @@ fn __process(
 
     __report_stats(&counter);
 
-    let pass = format!("{}.orphan_free.bed", filename);
-    let orphans = format!("{}.orphans.bed", &filename);
+    let pass = format!("{}.hq.bed", filename);
+    let orphans = format!("{}.scraps.bed", &filename);
 
     let mut p_writer = BufWriter::new(File::create(outdir.join(pass)).unwrap());
     let mut o_writer = BufWriter::new(File::create(outdir.join(orphans)).unwrap());
 
     accumulator.keep.into_iter().for_each(|line| {
         p_writer.write_all(&line).unwrap();
+        p_writer.write_all(&b"\n".as_slice()).unwrap();
     });
 
     accumulator.orphans.into_iter().for_each(|line| {
         o_writer.write_all(&line).unwrap();
+        o_writer.write_all(&b"\n".as_slice()).unwrap();
     });
 }
 
@@ -382,13 +384,13 @@ fn guided(
     let mut keep = Vec::new();
     let mut orphans = Vec::new();
 
-    // INFO: single component reads -> no TOGA
+    // INFO: single component reads -> no reference
     if references.is_empty() {
         // CASE: single-exon-component reads [PARTIALLY SOLVED]
         // INFO: the following case is presented:
         //
         // [SOLVED: single-component reads will be just discarded]
-        // toga:  XX-----------XXX--XX---XXXX
+        // ref:   XX-----------XXX--XX---XXXX
         // read1:    xxXXXXxx  |||  ||   ||||
         // read2: XX-----------XXX--XX---XXXX
         //
@@ -399,7 +401,7 @@ fn guided(
         //
         // or its variant [UNSOLVED]
         //
-        // toga:  XX-----------XXX--XX---XXXX
+        // ref:   XX-----------XXX--XX---XXXX
         // read1:    xxXXXXxx
         // read2:    xxxxXXXxx
         // read3:     xXXXXXXxx
@@ -414,7 +416,7 @@ fn guided(
         do_self_guided_check(&mut queries, counter, min_read_num_denovo);
     }
 
-    // INFO: ask if ANY TOGA is a single-exon
+    // INFO: ask if ANY reference is a single-exon
     // INFO: single-exon signifies no introns
     let is_reference_single_exon = references
         .iter()
@@ -435,12 +437,12 @@ fn guided(
 
             if is_single_exon_read {
                 if is_reference_single_exon {
-                    counter.inc_read_se_mc_toga_se();
+                    counter.inc_read_se_mc_reference_se();
 
-                    // CASE: single-exon read(s) with single-exon TOGA refs
+                    // CASE: single-exon read(s) with single-exon reference refs
                     // INFO: the following case is presented:
                     //
-                    // toga: xxxxxxxxxxxxXXXXXxxxxxxx
+                    // ref:  xxxxxxxxxxxxXXXXXxxxxxxx
                     // read1:     xxxxxxxXXXXXxxxx
                     // read2:  xxxxxxxxxxXXXXXx
                     // read3:          xxXXXXXxxxx
@@ -448,7 +450,7 @@ fn guided(
                     //             ^^^^^^|||||
                     //
                     // Here, we would argue that all of the reads (being single-exon) match
-                    // at least one CDS coordinate + all of them are within TOGA boundaries
+                    // at least one CDS coordinate + all of them are within reference boundaries
                     //
                     // For a clearer illustration go to mm39 chr3:61,269,596-61,278,844
                     let is_match = read
@@ -458,22 +460,22 @@ fn guided(
 
                     if is_match {
                         log::debug!(
-                            "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA single-exon CDS -> keep!",
+                            "INFO: read: {:?} single-exon in a multi-read component overlaps with reference single-exon CDS -> keep!",
                             &read,
                         );
                         keep.push(line);
                     } else {
-                        log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA single-exon CDS -> orphan!", &read);
+                        log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with reference single-exon CDS -> orphan!", &read);
                         discards += 1;
                     }
                 } else {
-                    counter.inc_read_se_mc_toga_me();
+                    counter.inc_read_se_mc_reference_me();
 
-                    // INFO: main question: your CDS matches exactly or partially a TOGA CDS?
-                    // CASE: single-exon fuzzy overlap with TOGA CDS
+                    // INFO: main question: your CDS matches exactly or partially a reference CDS?
+                    // CASE: single-exon fuzzy overlap with reference CDS
                     // INFO: the following case is presented:
                     //
-                    // toga:     xxxxxxXXXXXXX----------
+                    // ref:      xxxxxxXXXXXXX----------
                     //               ^^||||^^^
                     // read1: xxxxxxxXXXXXXXxxxx
                     // read2:       xxxXXXXXXX----------
@@ -491,27 +493,27 @@ fn guided(
 
                     if is_match {
                         log::debug!(
-                            "INFO: read: {:?} single-exon in a multi-read component overlaps with TOGA multi-exon CDS -> keep!",
+                            "INFO: read: {:?} single-exon in a multi-read component overlaps with reference multi-exon CDS -> keep!",
                             &read,
                         );
                         keep.push(read.to_bed::<Bed12>());
                     } else {
-                        log::debug!("INFO: read: {:?} single-exon in a multi-read component does not overlap with TOGA multi-exon CDS -> orphan!", &read);
+                        log::debug!("INFO: read: {:?} single-exon in a multi-read component does not overlap with reference multi-exon CDS -> orphan!", &read);
                         discards += 1;
                     }
                 }
             } else {
                 if is_reference_single_exon {
-                    counter.inc_read_me_mc_toga_se();
+                    counter.inc_read_me_mc_reference_se();
                 } else {
-                    counter.inc_read_me_mc_toga_me();
+                    counter.inc_read_me_mc_reference_me();
                 }
 
-                // INFO: means CDS TOGA overlap and not single-exon
+                // INFO: means CDS reference overlap and not single-exon
                 // INFO: branch where most of the cases will be in
                 // INFO: could present the following case:
                 //
-                // toga:     xxxxxxXXXXXXX----XXXXX----
+                // ref:      xxxxxxXXXXXXX----XXXXX----
                 //               ^^||||^^^
                 // read1: xxxxxxxXXXXXXXXX----XXXXXxx -> shorter isoform
                 // read2:       xxxXXXXXXX----XXXXX----
@@ -519,7 +521,7 @@ fn guided(
                 //
                 // or its variants:
                 //
-                // toga:     xxxxxxXXXXXXX----------
+                // ref:      xxxxxxXXXXXXX----------
                 //               ^^||||^^^
                 // read1: xxxxxxxXXXXXXXXX----xxxxx
                 // read2:       xxxXXXXXXX----------
@@ -527,7 +529,7 @@ fn guided(
                 //
                 // or:
                 //
-                // toga:  xxxxXXXXX-------XXXXXXX----
+                // ref:   xxxxXXXXX-------XXXXXXX----
                 //                               ^^
                 // read1: xxxxXXXXXxxxxxxxXXXXXXXXXxx
                 // read2: xxxxXXXXX-------XXXXXXX----
@@ -616,32 +618,35 @@ fn guided(
         }
     } else {
         if queries.is_empty() {
-            // INFO: TOGA projection without reads
+            // INFO: reference projection without reads
             let projections: Vec<Option<&[u8]>> = references.iter().map(|p| p.name()).collect();
-            log::trace!("DEBUG: TOGA projection without reads -> {:?}", projections);
+            log::trace!(
+                "DEBUG: reference projection without reads -> {:?}",
+                projections
+            );
         }
 
-        // INFO: weird case of TOGA-single-exon and single-read component
+        // INFO: weird case of reference-single-exon and single-read component
         if is_reference_single_exon {
             for read in queries {
                 let is_single_exon_read = read.introns().is_empty();
                 let line = read.to_bed::<Bed12>();
 
                 if is_single_exon_read {
-                    counter.inc_read_se_sc_toga_se();
+                    counter.inc_read_se_sc_reference_se();
 
                     // INFO: CDS must matche once
-                    // INFO: branch -> CDS-overlap with TOGA but single-read component
+                    // INFO: branch -> CDS-overlap with reference but single-read component
                     //
                     // ideal case:
                     //
-                    // toga: xxxxXXXXXXxxxx
+                    // ref:  xxxxXXXXXXxxxx
                     //           ||||||
                     // read1:  xxXXXXXXxxxx
                     //
                     // its counterpart:
                     //
-                    // toga: xxxxXXXXXXxxxx
+                    // ref:  xxxxXXXXXXxxxx
                     //         ^^|||
                     // read1: xXXXXXxxx <- likely not a supporting transcript
                     let is_match = read
@@ -651,33 +656,33 @@ fn guided(
 
                     if is_match {
                         log::debug!(
-                            "DEBUG: read: {:?} single-exon and match exactly with TOGA single-exon -> keep!",
+                            "DEBUG: read: {:?} single-exon and match exactly with reference single-exon -> keep!",
                             &read,
                         );
 
                         keep.push(line);
                     } else {
                         log::debug!(
-                            "DEBUG: read: {:?} single-exon and does not match exactly with TOGA single-exon -> orphan!",
+                            "DEBUG: read: {:?} single-exon and does not match exactly with reference single-exon -> orphan!",
                             &read,
                         );
                         orphans.push(line);
                     }
                 } else {
-                    counter.inc_read_me_sc_toga_se();
+                    counter.inc_read_me_sc_reference_se();
 
-                    // INFO: TOGA-single-exon CDS overlap with multi-exon single-read component
+                    // INFO: reference-single-exon CDS overlap with multi-exon single-read component
                     // INFO: at least one splice site should match
                     //
                     // ideal case:
                     //
-                    // toga: xxxxXXXXXXxxxx
+                    // ref:  xxxxXXXXXXxxxx
                     //           ||||||
                     // read1:  xxXXXXXXxxxx-----xxxxxx
                     //
                     // its counterpart:
                     //
-                    // toga: xxxxXXXXXXxxxx
+                    // ref:  xxxxXXXXXXxxxx
                     //         ^^|||
                     // read1: xXXXXXxxx-------xxxxx <- likely not a supporting transcript
 
@@ -691,14 +696,14 @@ fn guided(
 
                     if is_splice_match {
                         log::debug!(
-                            "DEBUG: read: {:?} multi-exon matches at least 1 splice site with TOGA single-exon -> keep!",
+                            "DEBUG: read: {:?} multi-exon matches at least 1 splice site with reference single-exon -> keep!",
                             &read,
                         );
 
                         keep.push(line);
                     } else {
                         log::debug!(
-                            "DEBUG: read: {:?} multi-exon does not match any splice site with TOGA single-exon -> orphan!",
+                            "DEBUG: read: {:?} multi-exon does not match any splice site with reference single-exon -> orphan!",
                             &read,
                         );
 
@@ -707,26 +712,26 @@ fn guided(
                 }
             }
         } else {
-            // INFO: TOGA multi-exon, single-read component
-            // INFO: ask if CDS matches are more than 1 OR is within TOGA boundaries
+            // INFO: reference multi-exon, single-read component
+            // INFO: ask if CDS matches are more than 1 OR is within reference boundaries
 
             for read in queries {
                 let is_single_exon_read = read.introns().is_empty();
                 let line = read.to_bed::<Bed12>();
 
                 if is_single_exon_read {
-                    counter.inc_read_se_sc_toga_me();
+                    counter.inc_read_se_sc_reference_me();
 
-                    // CASE: single-exon read component with multi-exon TOGA refs
+                    // CASE: single-exon read component with multi-exon reference refs
                     // INFO: the following case is presented:
                     //
-                    // toga:  xxxXXXX----XXXXX----XXXxxx
+                    // ref:   xxxXXXX----XXXXX----XXXxxx
                     //           ||||
                     // read1: xxxXXXX
                     //
                     // or any of its  variants:
                     //
-                    // toga:  xxxXXXX----XXXXX----XXXxxx
+                    // ref:   xxxXXXX----XXXXX----XXXxxx
                     // read1: xxxxxxxxxxxxxxXXXXxxxx
                     //
                     // Here, we ask for specific exon match otherwise would be hard
@@ -738,21 +743,21 @@ fn guided(
 
                     if is_match {
                         log::debug!(
-                            "DEBUG: read: {:?} single-exon in single-read component and match exactly with TOGA multi-exon -> keep!",
+                            "DEBUG: read: {:?} single-exon in single-read component and match exactly with reference multi-exon -> keep!",
                             &read,
                         );
                         keep.push(line);
                     } else {
                         log::debug!(
-                            "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with TOGA multi-exon -> orphan!",
+                            "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with reference multi-exon -> orphan!",
                             &read,
                         );
                         orphans.push(line);
                     }
                 } else {
-                    counter.inc_read_me_sc_toga_me();
+                    counter.inc_read_me_sc_reference_me();
 
-                    // CASE: multi-exon single-read component with multi-exon TOGA refs
+                    // CASE: multi-exon single-read component with multi-exon reference refs
                     //
                     // Here, we ask for at least one specific exon match otherwise would be hard
                     // to distinguish with a single-read component
@@ -763,14 +768,14 @@ fn guided(
 
                     if is_match {
                         log::debug!(
-                                "DEBUG: read: {:?} multi-exon in single-read component and match more than once exactly with TOGA multi-exon -> keep!",
+                                "DEBUG: read: {:?} multi-exon in single-read component and match more than once exactly with reference multi-exon -> keep!",
                                 &read,
                             );
 
                         keep.push(line);
                     } else {
                         log::debug!(
-                                    "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with TOGA multi-exon -> orphan!",
+                                    "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with reference multi-exon -> orphan!",
                                     &read,
                                 );
                         orphans.push(line);
@@ -854,14 +859,14 @@ fn do_self_guided_check(
     // INFO: the following case is presented:
     //
     // [SOLVED: discarding single-component reads]
-    // toga:            XXX--XX---XXXX
+    // ref:             XXX--XX---XXXX
     // read1: xxXXXXxx  |||  ||   ||||
     // read2:           XXX--XX---XXXX
     //
     // or its variants:
     //
     // [SOLVED: discarding single-component reads]
-    // toga:  XX-----------XXX--XX---XXXX
+    // ref:   XX-----------XXX--XX---XXXX
     // read1:    xxXXXXxx  |||  ||   ||||
     // read2: XX-----------XXX--XX---XXXX
     //
@@ -871,7 +876,7 @@ fn do_self_guided_check(
     // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769,
     // or mm39 chr8:72,647,487-72,650,648.
     //
-    // toga:                 XXX--XX---XXXX
+    // ref:                  XXX--XX---XXXX
     // read1: xxXXXX--XXXxx  |||  ||   ||||
     // read2:                XXX--XX---XXXX
     //
@@ -882,10 +887,10 @@ fn do_self_guided_check(
     // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769
     if is_single_component_read {
         log::trace!(
-            "DEBUG: single-component single-exon read with no TOGA refs -> {:?} -> orphan!",
+            "DEBUG: single-component single-exon read with no reference refs -> {:?} -> orphan!",
             reads
         );
-        counter.inc_read_se_sc_no_toga();
+        counter.inc_read_se_sc_no_reference();
 
         for read in reads {
             let line = read.to_bed::<Bed12>();
@@ -899,12 +904,12 @@ fn do_self_guided_check(
     // INFO: the following case is presented:
     //
     // [PARTIALLY SOLVED: min_read_num_denovo]
-    // toga:  XX-----------XXX--XX---XXXX
+    // ref:   XX-----------XXX--XX---XXXX
     // read1:    xxXXXXxx
     // read2:    xxxxXXXxx
     // read3: XX-----------XXX--XX---XXXX
     //
-    // Here, read1 and read2 overlap and form a unique non-TOGA component
+    // Here, read1 and read2 overlap and form a unique non-reference component
     // with more than 1 read. Even though a min_read_num_denovo would be too relative
     // to label a component as background transcription, we force any isolated
     // component to have more than 5 reads.
