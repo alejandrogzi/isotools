@@ -16,22 +16,23 @@
 
 use std::{
     borrow::Borrow,
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap, HashSet},
     fmt::Debug,
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    str::from_utf8_unchecked,
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use anyhow::{Ok, Result};
 use dashmap::{DashMap, DashSet};
-use hashbrown::{HashMap, HashSet};
+use genepred::GenePred;
 use log::info;
 use num_traits::{Num, NumCast};
 use packbed::{pack, OverlapType, Role};
+use petgraph::unionfind::UnionFind;
 use rayon::prelude::*;
+use std::collections::hash_map::Entry;
 
 /// Prepare reference transcripts for fusions
 ///
@@ -51,73 +52,31 @@ use rayon::prelude::*;
 ///
 /// assert!(result.is_ok());
 /// ```
-pub fn create_ref_map<P: AsRef<Path> + Debug + Sync + Send>(
+pub fn create_reference_map<P: AsRef<Path> + Debug + Sync + Send>(
     refs: Vec<P>,
-    separator: char,
-    parent_index: usize,
-) -> Result<DashMap<String, ReferenceMap>, anyhow::Error> {
+) -> Result<(DashMap<Vec<u8>, Vec<u8>>, DashMap<Vec<u8>, GroupData>), anyhow::Error> {
     let mut modes = Vec::new();
     modes.extend(std::iter::repeat(Role::Reference).take(refs.len()));
     let tracks = pack(refs, modes, OverlapType::Exon)
         .unwrap_or_else(|e| panic!("ERROR: Failed to pack reference transcripts {:?}", e));
-    let acc = DashMap::new();
 
-    let _ = tracks.into_par_iter().for_each(|(_chrom, components)| {
-        for comp in components {
-            let mut parents = HashSet::new();
-            let mut parent_exons = BTreeSet::new();
-            let mut parent_introns = BTreeSet::new();
-            for record in comp.iter() {
-                let name = unsafe { from_utf8_unchecked(record.name().unwrap()) }
-                    .split(separator)
-                    .nth(parent_index)
-                    .unwrap_or_else(|| {
-                        panic!("Invalid reference transcript name: {:?}", record.name())
-                    })
-                    .to_string();
-                let introns = record.introns();
-                let exons = record.exons();
+    let record_to_parent = DashMap::new();
+    let parent_info = DashMap::new();
 
-                parent_exons.extend(exons);
-                parent_introns.extend(introns);
-                parents.insert(name);
-            }
+    tracks.into_par_iter().for_each(|(_chrom, components)| {
+        let (local_record_to_parent, local_parent_info) = group_components(&components);
 
-            // INFO: join parents in a single str
-            let mut bind = String::new();
-            parents.into_iter().for_each(|p| {
-                bind += &p;
-                bind += "#";
-            });
+        local_record_to_parent.into_iter().for_each(|(k, v)| {
+            record_to_parent.insert(k, v);
+        });
 
-            // INFO: second loop to build map
-            for record in comp.iter() {
-                let name = unsafe { from_utf8_unchecked(record.name().unwrap()) };
-                let val =
-                    ReferenceMap::new(bind.clone(), parent_exons.clone(), parent_introns.clone());
-                acc.insert(name.to_string(), val);
-            }
-        }
+        local_parent_info.into_iter().for_each(|(k, v)| {
+            parent_info.insert(k, v);
+        });
     });
 
     info!("Reference transcript map created!");
-    Ok(acc)
-}
-
-pub struct ReferenceMap {
-    pub name: String,
-    pub exons: BTreeSet<(u64, u64)>,
-    pub introns: BTreeSet<(u64, u64)>,
-}
-
-impl ReferenceMap {
-    pub fn new(name: String, exons: BTreeSet<(u64, u64)>, introns: BTreeSet<(u64, u64)>) -> Self {
-        Self {
-            name,
-            exons,
-            introns,
-        }
-    }
+    Ok((record_to_parent, parent_info))
 }
 
 /// Parallel accumulator for the processing function
@@ -862,4 +821,132 @@ pub fn write_descriptor(data: &DashMap<String, FusionSchema>, path: PathBuf) {
             .write_all(b"\n")
             .unwrap_or_else(|e| panic!("ERROR: Error newline to file -> {e}"));
     })
+}
+
+type Exon = (u64, u64);
+
+/// GroupData struct
+///
+/// This struct is used to store the exons and introns of a group of records.
+#[derive(Debug, Clone, Default)]
+pub struct GroupData {
+    pub exons: BTreeSet<Exon>,
+    pub introns: BTreeSet<Exon>,
+}
+
+/// Group components into records and their exons/introns by their parent.
+///
+/// # Arguments
+///
+/// * `components` - A vector of vectors of GenePred structs
+///
+/// # Returns
+///
+/// * A tuple containing a DashMap of record names to parent names and a DashMap of parent names to GroupData structs
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use isotools::utils::group_components;
+///
+/// let components = vec![vec![GenePred::default()]];
+/// let (record_to_parent, parent_info) = group_components(&components);
+///
+/// assert_eq!(record_to_parent.len(), 1);
+/// assert_eq!(parent_info.len(), 1);
+/// ```
+pub fn group_components(
+    components: &[Vec<GenePred>],
+) -> (DashMap<Vec<u8>, Vec<u8>>, DashMap<Vec<u8>, GroupData>) {
+    let record_to_parent: DashMap<Vec<u8>, Vec<u8>> = DashMap::new();
+    let parent_info: DashMap<Vec<u8>, GroupData> = DashMap::new();
+
+    components
+        .par_iter()
+        .enumerate()
+        .for_each(|(comp_idx, component)| {
+            if component.is_empty() {
+                return;
+            }
+            let n = component.len();
+            let mut strand = '0';
+
+            // Cache CDS once — coding_exons() likely allocates.
+            let coding: Vec<Vec<Exon>> = component
+                .iter()
+                .map(|r| {
+                    if strand == '0' {
+                        strand = match r.strand() {
+                            Some(genepred::Strand::Reverse) => '-',
+                            Some(genepred::Strand::Forward) => '+',
+                            _ => panic!("ERROR: Unexpected strand: {:?}", r.strand()),
+                        }
+                    }
+                    r.coding_exons()
+                })
+                .collect();
+
+            // 1. Union-Find: for each CDS exon, union every record that contains it.
+            //    We only need to remember the *first* record that ever saw an exon;
+            //    later records get unioned to it. Transitivity falls out automatically.
+            let mut uf = UnionFind::<usize>::new(n);
+            let mut exon_to_first: HashMap<(char, Exon), usize> = HashMap::new();
+
+            for (i, cds) in coding.iter().enumerate() {
+                for &exon in cds {
+                    match exon_to_first.entry((strand, exon)) {
+                        Entry::Occupied(e) => {
+                            uf.union(*e.get(), i);
+                        }
+                        Entry::Vacant(v) => {
+                            v.insert(i);
+                        }
+                    }
+                }
+            }
+
+            // 2. Bucket records by their UF root. Skip non-coding records.
+            let mut groups: HashMap<usize, Vec<usize>> = HashMap::with_capacity(8);
+            for i in 0..n {
+                if coding[i].is_empty() {
+                    continue;
+                }
+                groups.entry(uf.find_mut(i)).or_default().push(i);
+            }
+            if groups.is_empty() {
+                return;
+            }
+
+            // 3. Deterministic sub_idx: sort groups by their lowest member index.
+            let chrom = &component[0].chrom;
+            let mut entries: Vec<Vec<usize>> = groups.into_values().collect();
+            for g in entries.iter_mut() {
+                g.sort_unstable();
+            }
+            entries.sort_unstable_by_key(|g| g[0]);
+
+            // 4. Aggregate exons/introns per group, write into the DashMaps.
+            for (sub_idx, idxs) in entries.into_iter().enumerate() {
+                let mut group_name = Vec::with_capacity(chrom.len() + 24);
+                group_name.extend_from_slice(b"COMP_");
+                group_name.extend_from_slice(chrom);
+                write!(&mut group_name, "_{}_{}", comp_idx, sub_idx).unwrap();
+
+                let mut exons: BTreeSet<Exon> = BTreeSet::new();
+                let mut introns: BTreeSet<Exon> = BTreeSet::new();
+
+                for &i in &idxs {
+                    let rec = &component[i];
+                    exons.extend(rec.exons());
+                    introns.extend(rec.introns());
+                    if let Some(name) = &rec.name {
+                        record_to_parent.insert(name.clone(), group_name.clone());
+                    }
+                }
+
+                parent_info.insert(group_name, GroupData { exons, introns });
+            }
+        });
+
+    (record_to_parent, parent_info)
 }
