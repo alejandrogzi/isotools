@@ -17,12 +17,11 @@
 use anyhow::Result;
 use dashmap::DashMap;
 use genepred::{Bed12, GenePred};
-use hashbrown::{HashMap, HashSet};
 use log::info;
 use packbed::{pack, OverlapType, Role};
 use rayon::prelude::*;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::cli::Args;
@@ -57,12 +56,11 @@ pub const BIG_SEP: &str = "__"; // WARN: should change to '::' -> breaks ORF cal
 pub fn detect_fusions(args: Args) {
     info!("Preparing files for fusion detection...");
 
-    let (buckets, reference_map) =
-        make_buckets(args.refs, args.query, args.separator, args.parent_index)
-            .expect("ERROR: Failed to make buckets!");
+    let (buckets, record_to_parent, parent_info) =
+        make_buckets(args.refs, args.query).expect("ERROR: Failed to make buckets!");
     let match_type = MatchType::from(args.intron_match);
 
-    info!("Detected {} reference transcripts", reference_map.len());
+    info!("Detected {} reference transcripts", record_to_parent.len());
 
     let counter = ParallelCounter::default();
     let accumulator = ParallelAccumulator::default();
@@ -72,12 +70,12 @@ pub fn detect_fusions(args: Args) {
 
         process_components(
             components,
-            &reference_map,
+            &record_to_parent,
+            &parent_info,
             &accumulator,
             &counter,
             args.recover,
             match_type,
-            args.colorize.clone(),
             args.threshold,
             args.tag,
         );
@@ -131,13 +129,12 @@ pub fn detect_fusions(args: Args) {
 fn make_buckets(
     mut refs: Vec<PathBuf>,
     query: Vec<PathBuf>,
-    separator: char,
-    parent_index: usize,
 ) -> Result<(
     DashMap<String, Vec<Vec<GenePred>>>,
-    DashMap<String, ReferenceMap>,
+    DashMap<Vec<u8>, Vec<u8>>,
+    DashMap<Vec<u8>, GroupData>,
 )> {
-    let ref_map = create_ref_map(refs.clone(), separator, parent_index)?;
+    let (record_to_parent, parent_info) = create_reference_map(refs.clone())?;
 
     let mut modes = Vec::new();
     modes.extend(std::iter::repeat(Role::Reference).take(refs.len()));
@@ -146,7 +143,8 @@ fn make_buckets(
     refs.extend(query);
     let tracks = pack(refs, modes, OverlapType::Exon)
         .unwrap_or_else(|_| panic!("ERROR: Failed to pack reference transcripts!"));
-    Ok((tracks, ref_map))
+
+    Ok((tracks, record_to_parent, parent_info))
 }
 
 /// Processes the components of reads in parallel
@@ -182,12 +180,12 @@ fn make_buckets(
 #[allow(clippy::too_many_arguments)]
 fn process_components(
     components: Vec<Vec<GenePred>>,
-    reference_map: &DashMap<String, ReferenceMap>,
+    record_to_parent: &DashMap<Vec<u8>, Vec<u8>>,
+    parent_info: &DashMap<Vec<u8>, GroupData>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     recover: bool,
     match_type: MatchType,
-    _colorize: Option<String>,
     threshold: f32,
     tag: bool,
 ) {
@@ -207,7 +205,8 @@ fn process_components(
         let (fusions, no_fusions, review, descriptor, is_dirty) = process_component(
             reference_regions,
             query_regions,
-            reference_map,
+            record_to_parent,
+            parent_info,
             recover,
             match_type,
             threshold,
@@ -260,7 +259,8 @@ fn process_components(
 fn process_component(
     reference_regions: Vec<GenePred>,
     mut query_regions: Vec<GenePred>,
-    reference_map: &DashMap<String, ReferenceMap>,
+    record_to_parent: &DashMap<Vec<u8>, Vec<u8>>,
+    parent_info: &DashMap<Vec<u8>, GroupData>,
     recover: bool,
     match_type: MatchType,
     threshold: f32,
@@ -282,48 +282,32 @@ fn process_component(
     let mut fusions = Vec::new();
     let mut no_fusions = Vec::new();
 
-    let mut genes = HashSet::new();
-    let mut reference_exons = HashMap::new();
-    let mut reference_introns = HashMap::new();
+    let mut parents = HashSet::new();
     for r in reference_regions.iter() {
-        let name = unsafe { std::str::from_utf8_unchecked(r.name().unwrap()) };
-        let gene_name = reference_map
-            .get(name)
-            .unwrap_or_else(|| panic!("ERROR: Failed to get reference map for gene: {name:?}"))
-            .name
-            .clone();
+        let parent = record_to_parent.get(r.name().unwrap()).unwrap_or_else(|| {
+            panic!(
+                "ERROR: Failed to get record_to_parent for record: {:?}",
+                r.name()
+            )
+        });
 
-        if !genes.contains(&gene_name) {
-            genes.insert(gene_name.clone());
+        if !parents.contains(parent.value()) {
+            parents.insert(parent.clone());
         }
-
-        // INFO: build reference_exons and reference_introns
-        // extends collection if name in map, otherwise inserts
-        reference_exons
-            .entry(gene_name.clone())
-            .or_insert(BTreeSet::new())
-            .extend(reference_map.get(name).unwrap().exons.iter().cloned());
-        reference_introns
-            .entry(gene_name)
-            .or_insert(BTreeSet::new())
-            .extend(reference_map.get(name).unwrap().introns.iter().cloned());
     }
-
-    let reference_exons = reference_exons.into_values().collect();
-    let reference_introns = reference_introns.into_values().collect();
 
     let mut counter = LocalCounter::new(query_regions.len());
 
     // INFO: if genes is empty the follwing occurs
     // INFO: species-specific gene | intergenic region | missing gene in refs
     // INFO: if genes len = 1, we have a single gene in the component
-    if genes.len() > 1 {
+    if parents.len() > 1 {
         let query_len = query_regions.len();
         identify_fusions(
             &mut query_regions,
             query_len,
-            reference_exons,
-            reference_introns,
+            &parents,
+            parent_info,
             &mut descriptor,
             &mut counter,
             &mut no_fusions,
@@ -339,7 +323,7 @@ fn process_component(
         &query_regions,
         &mut descriptor,
         &mut no_fusions,
-        genes.len(),
+        parents.len(),
         &mut counter,
     );
 
@@ -514,8 +498,8 @@ fn fill_schema(
 fn identify_fusions(
     query_regions: &mut Vec<GenePred>,
     query_len: usize,
-    reference_exons: Vec<BTreeSet<(u64, u64)>>,
-    reference_introns: Vec<BTreeSet<(u64, u64)>>,
+    parents: &HashSet<Vec<u8>>,
+    parent_info: &DashMap<Vec<u8>, GroupData>,
     descriptor: &mut HashMap<String, FusionSchema>,
     counter: &mut LocalCounter,
     no_fusions: &mut Vec<String>,
@@ -523,6 +507,15 @@ fn identify_fusions(
     match_type: MatchType,
     _tag: bool,
 ) {
+    let reference_exons: Vec<BTreeSet<(u64, u64)>> = parents
+        .iter()
+        .map(|p| parent_info.get(p).unwrap().exons.clone())
+        .collect();
+    let reference_introns: Vec<BTreeSet<(u64, u64)>> = parents
+        .iter()
+        .map(|p| parent_info.get(p).unwrap().introns.clone())
+        .collect();
+
     query_regions.iter_mut().for_each(|query| {
         let mut query_name =
             unsafe { std::str::from_utf8_unchecked(query.name().unwrap()) }.to_string();

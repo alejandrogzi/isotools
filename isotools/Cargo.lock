@@ -782,16 +782,14 @@ version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
 dependencies = [
- "allocator-api2",
- "equivalent",
  "foldhash 0.1.4",
 ]
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 dependencies = [
  "allocator-api2",
  "equivalent",
@@ -1022,7 +1020,7 @@ dependencies = [
  "dashmap",
  "flate2",
  "genepred",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "log",
  "num_cpus",
  "packbed",
@@ -1036,17 +1034,18 @@ dependencies = [
 
 [[package]]
 name = "iso-fusion"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "anyhow",
  "clap",
  "dashmap",
  "genepred",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "log",
  "num-traits",
  "num_cpus",
  "packbed",
+ "petgraph",
  "rand",
  "rayon",
  "serde",
@@ -1061,7 +1060,7 @@ dependencies = [
  "clap",
  "dashmap",
  "genepred",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "log",
  "num_cpus",
  "packbed",
@@ -1077,7 +1076,7 @@ dependencies = [
  "clap",
  "dashmap",
  "genepred",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "log",
  "num_cpus",
  "rayon",
@@ -1086,8 +1085,9 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
+ "bigtools",
  "clap",
  "dashmap",
  "genepred",
@@ -1106,7 +1106,7 @@ dependencies = [
  "clap",
  "dashmap",
  "genepred",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "log",
  "num_cpus",
  "packbed",
@@ -1139,7 +1139,7 @@ dependencies = [
  "clap",
  "dashmap",
  "genepred",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "log",
  "num_cpus",
  "packbed",
@@ -1604,9 +1604,9 @@ checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
 name = "petgraph"
-version = "0.8.1"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a98c6720655620a521dcc722d0ad66cd8afd5d86e34a89ef691c50b7b24de06"
+checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
 dependencies = [
  "fixedbitset",
  "hashbrown 0.15.2",

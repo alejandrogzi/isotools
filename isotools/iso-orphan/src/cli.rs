@@ -147,6 +147,84 @@ pub struct Args {
         default_value_t = log::Level::Info,
     )]
     pub level: log::Level,
+
+    #[arg(
+        short = 'M',
+        long = "overlap-mode",
+        help = "Pack overlapping mode (default: CDS) (possible values: CDS, exon, bounds)",
+        value_name = "MODE",
+        default_value_t = String::from("CDS")
+    )]
+    pub overlap_mode: String,
+
+    #[arg(
+        short = 'J',
+        long = "junction-tolerance",
+        help = "Tolerance in bp for splice junction matching (default: 0 = exact match)",
+        value_name = "NUM",
+        default_value_t = 0
+    )]
+    pub junction_tolerance: u64,
+
+    #[arg(
+        short = 'j',
+        long = "min-junction-frac",
+        help = "Minimum fraction of query junctions that must match a reference transcript (default: 0.5)",
+        value_name = "NUM",
+        default_value_t = 0.5
+    )]
+    pub min_junction_frac: f64,
+
+    #[arg(
+        short = 'f',
+        long = "min-overlap-frac",
+        help = "Minimum reciprocal overlap for single-exon read scoring (default: 0.5)",
+        value_name = "NUM",
+        default_value_t = 0.5
+    )]
+    pub min_overlap_frac: f64,
+
+    #[arg(
+        short = 'e',
+        long = "end-tolerance",
+        help = "Tolerance in bp for terminal exon boundary matching (default: 50)",
+        value_name = "NUM",
+        default_value_t = 0
+    )]
+    pub end_tolerance: u64,
+
+    #[arg(
+        short = 'S',
+        long = "splicing-scores",
+        help = "Path to directory with 4 SpliceAI BigWig files (donor/acceptor × plus/minus)",
+        value_name = "DIR",
+        required = false
+    )]
+    pub splicing_scores: Option<PathBuf>,
+
+    #[arg(
+        long = "min-intron-support-frac",
+        help = "Minimum fraction of a read's introns that must be individually supported in de novo mode (default: 0.5)",
+        value_name = "NUM",
+        default_value_t = 0.5
+    )]
+    pub min_intron_support_frac: f64,
+
+    #[arg(
+        long = "intron-support-threshold",
+        help = "Minimum fraction of component reads containing an intron for it to count as supported (default: 0.5)",
+        value_name = "NUM",
+        default_value_t = 0.5
+    )]
+    pub intron_support_threshold: f64,
+
+    #[arg(
+        long = "min-splice-score",
+        help = "Minimum median splice-site score from BigWig to keep a de novo read (default: 0.5)",
+        value_name = "NUM",
+        default_value_t = 0.5
+    )]
+    pub min_splice_score: f32,
 }
 
 pub enum Mode {

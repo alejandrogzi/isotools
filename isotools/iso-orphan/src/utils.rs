@@ -96,375 +96,161 @@ impl ParallelAccumulator {
     }
 }
 
-/// Parallel counter for the processing function
+/// Parallel counter for the processing function.
+///
+/// Tracks classification decisions across guided and de novo modes.
 pub struct ParallelCounter {
     // general
     pub components: AtomicU32,
 
-    // single-exon categories
-    pub read_se_mc_reference_se: AtomicU32, // multi-comp reference single-exon
-    pub read_se_mc_reference_me: AtomicU32, // multi-comp reference multi-exon
-    pub read_se_sc_reference_se: AtomicU32, // single-read comp reference single-exon
-    pub read_se_sc_reference_me: AtomicU32, // single-read comp reference multi-exon
+    // guided mode — multi-exon reads
+    pub guided_me_junction_keep: AtomicU32,
+    pub guided_me_boundary_keep: AtomicU32,
+    pub guided_me_splice_keep: AtomicU32,
+    pub guided_me_orphan: AtomicU32,
 
-    // multi-exon categories
-    pub read_me_mc_reference_se: AtomicU32, // multi-comp reference single-exon
-    pub read_me_mc_reference_me: AtomicU32, // multi-comp reference multi-exon
-    pub read_me_sc_reference_se: AtomicU32, // single-comp reference single-exon
-    pub read_me_sc_reference_me: AtomicU32, // single-comp reference multi-exon
+    // guided mode — single-exon reads
+    pub guided_se_keep: AtomicU32,
+    pub guided_se_orphan: AtomicU32,
 
-    // de-novo categories
-    pub read_se_sc_no_reference: AtomicU32, // single-exon comp
-    pub component_less_than_threshold: AtomicU32, // less than treshold
-    pub read_de_novo_unsupported: AtomicU32, // unsupported exon
+    // guided mode — out-of-bounds redirect
+    pub guided_oob_denovo: AtomicU32,
 
-    // rescue categories
-    pub rescue: AtomicU32,                   // rescue
-    pub read_no_splice_match: AtomicU32,     // no splice match
-    pub component_above_discards: AtomicU32, // component above discards
+    // de novo mode
+    pub denovo_single_read: AtomicU32,
+    pub denovo_small_component: AtomicU32,
+    pub denovo_me_cluster_keep: AtomicU32,
+    pub denovo_me_cluster_orphan: AtomicU32,
+    pub denovo_me_intron_keep: AtomicU32,
+    pub denovo_me_splice_orphan: AtomicU32,
+    pub denovo_se_cluster_keep: AtomicU32,
+    pub denovo_se_cluster_orphan: AtomicU32,
 }
 
-/// Default implementation for the parallel counter
-///
-/// # Example
-///
-/// ```
-/// use isotools::utils::ParallelCounter;
-///
-/// let counter = ParallelCounter::default();
-/// ```
 impl Default for ParallelCounter {
     fn default() -> Self {
         Self {
             components: AtomicU32::new(0),
-            read_se_mc_reference_se: AtomicU32::new(0),
-            read_se_mc_reference_me: AtomicU32::new(0),
-            read_se_sc_reference_se: AtomicU32::new(0),
-            read_se_sc_reference_me: AtomicU32::new(0),
-            read_me_mc_reference_se: AtomicU32::new(0),
-            read_me_mc_reference_me: AtomicU32::new(0),
-            read_me_sc_reference_se: AtomicU32::new(0),
-            read_me_sc_reference_me: AtomicU32::new(0),
-            read_se_sc_no_reference: AtomicU32::new(0),
-            component_less_than_threshold: AtomicU32::new(0),
-            read_de_novo_unsupported: AtomicU32::new(0),
-            read_no_splice_match: AtomicU32::new(0),
-            rescue: AtomicU32::new(0),
-            component_above_discards: AtomicU32::new(0),
+            guided_me_junction_keep: AtomicU32::new(0),
+            guided_me_boundary_keep: AtomicU32::new(0),
+            guided_me_splice_keep: AtomicU32::new(0),
+            guided_me_orphan: AtomicU32::new(0),
+            guided_se_keep: AtomicU32::new(0),
+            guided_se_orphan: AtomicU32::new(0),
+            guided_oob_denovo: AtomicU32::new(0),
+            denovo_single_read: AtomicU32::new(0),
+            denovo_small_component: AtomicU32::new(0),
+            denovo_me_cluster_keep: AtomicU32::new(0),
+            denovo_me_cluster_orphan: AtomicU32::new(0),
+            denovo_me_intron_keep: AtomicU32::new(0),
+            denovo_me_splice_orphan: AtomicU32::new(0),
+            denovo_se_cluster_keep: AtomicU32::new(0),
+            denovo_se_cluster_orphan: AtomicU32::new(0),
         }
     }
 }
 
 impl ParallelCounter {
-    /// Create a new parallel counter
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use isotools::utils::ParallelCounter;
-    ///
-    /// let counter = ParallelCounter::new();
-    /// ```
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Increment the number of components
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_components(5);
-    ///
-    /// assert_eq!(counter.components(), 5);
-    /// ```
+    // -- general --
+
     pub fn inc_components(&self, count: u32) {
         self.components.fetch_add(count, Ordering::Relaxed);
     }
 
-    /// Return the number of components
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// assert_eq!(counter.num_components(), 0);
-    /// ```
     pub fn num_components(&self) -> u32 {
         self.components.load(Ordering::Relaxed)
     }
 
-    /// Increment the number of reads with single-exon multi-component reference single-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_mc_reference_se();
-    ///
-    /// assert_eq!(counter.read_se_mc_reference_se(), 1);
-    /// ```
-    pub fn inc_read_se_mc_reference_se(&self) {
-        self.read_se_mc_reference_se.fetch_add(1, Ordering::Relaxed);
+    // -- guided mode: multi-exon reads --
+
+    /// Multi-exon read kept by junction scoring against individual reference transcripts.
+    pub fn inc_guided_me_junction_keep(&self) {
+        self.guided_me_junction_keep.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon multi-component reference multi-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_mc_reference_me();
-    ///
-    /// assert_eq!(counter.read_se_mc_reference_me(), 1);
-    /// ```
-    pub fn inc_read_se_mc_reference_me(&self) {
-        self.read_se_mc_reference_me.fetch_add(1, Ordering::Relaxed);
+    /// Multi-exon read rescued by exon boundary matching (fallback when junction score is low).
+    pub fn inc_guided_me_boundary_keep(&self) {
+        self.guided_me_boundary_keep.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon single-component reference single-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_reference_se();
-    ///
-    /// assert_eq!(counter.read_se_sc_reference_se(), 1);
-    /// ```
-    pub fn inc_read_se_sc_reference_se(&self) {
-        self.read_se_sc_reference_se.fetch_add(1, Ordering::Relaxed);
+    /// Multi-exon read rescued by splice site score (fallback when junction score is low).
+    pub fn inc_guided_me_splice_keep(&self) {
+        self.guided_me_splice_keep.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon single-component reference multi-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_reference_me();
-    ///
-    /// assert_eq!(counter.read_se_sc_reference_me(), 1);
-    /// ```
-    pub fn inc_read_se_sc_reference_me(&self) {
-        self.read_se_sc_reference_me.fetch_add(1, Ordering::Relaxed);
+    /// Multi-exon read orphaned (no junction support, no boundary match).
+    pub fn inc_guided_me_orphan(&self) {
+        self.guided_me_orphan.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon multi-component reference single-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_mc_reference_se();
-    ///
-    /// assert_eq!(counter.read_me_mc_reference_se(), 1);
-    /// ```
-    pub fn inc_read_me_mc_reference_se(&self) {
-        self.read_me_mc_reference_se.fetch_add(1, Ordering::Relaxed);
+    // -- guided mode: single-exon reads --
+
+    /// Single-exon read kept by reciprocal overlap with reference exon.
+    pub fn inc_guided_se_keep(&self) {
+        self.guided_se_keep.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon multi-component reference multi-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_mc_reference_me();
-    ///
-    /// assert_eq!(counter.read_me_mc_reference_me(), 1);
-    /// ```
-    pub fn inc_read_me_mc_reference_me(&self) {
-        self.read_me_mc_reference_me.fetch_add(1, Ordering::Relaxed);
+    /// Single-exon read orphaned (insufficient overlap with any reference exon).
+    pub fn inc_guided_se_orphan(&self) {
+        self.guided_se_orphan.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon single-component reference single-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_sc_reference_se();
-    ///
-    /// assert_eq!(counter.read_me_sc_reference_se(), 1);
-    /// ```
-    pub fn inc_read_me_sc_reference_se(&self) {
-        self.read_me_sc_reference_se.fetch_add(1, Ordering::Relaxed);
+    // -- guided mode: out-of-bounds redirect --
+
+    /// Out-of-bounds reads redirected from guided to de novo.
+    pub fn inc_guided_oob_denovo(&self, count: u32) {
+        self.guided_oob_denovo.fetch_add(count, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with multi-exon single-component reference multi-exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_me_sc_reference_me();
-    ///
-    /// assert_eq!(counter.read_me_sc_reference_me(), 1);
-    /// ```
-    pub fn inc_read_me_sc_reference_me(&self) {
-        self.read_me_sc_reference_me.fetch_add(1, Ordering::Relaxed);
+    // -- de novo mode --
+
+    /// Single-read component orphaned (insufficient evidence without support).
+    pub fn inc_denovo_single_read(&self) {
+        self.denovo_single_read.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with single-exon single-component reference no reference
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_se_sc_no_reference();
-    ///
-    /// assert_eq!(counter.read_se_sc_no_reference(), 1);
-    /// ```
-    pub fn inc_read_se_sc_no_reference(&self) {
-        self.read_se_sc_no_reference.fetch_add(1, Ordering::Relaxed);
+    /// Component smaller than min_cluster_support → all reads orphaned.
+    pub fn inc_denovo_small_component(&self) {
+        self.denovo_small_component.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with less than threshold
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_component_less_than_threshold();
-    ///
-    /// assert_eq!(counter.component_less_than_threshold(), 1);
-    /// ```
-    pub fn inc_component_less_than_threshold(&self) {
-        self.component_less_than_threshold
+    /// Multi-exon read kept (in a supported intron-chain cluster).
+    pub fn inc_denovo_me_cluster_keep(&self) {
+        self.denovo_me_cluster_keep.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Multi-exon read orphaned (in an unsupported intron-chain cluster, low intron support).
+    pub fn inc_denovo_me_cluster_orphan(&self) {
+        self.denovo_me_cluster_orphan
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of reads with unsupported exon
-    ///
-    /// # Parameters
-    ///
-    /// - `count`: The number of components to add.
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_de_novo_unsupported();
-    ///
-    /// assert_eq!(counter.read_de_novo_unsupported(), 1);
-    /// ```
-    pub fn inc_read_de_novo_unsupported(&self) {
-        self.read_de_novo_unsupported
+    /// Multi-exon read kept by per-intron support (non-dominant cluster).
+    pub fn inc_denovo_me_intron_keep(&self) {
+        self.denovo_me_intron_keep.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Multi-exon read orphaned by low splice-site score (would have passed intron support).
+    pub fn inc_denovo_me_splice_orphan(&self) {
+        self.denovo_me_splice_orphan.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Single-exon read kept (in a supported overlap cluster).
+    pub fn inc_denovo_se_cluster_keep(&self) {
+        self.denovo_se_cluster_keep.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Single-exon read orphaned (in an unsupported overlap cluster).
+    pub fn inc_denovo_se_cluster_orphan(&self) {
+        self.denovo_se_cluster_orphan
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the number of rescues
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_rescue();
-    ///
-    /// assert_eq!(counter.rescue(), 1);
-    /// ```
-    pub fn inc_rescue(&self) {
-        self.rescue.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Increment the number of reads with no splice match
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_read_no_splice_match();
-    ///
-    /// assert_eq!(counter.read_no_splice_match(), 1);
-    /// ```
-    pub fn inc_read_no_splice_match(&self) {
-        self.read_no_splice_match.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Increment the number of components above discards
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    /// counter.inc_component_above_discards();
-    ///
-    /// assert_eq!(counter.component_above_discards(), 1);
-    /// ```
-    pub fn inc_component_above_discards(&self) {
-        self.component_above_discards
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Summarize the counter
-    ///
-    /// # Example
-    ///
-    /// ```rust, no_run
-    /// let counter = ParallelCounter::new();
-    ///
-    /// counter.inc_read_se_mc_reference_se();
-    /// counter.inc_read_se_mc_reference_me();
-    /// counter.inc_read_se_sc_reference_se();
-    /// counter.inc_read_se_sc_reference_me();
-    /// counter.inc_read_me_mc_reference_se();
-    /// counter.inc_read_me_sc_reference_se();
-    /// counter.inc_read_me_sc_reference_me();
-    /// counter.inc_read_se_sc_no_reference();
-    /// counter.inc_component_less_than_threshold();
-    /// counter.inc_read_de_novo_unsupported();
-    /// counter.inc_read_no_splice_match();
-    /// counter.inc_rescue();
-    /// counter.inc_component_above_discards();
-    //
-    /// let report = counter.report_stats();
-    /// ```
+    /// Generate a formatted stats report.
     pub fn report_stats(&self) -> String {
         let mut report = String::new();
 
@@ -473,75 +259,47 @@ impl ParallelCounter {
             self.num_components()
         ));
 
-        let inc_read_se_mc_reference_se = self.read_se_mc_reference_se.load(Ordering::Relaxed);
-        let inc_read_se_mc_reference_me = self.read_se_mc_reference_me.load(Ordering::Relaxed);
-        let inc_read_se_sc_reference_se = self.read_se_sc_reference_se.load(Ordering::Relaxed);
-        let inc_read_se_sc_reference_me = self.read_se_sc_reference_me.load(Ordering::Relaxed);
-        let inc_read_me_mc_reference_se = self.read_me_mc_reference_se.load(Ordering::Relaxed);
-        let inc_read_me_mc_reference_me = self.read_me_mc_reference_me.load(Ordering::Relaxed);
-        let inc_read_me_sc_reference_se = self.read_me_sc_reference_se.load(Ordering::Relaxed);
-        let inc_read_me_sc_reference_me = self.read_me_sc_reference_me.load(Ordering::Relaxed);
-        let inc_read_se_sc_no_reference = self.read_se_sc_no_reference.load(Ordering::Relaxed);
-        let inc_component_less_than_threshold =
-            self.component_less_than_threshold.load(Ordering::Relaxed);
-        let inc_read_de_novo_unsupported = self.read_de_novo_unsupported.load(Ordering::Relaxed);
-        let inc_read_no_splice_match = self.read_no_splice_match.load(Ordering::Relaxed);
-        let inc_rescue = self.rescue.load(Ordering::Relaxed);
-        let inc_component_above_discards = self.component_above_discards.load(Ordering::Relaxed);
+        // guided mode stats
+        let me_jk = self.guided_me_junction_keep.load(Ordering::Relaxed);
+        let me_bk = self.guided_me_boundary_keep.load(Ordering::Relaxed);
+        let me_sk = self.guided_me_splice_keep.load(Ordering::Relaxed);
+        let me_or = self.guided_me_orphan.load(Ordering::Relaxed);
+        let se_k = self.guided_se_keep.load(Ordering::Relaxed);
+        let se_o = self.guided_se_orphan.load(Ordering::Relaxed);
 
         report.push_str(&format!(
-            "Total number of reads with single-exon multi-component reference single-exon: {}\n",
-            inc_read_se_mc_reference_se
+            "Guided multi-exon: junction-keep={}, boundary-keep={}, splice-keep={}, orphan={}\n",
+            me_jk, me_bk, me_sk, me_or
         ));
         report.push_str(&format!(
-            "Total number of reads with single-exon multi-component reference multi-exon: {}\n",
-            inc_read_se_mc_reference_me
+            "Guided single-exon: keep={}, orphan={}\n",
+            se_k, se_o
+        ));
+        let oob = self.guided_oob_denovo.load(Ordering::Relaxed);
+        report.push_str(&format!("Guided out-of-bounds -> de novo: {}\n", oob));
+
+        // de novo stats
+        let dn_sr = self.denovo_single_read.load(Ordering::Relaxed);
+        let dn_sc = self.denovo_small_component.load(Ordering::Relaxed);
+        let dn_mek = self.denovo_me_cluster_keep.load(Ordering::Relaxed);
+        let dn_meo = self.denovo_me_cluster_orphan.load(Ordering::Relaxed);
+        let dn_mik = self.denovo_me_intron_keep.load(Ordering::Relaxed);
+        let dn_mso = self.denovo_me_splice_orphan.load(Ordering::Relaxed);
+        let dn_sek = self.denovo_se_cluster_keep.load(Ordering::Relaxed);
+        let dn_seo = self.denovo_se_cluster_orphan.load(Ordering::Relaxed);
+
+        report.push_str(&format!(
+            "De novo: single-read-orphan={}, small-component-orphan={}\n",
+            dn_sr, dn_sc
         ));
         report.push_str(&format!(
-            "Total number of reads with single-exon single-component reference single-exon: {}\n",
-            inc_read_se_sc_reference_se
+            "De novo multi-exon: cluster-keep={}, intron-support-keep={}, cluster-orphan={}, splice-orphan={}\n",
+            dn_mek, dn_mik, dn_meo, dn_mso
         ));
         report.push_str(&format!(
-            "Total number of reads with single-exon single-component reference multi-exon: {}\n",
-            inc_read_se_sc_reference_me
+            "De novo single-exon clusters: keep={}, orphan={}\n",
+            dn_sek, dn_seo
         ));
-        report.push_str(&format!(
-            "Total number of reads with multi-exon multi-component reference single-exon: {}\n",
-            inc_read_me_mc_reference_se
-        ));
-        report.push_str(&format!(
-            "Total number of reads with multi-exon multi-component reference multi-exon: {}\n",
-            inc_read_me_mc_reference_me
-        ));
-        report.push_str(&format!(
-            "Total number of reads with multi-exon single-component reference single-exon: {}\n",
-            inc_read_me_sc_reference_se
-        ));
-        report.push_str(&format!(
-            "Total number of reads with multi-exon single-component reference multi-exon: {}\n",
-            inc_read_me_sc_reference_me
-        ));
-        report.push_str(&format!(
-            "Total number of reads with single-exon single-component reference no reference: {}\n",
-            inc_read_se_sc_no_reference
-        ));
-        report.push_str(&format!(
-            "Total number of denovo reads with less than min_read_num_denovo: {}\n",
-            inc_component_less_than_threshold
-        ));
-        report.push_str(&format!(
-            "Total number of reads with unsupported exon: {}\n",
-            inc_read_de_novo_unsupported
-        ));
-        report.push_str(&format!(
-            "Total number of components above min_discard_percentage: {}\n",
-            inc_component_above_discards
-        ));
-        report.push_str(&format!(
-            "Total number of reads with no splice match against reference: {}\n",
-            inc_read_no_splice_match
-        ));
-        report.push_str(&format!("Total number of rescues: {}\n", inc_rescue));
 
         report
     }
@@ -555,24 +313,10 @@ impl ParallelCounter {
 ///
 /// # Example
 ///
-/// ```
+/// ```rust, no_run
 /// use isotools::utils::ParallelCounter;
 ///
 /// let counter = ParallelCounter::new();
-/// counter.inc_read_se_mc_reference_se(5);
-/// counter.inc_read_se_mc_reference_me(5);
-/// counter.inc_read_se_sc_reference_se(5);
-/// counter.inc_read_se_sc_reference_me(5);
-/// counter.inc_read_me_mc_reference_se(5);
-/// counter.inc_read_me_sc_reference_se(5);
-/// counter.inc_read_me_sc_reference_me(5);
-/// counter.inc_read_se_sc_no_reference(5);
-/// counter.inc_component_less_than_threshold(5);
-/// counter.inc_read_de_novo_unsupported(5);
-/// counter.inc_read_no_splice_match(5);
-/// counter.inc_rescue(5);
-/// counter.inc_component_above_discards(5);
-///
 /// __report_stats(&counter);
 /// ```
 pub fn __report_stats(counter: &ParallelCounter) {

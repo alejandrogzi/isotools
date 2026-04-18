@@ -118,15 +118,6 @@ pub struct Args {
     pub prefix: PathBuf,
 
     #[arg(
-        short = 'c',
-        long = "colorize",
-        help = "Flag to colorize output files",
-        value_name = "FLAG",
-        required = false
-    )]
-    pub colorize: Option<String>,
-
-    #[arg(
         short = 'T',
         long = "tag",
         required = false,
@@ -135,26 +126,6 @@ pub struct Args {
         action = ArgAction::SetTrue,
     )]
     pub tag: bool,
-
-    #[arg(
-        short = 'S',
-        long = "separator",
-        required = false,
-        value_name = "SEP",
-        help = "Separator in transcript names to get parent gene name",
-        default_value_t = '#'
-    )]
-    pub separator: char,
-
-    #[arg(
-        short = 'V',
-        long = "parent-index",
-        required = false,
-        value_name = "VALUE",
-        help = "Index of the parent gene in the transcript name after splitting by separator (0-based)",
-        default_value_t = 1
-    )]
-    pub parent_index: usize,
 
     #[arg(
         short = 'D',

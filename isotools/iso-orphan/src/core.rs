@@ -14,7 +14,6 @@
 //! the assumption that they do not represent a valid source of evidence for transcription.
 //! The process is heavily parallellized to offer fast performance on large datasets.
 
-use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::{
     fs::File,
@@ -23,12 +22,18 @@ use std::{
 
 use crate::{
     cli::{Args, Mode},
+    denovo::{cluster_multi_exon, cluster_single_exon},
+    scoring::{
+        best_junction_score, best_single_exon_overlap, compute_intron_support, has_boundary_match,
+        intron_support_fraction, overlaps_any_reference_exon, ScoringParams,
+    },
+    splice::SpliceScoreProvider,
     utils::*,
 };
 
 use dashmap::DashMap;
 use genepred::{Bed12, GenePred};
-use packbed::{OverlapType, Role};
+use packbed::Role;
 use rayon::prelude::*;
 
 pub type Components = DashMap<String, Vec<Vec<GenePred>>>;
@@ -76,6 +81,36 @@ pub fn __detect_orphans(args: Args) {
         std::process::exit(1);
     });
 
+    let overlap_mode = args
+        .overlap_mode
+        .parse::<packbed::OverlapType>()
+        .unwrap_or_else(|_| {
+            log::error!(
+                "ERROR: Could not parse overlap mode -> {:?}",
+                args.overlap_mode
+            );
+            std::process::exit(1);
+        });
+
+    let params = ScoringParams {
+        junction_tolerance: args.junction_tolerance,
+        min_junction_frac: args.min_junction_frac,
+        min_overlap_frac: args.min_overlap_frac,
+        min_cluster_support: args.min_read_num_denovo,
+        end_tolerance: args.end_tolerance,
+        min_intron_support_frac: args.min_intron_support_frac,
+        intron_support_threshold: args.intron_support_threshold,
+        min_splice_score: args.min_splice_score,
+    };
+
+    // Load optional splice-site scores from BigWig files
+    let splice_scores = args.splicing_scores.as_ref().map(|dir| {
+        SpliceScoreProvider::from_dir(dir, 0.01).unwrap_or_else(|e| {
+            log::error!("ERROR: Failed to load splice scores: {}", e);
+            std::process::exit(1);
+        })
+    });
+
     match mode {
         Mode::Guided => {
             log::info!("INFO: Running using guided mode");
@@ -108,20 +143,18 @@ pub fn __detect_orphans(args: Args) {
             // Note that the same case but with CDS overlap is not a problem and
             // represents a case of a real transcription of a shorter isoform or a
             // truncated one.
-            let tracks =
-                packbed::pack(inputs, vec![Role::Reference, Role::Query], OverlapType::CDS)
-                    .unwrap_or_else(|e| {
-                        log::error!("ERROR: Failed to packed reads: {:?}", e);
-                        std::process::exit(1);
-                    });
+            let tracks = packbed::pack(inputs, modes, overlap_mode).unwrap_or_else(|e| {
+                log::error!("ERROR: Failed to packed reads: {:?}", e);
+                std::process::exit(1);
+            });
 
             __process(
                 tracks,
                 &mode,
-                args.min_read_num_denovo,
+                &params,
                 outdir,
                 args.prefix,
-                args.min_discard_percentage,
+                splice_scores.as_ref(),
             );
         }
         Mode::DeNovo => {
@@ -179,7 +212,7 @@ pub fn __detect_orphans(args: Args) {
             //
             // SOLVED: CDS overlap mode would make isolate read1, then will be discarded
             // because it is a single-exon component.
-            let tracks = packbed::pack(vec![args.query], vec![Role::Query], OverlapType::CDS)
+            let tracks = packbed::pack(vec![args.query], vec![Role::Query], overlap_mode)
                 .unwrap_or_else(|e| {
                     log::error!("ERROR: Failed to packed reads: {:?}", e);
                     std::process::exit(1);
@@ -188,58 +221,58 @@ pub fn __detect_orphans(args: Args) {
             __process(
                 tracks,
                 &mode,
-                args.min_read_num_denovo,
+                &params,
                 outdir,
                 args.prefix,
-                args.min_discard_percentage,
+                splice_scores.as_ref(),
             );
         }
     };
 }
 
-/// Processes the components and writes the results to a file
+/// Processes the components of reads in parallel
 ///
 /// # Arguments
 ///
-/// * `tracks` - The components to process
-/// * `mode` - The mode to use
-/// * `min_read_num_denovo` - The min_read_num_denovo to use
-/// * `outdir` - The output directory
-/// * `filename` - The filename to use
+/// * `tracks` - A vector of vectors of GenePred structs
+/// * `mode` - A reference to a Mode enum
+/// * `params` - A reference to a ScoringParams struct
+/// * `outdir` - A PathBuf struct
+/// * `filename` - A String struct
+/// * `splice_scores` - A reference to a SpliceScoreProvider struct
 ///
-/// # Returns
+/// # Example
 ///
-/// None
-///
-/// # Examples
-///
-/// ```
-/// use isotools::iso_orphan::__process;
-/// use isotools::cli::Mode;
-/// use isotools::utils::Components;
-///
-/// let tracks: Components = DashMap::new();
+/// ```rust, no_run
+/// let tracks = vec![vec![GenePred::default()]];
 /// let mode = Mode::Guided;
-/// let min_read_num_denovo = 5;
-/// let outdir = "tests/data".into();
-/// let filename = "test".into();
+/// let params = ScoringParams::default();
+/// let outdir = PathBuf::default();
+/// let filename = String::default();
+/// let splice_scores = None;
 ///
-/// __process(tracks, &mode, min_read_num_denovo, outdir, filename);
+/// __process(tracks, &mode, &params, outdir, filename, splice_scores);
 /// ```
 fn __process(
     tracks: Components,
     mode: &Mode,
-    min_read_num_denovo: usize,
+    params: &ScoringParams,
     outdir: PathBuf,
     filename: String,
-    min_discard_percentage: f32,
+    splice_scores: Option<&SpliceScoreProvider>,
 ) {
     let accumulator = ParallelAccumulator::default();
     let counter = ParallelCounter::default();
 
     tracks.into_par_iter().for_each(|bucket| {
-        let _chr = bucket.0;
+        let chr = bucket.0;
         let components = bucket.1;
+
+        log::debug!(
+            "DEBUG: {} components in bucket -> {:?}",
+            components.len(),
+            chr
+        );
 
         counter.inc_components(components.len() as u32);
 
@@ -248,8 +281,8 @@ fn __process(
             &accumulator,
             &counter,
             mode,
-            min_read_num_denovo,
-            min_discard_percentage,
+            params,
+            splice_scores,
         );
     });
 
@@ -274,62 +307,68 @@ fn __process(
     });
 }
 
-/// Parallel processing of components
+/// Processes a component of reads
 ///
 /// # Arguments
 ///
-/// * `components` - The components to process
-/// * `accumulator` - The accumulator to use
-/// * `counter` - The counter to use
-/// * `mode` - The mode to use
-/// * `min_read_num_denovo` - The min_read_num_denovo to use
+/// * `components` - A vector of vectors of GenePred structs
+/// * `accumulator` - A reference to a ParallelAccumulator struct
+/// * `counter` - A reference to a ParallelCounter struct
+/// * `mode` - A reference to a Mode enum
+/// * `params` - A reference to a ScoringParams struct
+/// * `splice_scores` - A reference to a SpliceScoreProvider struct
 ///
-/// # Returns
+/// # Example
 ///
-/// None
-///
-/// # Examples
-///
-/// ```
-/// use isotools::iso_orphan::__process_components;
-/// use isotools::cli::Mode;
-/// use isotools::utils::{Components, ParallelAccumulator, ParallelCounter};
-///
-/// let components: Vec<Box<dyn BedPackage>> = vec![];
+/// ```rust, no_run
+/// let components = vec![vec![GenePred::default()]];
 /// let accumulator = ParallelAccumulator::default();
 /// let counter = ParallelCounter::default();
 /// let mode = Mode::Guided;
-/// let min_read_num_denovo = 5;
+/// let params = ScoringParams::default();
+/// let splice_scores = None;
 ///
-/// __process_components(components, &accumulator, &counter, &mode, min_read_num_denovo);
+/// __process_components(
+///     components,
+///     &accumulator,
+///     &counter,
+///     &mode,
+///     &params,
+///     splice_scores
+/// );
 /// ```
 fn __process_components(
     components: Vec<Vec<GenePred>>,
     accumulator: &ParallelAccumulator,
     counter: &ParallelCounter,
     mode: &Mode,
-    min_read_num_denovo: usize,
-    min_discard_percentage: f32,
+    params: &ScoringParams,
+    splice_scores: Option<&SpliceScoreProvider>,
 ) {
     components.into_par_iter().for_each(|component| match mode {
         Mode::Guided => {
-            let (refs, queries) = component.into_iter().partition(|record| {
-                let role = record
-                    .get_extra(b"role")
-                    .unwrap_or_else(|| panic!("ERROR: Could not get role from record!"))
-                    .clone()
-                    .into_scalar();
+            let (refs, queries): (Vec<GenePred>, Vec<GenePred>) =
+                component.into_iter().partition(|record| {
+                    let role = record
+                        .get_extra(b"role")
+                        .unwrap_or_else(|| panic!("ERROR: Could not get role from record!"))
+                        .clone()
+                        .into_scalar();
 
-                role == Some(b"reference".to_vec())
-            });
+                    role == Some(b"reference".to_vec())
+                });
 
-            let (keep, orphans) = guided(
-                refs,
-                queries,
-                counter,
-                min_read_num_denovo,
-                min_discard_percentage,
-            );
+            if !queries.is_empty() {
+                log::debug!(
+                    "DEBUG: processing guided mode; component of size {}",
+                    queries.len()
+                );
+            } else {
+                log::trace!("DEBUG: component of size 0 -> skipping");
+                return;
+            }
+
+            let (keep, orphans) = guided(refs, queries, counter, params, splice_scores);
             accumulator.add(keep, orphans);
         }
         Mode::DeNovo => {
@@ -343,43 +382,30 @@ fn __process_components(
                 role == Some(b"reference".to_vec())
             });
 
-            let (keep, orphans) = self_guided(queries, counter, min_read_num_denovo);
+            let (keep, orphans) = self_guided(queries, counter, params, splice_scores);
             accumulator.add(keep, orphans);
         }
     });
 }
 
-/// Guided mode
+/// Guided mode: score each query read against individual reference transcripts.
+///
+/// Reads within reference bounds are scored by junction/overlap agreement.
+/// Reads extending beyond reference bounds are redirected to de novo evaluation.
 ///
 /// # Arguments
 ///
-/// * `components` - The components to process
-/// * `counter` - The counter to use
-/// * `min_read_num_denovo` - The min_read_num_denovo to use
-///
-/// # Returns
-///
-/// A tuple containing the keep and orphans
-///
-/// # Examples
-///
-/// ```
-/// use isotools::iso_orphan::guided;
-/// use isotools::utils::ParallelCounter;
-///
-/// let components = Box::new((RefGenePred::default(), vec![]));
-/// let counter = ParallelCounter::default();
-/// let min_read_num_denovo = 5;
-///
-/// let (keep, orphans) = guided(components, &counter, min_read_num_denovo);
-/// ```
-#[allow(clippy::boxed_local)]
+/// * `references` - Reference transcripts in the component
+/// * `queries` - Query reads to classify
+/// * `counter` - Stats counter
+/// * `params` - Scoring parameters
+/// * `splice_scores` - Optional splice-site score provider
 fn guided(
     references: Vec<GenePred>,
-    mut queries: Vec<GenePred>,
+    queries: Vec<GenePred>,
     counter: &ParallelCounter,
-    min_read_num_denovo: usize,
-    min_discard_percentage: f32,
+    params: &ScoringParams,
+    splice_scores: Option<&SpliceScoreProvider>,
 ) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let mut keep = Vec::new();
     let mut orphans = Vec::new();
@@ -413,447 +439,265 @@ fn guided(
         //
         // For a clearer illustration go to HLpteAle1A HAP1_SUPER_1:112,985,006-112,991,219
         // or mm39 chr3:118,192,628-118,376,044 or mm39 chr3:141,166,307-141,389,231
-        do_self_guided_check(&mut queries, counter, min_read_num_denovo);
+        return do_self_guided_check(&queries, counter, params, splice_scores);
     }
 
-    // INFO: ask if ANY reference is a single-exon
-    // INFO: single-exon signifies no introns
-    let is_reference_single_exon = references
-        .iter()
-        .any(|projection| projection.introns().is_empty());
+    let total_queries = queries.len();
 
-    let reference_exons = references
-        .iter()
-        .flat_map(|record| record.exons())
-        .collect::<Vec<(u64, u64)>>();
+    if queries.is_empty() {
+        let projections: Vec<Option<&[u8]>> = references.iter().map(|p| p.name()).collect();
+        log::trace!(
+            "DEBUG: reference projection without reads -> {:?}",
+            projections
+        );
+        return (keep, orphans);
+    }
 
-    if queries.len() > 1 {
-        let mut discards = 0; // INFO: only in common branch
-        queries.sort_by(|a, b| a.exonic_length().cmp(&b.exonic_length()));
+    // -----------------------------------------------------------------------
+    // Partition queries by exon overlap with references
+    // -----------------------------------------------------------------------
+    //
+    // CASE: overlapping vs non-overlapping reads
+    //
+    // ref:    xxxxXXXX----XXXXX----XXXxxx
+    //
+    // read1:  xxxxXXXX----XXXXX              → overlaps ref exons → guided
+    // read2:        xxxXXXXxxx               → overlaps ref exon  → guided
+    // read3:              xxxxxxxxxxxx       → sits in ref intron  → de novo
+    // read4: xxxx                            → no exon overlap     → de novo
+    //
+    // Reads whose exons overlap at least one reference exon are scored in
+    // guided mode. Reads with zero exon overlap (intronic, intergenic,
+    // chimeric with no reference support) are redirected to de novo.
 
-        for read in queries.iter() {
-            let is_single_exon_read = read.introns().is_empty();
-            let line = read.to_bed::<Bed12>();
+    let (in_bounds, oob): (Vec<GenePred>, Vec<GenePred>) = queries
+        .into_iter()
+        .partition(|read| overlaps_any_reference_exon(read, &references));
 
-            if is_single_exon_read {
-                if is_reference_single_exon {
-                    counter.inc_read_se_mc_reference_se();
+    log::debug!(
+        "DEBUG: {} in bound reads vs {} out of bound in component of size {}",
+        in_bounds.len(),
+        oob.len(),
+        total_queries
+    );
 
-                    // CASE: single-exon read(s) with single-exon reference refs
-                    // INFO: the following case is presented:
-                    //
-                    // ref:  xxxxxxxxxxxxXXXXXxxxxxxx
-                    // read1:     xxxxxxxXXXXXxxxx
-                    // read2:  xxxxxxxxxxXXXXXx
-                    // read3:          xxXXXXXxxxx
-                    // read5: xxxxxXXXXXXXXXXXxxxxx
-                    //             ^^^^^^|||||
-                    //
-                    // Here, we would argue that all of the reads (being single-exon) match
-                    // at least one CDS coordinate + all of them are within reference boundaries
-                    //
-                    // For a clearer illustration go to mm39 chr3:61,269,596-61,278,844
-                    let is_match = read
-                        .exons()
-                        .iter()
-                        .any(|exon| reference_exons.contains(exon));
+    // Score in-bounds reads against references
+    let has_multi_exon_refs = references.iter().any(|r| !r.introns().is_empty());
+    log::debug!("DEBUG: has_multi_exon_refs={}", has_multi_exon_refs);
 
-                    if is_match {
+    for read in &in_bounds {
+        let is_single_exon_read = read.introns().is_empty();
+        let line = read.to_bed::<Bed12>();
+
+        if is_single_exon_read {
+            // Single-exon reads: score by reciprocal overlap with best reference exon.
+            //
+            // CASE: single-exon read(s) with single-exon reference refs
+            // INFO: the following case is presented:
+            //
+            // ref:  xxxxxxxxxxxxXXXXXxxxxxxx
+            // read1:     xxxxxxxXXXXXxxxx
+            // read2:  xxxxxxxxxxXXXXXx
+            // read3:          xxXXXXXxxxx
+            // read5: xxxxxXXXXXXXXXXXxxxxx
+            //             ^^^^^^|||||
+            //
+            // Here, we would argue that all of the reads (being single-exon) match
+            // at least one CDS coordinate + all of them are within reference boundaries
+            //
+            // For a clearer illustration go to mm39 chr3:61,269,596-61,278,844
+            //
+            // CASE: single-exon fuzzy overlap with reference CDS
+            // INFO: the following case is presented:
+            //
+            // ref:      xxxxxxXXXXXXX----------
+            //               ^^||||^^^
+            // read1: xxxxxxxXXXXXXXxxxx
+            // read2:       xxxXXXXXXX----------
+            // read3:     xxxxxXXXXXXX----------
+            //
+            // For a clearer illustration go to mm39 chr3:65,014,198-65,019,415
+            // or mm39 chr3:117,366,942-117,374,421
+            let overlap = best_single_exon_overlap(read, &references);
+
+            if overlap >= params.min_overlap_frac {
+                log::debug!(
+                    "DEBUG: read {:?} single-exon overlap={:.3} >= {:.3} -> keep!",
+                    read.name(),
+                    overlap,
+                    params.min_overlap_frac,
+                );
+                counter.inc_guided_se_keep();
+                keep.push(line);
+            } else {
+                log::debug!(
+                    "DEBUG: read {:?} single-exon overlap={:.3} < {:.3} -> orphan!",
+                    read.name(),
+                    overlap,
+                    params.min_overlap_frac,
+                );
+                counter.inc_guided_se_orphan();
+                orphans.push(line);
+            }
+        } else {
+            // Multi-exon reads: score by splice junction agreement with individual
+            // reference transcripts.
+            //
+            // CASE: multi-exon read with multi-exon reference
+            //
+            // ref:      xxxxxxXXXXXXX----XXXXX----
+            //               ^^||||^^^
+            // read1: xxxxxxxXXXXXXXXX----XXXXXxx -> shorter isoform
+            // read2:       xxxXXXXXXX----XXXXX----
+            // read3:     xxxxxXXXXXXX----XXXXX----
+            //
+            // For a clearer illustration go to mm39 chr3:65,435,178-65,440,499
+            if has_multi_exon_refs {
+                if let Some(best) =
+                    best_junction_score(read, &references, params.junction_tolerance)
+                {
+                    if best.passes(params.min_junction_frac) {
                         log::debug!(
-                            "INFO: read: {:?} single-exon in a multi-read component overlaps with reference single-exon CDS -> keep!",
-                            &read,
+                            "DEBUG: read {:?} multi-exon junction_frac={:.3} ({}/{} matches) -> keep!",
+                            read.name(),
+                            best.query_junction_frac,
+                            best.junction_matches,
+                            best.query_junction_count,
                         );
+                        counter.inc_guided_me_junction_keep();
+                        keep.push(line);
+                    } else if has_boundary_match(read, &references, params.end_tolerance) {
+                        log::debug!(
+                            "DEBUG: read {:?} multi-exon junction_frac={:.3} low, but has boundary match -> boundary keep!",
+                            read.name(),
+                            best.query_junction_frac,
+                        );
+                        counter.inc_guided_me_boundary_keep();
                         keep.push(line);
                     } else {
-                        log::debug!( "INFO: read: {:?} single-exon in a multi-read component does not overlap with reference single-exon CDS -> orphan!", &read);
-                        discards += 1;
+                        log::debug!(
+                            "DEBUG: read {:?} multi-exon junction_frac={:.3}, no boundary match -> orphan!",
+                            read.name(),
+                            best.query_junction_frac,
+                        );
+                        counter.inc_guided_me_orphan();
+                        orphans.push(line);
                     }
                 } else {
-                    counter.inc_read_se_mc_reference_me();
-
-                    // INFO: main question: your CDS matches exactly or partially a reference CDS?
-                    // CASE: single-exon fuzzy overlap with reference CDS
-                    // INFO: the following case is presented:
-                    //
-                    // ref:      xxxxxxXXXXXXX----------
-                    //               ^^||||^^^
-                    // read1: xxxxxxxXXXXXXXxxxx
-                    // read2:       xxxXXXXXXX----------
-                    // read3:     xxxxxXXXXXXX----------
-                    //
-                    // Here, read1 overlaps at the CDS level and thus is part of the component;
-                    // however, is not an exact CDS match.
-                    //
-                    // For a clearer illustration go to mm39 chr3:65,014,198-65,019,415
-                    // or mm39 chr3:117,366,942-117,374,421
-                    let is_match = read
-                        .exons()
-                        .iter()
-                        .any(|exon| reference_exons.contains(exon));
-
-                    if is_match {
-                        log::debug!(
-                            "INFO: read: {:?} single-exon in a multi-read component overlaps with reference multi-exon CDS -> keep!",
-                            &read,
-                        );
-                        keep.push(read.to_bed::<Bed12>());
-                    } else {
-                        log::debug!("INFO: read: {:?} single-exon in a multi-read component does not overlap with reference multi-exon CDS -> orphan!", &read);
-                        discards += 1;
-                    }
+                    counter.inc_guided_me_orphan();
+                    orphans.push(line);
                 }
             } else {
-                if is_reference_single_exon {
-                    counter.inc_read_me_mc_reference_se();
-                } else {
-                    counter.inc_read_me_mc_reference_me();
-                }
+                // All references are single-exon; use boundary matching or test splice sites if
+                // scores provide
+                log::debug!("DEBUG: multi-exon read vs single-exon refs, boundary match or splice site score");
 
-                // INFO: means CDS reference overlap and not single-exon
-                // INFO: branch where most of the cases will be in
-                // INFO: could present the following case:
-                //
-                // ref:      xxxxxxXXXXXXX----XXXXX----
-                //               ^^||||^^^
-                // read1: xxxxxxxXXXXXXXXX----XXXXXxx -> shorter isoform
-                // read2:       xxxXXXXXXX----XXXXX----
-                // read3:     xxxxxXXXXXXX----XXXXX----
-                //
-                // or its variants:
-                //
-                // ref:      xxxxxxXXXXXXX----------
-                //               ^^||||^^^
-                // read1: xxxxxxxXXXXXXXXX----xxxxx
-                // read2:       xxxXXXXXXX----------
-                // read3:     xxxxxXXXXXXX----------
-                //
-                // or:
-                //
-                // ref:   xxxxXXXXX-------XXXXXXX----
-                //                               ^^
-                // read1: xxxxXXXXXxxxxxxxXXXXXXXXXxx
-                // read2: xxxxXXXXX-------XXXXXXX----
-                //
-                // Here, we will evaluate if the present read has more than 1
-                // exact CDS match.
-                //
-                // For a clearer illustration go to mm39 chr3:65,435,178-65,440,499
-
-                // WARN: not making is_reference_single_exon check because it is not needed
-                let mut matches = 0;
-                for read_exon in read.exons().iter() {
-                    if reference_exons.contains(read_exon) {
-                        matches += 1;
-                    }
-
-                    if matches > 1 {
-                        log::debug!(
-                            "DEBUG: read {:?} multi-exon in a mult-read component has more than 1 exact CDS matches -> keep!",
-                            &read
+                if has_boundary_match(read, &references, params.junction_tolerance) {
+                    log::debug!(
+                        "DEBUG: read {:?} multi-exon vs single-exon refs, boundary match -> keep!",
+                        read.name(),
+                    );
+                    counter.inc_guided_me_boundary_keep();
+                    keep.push(line);
+                } else if splice_scores
+                    .and_then(|scores| scores.median_splice_score(read))
+                    .map(|median| {
+                        log::debug!("DEBUG: splice score median={}", median);
+                        median >= params.min_splice_score
+                    })
+                    .unwrap_or(false)
+                // No scores or no strand → pass
+                {
+                    log::debug!(
+                            "DEBUG: read {:?} multi-exon vs single-exon refs, no boundary match but splice site score above threshold -> keep!", read.name()
                         );
 
-                        keep.push(line);
-                        break;
-                    }
-                }
-
-                if matches <= 1 {
-                    discards += 1;
-
-                    log::debug!(
-                        "DEBUG: read {:?} multi-exon in a mult-read component has less than 1 exact CDS matches -> increase discards!",
-                        &read
-                    );
-                    discards += 1;
-                }
-            }
-        }
-
-        // INFO: if we are discarding more than 50% of reads, perform splice site matching
-        if (discards as f32) / queries.len() as f32 >= min_discard_percentage {
-            counter.inc_component_above_discards();
-
-            let reference_exons_flat: BTreeSet<u64> =
-                reference_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
-
-            for read in queries.iter() {
-                let is_splice_match = read.exons().iter().any(|(exon_start, exon_end)| {
-                    reference_exons_flat.contains(exon_start)
-                        || reference_exons_flat.contains(exon_end)
-                });
-
-                let line = read.to_bed::<Bed12>();
-
-                if is_splice_match {
-                    log::debug!(
-                        "DEBUG: read {:?} from any category that was being discarded has at least 1 splice site match with reference -> rescue!",
-                        &read
-                    );
-
-                    counter.inc_rescue();
-                    if !keep.contains(&line) {
-                        keep.push(line);
-                    }
+                    counter.inc_guided_me_splice_keep();
+                    keep.push(line);
                 } else {
                     log::debug!(
-                        "DEBUG: read {:?} multi-exon in a mult-read component has no splice site matches with reference -> orphan confirmed!",
-                        &read
+                        "DEBUG: read {:?} multi-exon vs single-exon refs, no boundary match nor splice site score -> orphan!",
+                        read.name(),
                     );
-                    counter.inc_read_no_splice_match();
-
-                    if !orphans.contains(&line) {
-                        orphans.push(line);
-                    }
-                }
-            }
-        } else {
-            // INFO: likely real drop
-            for read in queries.iter() {
-                let line = read.to_bed::<Bed12>();
-                if !orphans.contains(&line) && !keep.contains(&line) {
+                    counter.inc_guided_me_orphan();
                     orphans.push(line);
-                    counter.inc_read_no_splice_match();
-                }
-            }
-        }
-    } else {
-        if queries.is_empty() {
-            // INFO: reference projection without reads
-            let projections: Vec<Option<&[u8]>> = references.iter().map(|p| p.name()).collect();
-            log::trace!(
-                "DEBUG: reference projection without reads -> {:?}",
-                projections
-            );
-        }
-
-        // INFO: weird case of reference-single-exon and single-read component
-        if is_reference_single_exon {
-            for read in queries {
-                let is_single_exon_read = read.introns().is_empty();
-                let line = read.to_bed::<Bed12>();
-
-                if is_single_exon_read {
-                    counter.inc_read_se_sc_reference_se();
-
-                    // INFO: CDS must matche once
-                    // INFO: branch -> CDS-overlap with reference but single-read component
-                    //
-                    // ideal case:
-                    //
-                    // ref:  xxxxXXXXXXxxxx
-                    //           ||||||
-                    // read1:  xxXXXXXXxxxx
-                    //
-                    // its counterpart:
-                    //
-                    // ref:  xxxxXXXXXXxxxx
-                    //         ^^|||
-                    // read1: xXXXXXxxx <- likely not a supporting transcript
-                    let is_match = read
-                        .exons()
-                        .iter()
-                        .any(|exon| reference_exons.contains(exon));
-
-                    if is_match {
-                        log::debug!(
-                            "DEBUG: read: {:?} single-exon and match exactly with reference single-exon -> keep!",
-                            &read,
-                        );
-
-                        keep.push(line);
-                    } else {
-                        log::debug!(
-                            "DEBUG: read: {:?} single-exon and does not match exactly with reference single-exon -> orphan!",
-                            &read,
-                        );
-                        orphans.push(line);
-                    }
-                } else {
-                    counter.inc_read_me_sc_reference_se();
-
-                    // INFO: reference-single-exon CDS overlap with multi-exon single-read component
-                    // INFO: at least one splice site should match
-                    //
-                    // ideal case:
-                    //
-                    // ref:  xxxxXXXXXXxxxx
-                    //           ||||||
-                    // read1:  xxXXXXXXxxxx-----xxxxxx
-                    //
-                    // its counterpart:
-                    //
-                    // ref:  xxxxXXXXXXxxxx
-                    //         ^^|||
-                    // read1: xXXXXXxxx-------xxxxx <- likely not a supporting transcript
-
-                    let reference_exons_flat: BTreeSet<u64> =
-                        reference_exons.iter().flat_map(|(s, e)| [*s, *e]).collect();
-
-                    let is_splice_match = read.exons().iter().any(|(exon_start, exon_end)| {
-                        reference_exons_flat.contains(exon_start)
-                            || reference_exons_flat.contains(exon_end)
-                    });
-
-                    if is_splice_match {
-                        log::debug!(
-                            "DEBUG: read: {:?} multi-exon matches at least 1 splice site with reference single-exon -> keep!",
-                            &read,
-                        );
-
-                        keep.push(line);
-                    } else {
-                        log::debug!(
-                            "DEBUG: read: {:?} multi-exon does not match any splice site with reference single-exon -> orphan!",
-                            &read,
-                        );
-
-                        orphans.push(line);
-                    }
-                }
-            }
-        } else {
-            // INFO: reference multi-exon, single-read component
-            // INFO: ask if CDS matches are more than 1 OR is within reference boundaries
-
-            for read in queries {
-                let is_single_exon_read = read.introns().is_empty();
-                let line = read.to_bed::<Bed12>();
-
-                if is_single_exon_read {
-                    counter.inc_read_se_sc_reference_me();
-
-                    // CASE: single-exon read component with multi-exon reference refs
-                    // INFO: the following case is presented:
-                    //
-                    // ref:   xxxXXXX----XXXXX----XXXxxx
-                    //           ||||
-                    // read1: xxxXXXX
-                    //
-                    // or any of its  variants:
-                    //
-                    // ref:   xxxXXXX----XXXXX----XXXxxx
-                    // read1: xxxxxxxxxxxxxxXXXXxxxx
-                    //
-                    // Here, we ask for specific exon match otherwise would be hard
-                    // to distinguish with a single-exon read component
-                    let is_match = read
-                        .exons()
-                        .iter()
-                        .any(|exon| reference_exons.contains(exon));
-
-                    if is_match {
-                        log::debug!(
-                            "DEBUG: read: {:?} single-exon in single-read component and match exactly with reference multi-exon -> keep!",
-                            &read,
-                        );
-                        keep.push(line);
-                    } else {
-                        log::debug!(
-                            "DEBUG: read: {:?} single-exon in single-read component and does not match exactly with reference multi-exon -> orphan!",
-                            &read,
-                        );
-                        orphans.push(line);
-                    }
-                } else {
-                    counter.inc_read_me_sc_reference_me();
-
-                    // CASE: multi-exon single-read component with multi-exon reference refs
-                    //
-                    // Here, we ask for at least one specific exon match otherwise would be hard
-                    // to distinguish with a single-read component
-                    let is_match = read
-                        .exons()
-                        .iter()
-                        .any(|exon| reference_exons.contains(exon));
-
-                    if is_match {
-                        log::debug!(
-                                "DEBUG: read: {:?} multi-exon in single-read component and match more than once exactly with reference multi-exon -> keep!",
-                                &read,
-                            );
-
-                        keep.push(line);
-                    } else {
-                        log::debug!(
-                                    "DEBUG: read: {:?} multi-exon in single-read component and does not match more than once exactly with reference multi-exon -> orphan!",
-                                    &read,
-                                );
-                        orphans.push(line);
-                    }
                 }
             }
         }
     }
+
+    // Redirect out-of-bounds reads to de novo evaluation
+    if !oob.is_empty() {
+        log::debug!(
+            "DEBUG: {} reads extend beyond reference bounds -> de novo",
+            oob.len()
+        );
+        counter.inc_guided_oob_denovo(oob.len() as u32);
+        let (oob_keep, oob_orphans) = do_self_guided_check(&oob, counter, params, splice_scores);
+        keep.extend(oob_keep);
+        orphans.extend(oob_orphans);
+    }
+
+    debug_assert_eq!(
+        keep.len() + orphans.len(),
+        total_queries,
+        "Partition violation in guided mode: keep({}) + orphan({}) != input({})",
+        keep.len(),
+        orphans.len(),
+        total_queries
+    );
 
     (keep, orphans)
 }
 
-/// Self-guided mode
+/// Self-guided mode: score each query read against individual reference transcripts.
+///
+/// Reads within reference bounds are scored by junction/overlap agreement.
+/// Reads extending beyond reference bounds are redirected to de novo evaluation.
 ///
 /// # Arguments
 ///
-/// * `components` - The components to process
-/// * `counter` - The counter to use
-/// * `min_read_num_denovo` - The min_read_num_denovo to use
+/// * `queries` - A vector of GenePred structs
+/// * `counter` - A reference to a ParallelCounter struct
+/// * `params` - A reference to a ScoringParams struct
+/// * `splice_scores` - A reference to a SpliceScoreProvider struct
 ///
-/// # Returns
+/// # Example
 ///
-/// A tuple containing the keep and orphans
-///
-/// # Examples
-///
-/// ```
-/// use isotools::iso_orphan::self_guided;
-/// use isotools::utils::ParallelCounter;
-///
-/// let components = Box::new((vec![], vec![]));
+/// ```rust, no_run
+/// let queries = vec![GenePred::default()];
 /// let counter = ParallelCounter::default();
-/// let min_read_num_denovo = 5;
+/// let params = ScoringParams::default();
+/// let splice_scores = None;
 ///
-/// let (keep, orphans) = self_guided(components, &counter, min_read_num_denovo);
+/// self_guided(queries, &counter, &params, splice_scores);
 /// ```
-#[allow(clippy::boxed_local)]
 fn self_guided(
-    mut queries: Vec<GenePred>,
+    queries: Vec<GenePred>,
     counter: &ParallelCounter,
-    min_read_num_denovo: usize,
+    params: &ScoringParams,
+    splice_scores: Option<&SpliceScoreProvider>,
 ) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    do_self_guided_check(&mut queries, counter, min_read_num_denovo)
+    do_self_guided_check(&queries, counter, params, splice_scores)
 }
 
-/// Self-guided mode executor
+/// Self-guided mode executor: classifies reads within a component using de novo clustering
+/// with per-intron support evaluation and optional splice-site score filtering.
 ///
-/// # Arguments
-///
-/// * `reads` - The reads to process
-/// * `counter` - The counter to use
-/// * `min_read_num_denovo` - The min_read_num_denovo to use
-///
-/// # Returns
-///
-/// A tuple containing the keep and orphans
-///
-/// # Examples
-///
-/// ```
-/// use isotools::iso_orphan::do_self_guided_check;
-/// use isotools::utils::ParallelCounter;
-///
-/// let reads = vec![];
-/// let counter = ParallelCounter::default();
-/// let min_read_num_denovo = 5;
-///
-/// let (keep, orphans) = do_self_guided_check(&mut reads, &counter, min_read_num_denovo);
-/// ```
+/// Decision flow for multi-exon reads:
+/// 1. Dominant intron-chain cluster (≥ min_cluster_support) → KEEP
+/// 2. Per-intron support ≥ threshold → tentative KEEP
+///    a. If splice scores available AND median < min_splice_score → ORPHAN
+///    b. Else → KEEP
+/// 3. Insufficient intron support → ORPHAN
 fn do_self_guided_check(
-    reads: &mut Vec<GenePred>,
+    reads: &[GenePred],
     counter: &ParallelCounter,
-    min_read_num_denovo: usize,
+    params: &ScoringParams,
+    splice_scores: Option<&SpliceScoreProvider>,
 ) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let mut keep = Vec::new();
     let mut orphans = Vec::new();
-
-    let is_single_component_read = reads.len() == 1;
 
     // CASE: single-component single-exon
     // INFO: the following case is presented:
@@ -870,7 +714,6 @@ fn do_self_guided_check(
     // read1:    xxXXXXxx  |||  ||   ||||
     // read2: XX-----------XXX--XX---XXXX
     //
-    //
     // Here, read1 is a single-exon component read that can be easily
     // discarded because it represents a common case of background noise.
     // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769,
@@ -885,23 +728,18 @@ fn do_self_guided_check(
     // level.
     //
     // For a clearer illustration go to mm39 chr8:71,358,478-71,360,769
-    if is_single_component_read {
-        log::trace!(
-            "DEBUG: single-component single-exon read with no reference refs -> {:?} -> orphan!",
-            reads
-        );
-        counter.inc_read_se_sc_no_reference();
+    if reads.len() <= 1 {
+        log::trace!("DEBUG: single-component read with no reference refs -> orphan!");
+        counter.inc_denovo_single_read();
 
         for read in reads {
-            let line = read.to_bed::<Bed12>();
-            orphans.push(line);
+            orphans.push(read.to_bed::<Bed12>());
         }
 
         return (keep, orphans);
     }
 
     // CASE: multi-exon components
-    // INFO: the following case is presented:
     //
     // [PARTIALLY SOLVED: min_read_num_denovo]
     // ref:   XX-----------XXX--XX---XXXX
@@ -909,55 +747,35 @@ fn do_self_guided_check(
     // read2:    xxxxXXXxx
     // read3: XX-----------XXX--XX---XXXX
     //
-    // Here, read1 and read2 overlap and form a unique non-reference component
-    // with more than 1 read. Even though a min_read_num_denovo would be too relative
-    // to label a component as background transcription, we force any isolated
-    // component to have more than 5 reads.
-    //
     // For a clearer illustration go to mm39 chr3:97,596,920-97,624,824
     // or mm39 chr3:103,646,891-103,652,710
-    if reads.len() < min_read_num_denovo {
+    if reads.len() < params.min_cluster_support {
         log::debug!(
-            "DEBUG: component with less than {} reads min_read_num_denovo -> {:?} -> orphan!",
-            min_read_num_denovo,
-            reads
+            "DEBUG: component with {} reads < min_cluster_support={} -> orphan!",
+            reads.len(),
+            params.min_cluster_support,
         );
-        counter.inc_component_less_than_threshold();
+        counter.inc_denovo_small_component();
 
         for read in reads {
-            let line = read.to_bed::<Bed12>();
-            orphans.push(line);
+            orphans.push(read.to_bed::<Bed12>());
         }
 
         return (keep, orphans);
     }
 
-    // INFO: sorting reads by absolute exonic_len to allow group single-exons
-    // INFO: while collection information from bigger reads
-    reads.sort_by(|a, b| a.exonic_length().cmp(&b.exonic_length()));
-
-    // INFO: establishing exonic matches from reads
-    // INFO: { exon -> matches }, then rank by matches and keep if reads with exon > 50% ocurrence
+    // -----------------------------------------------------------------------
+    // Partition reads into multi-exon and single-exon groups
+    // -----------------------------------------------------------------------
     //
     // CASE: single-exon reads following same/diff exonic pattern
-    // INFO: the following case is presented:
     //
     // read1:       xxxXXXXXXXxxx
     // read2:      xxxxxxxxxxXXXXXxxxx
     //
-    // Here, both reads would belong to the same component because exonic
-    // overlap (accounting for UTRs); however, their CDS structure is not consistent.
-    //
-    // read1:       xxxXXXXXXXxxx
-    // read2:      xxxxXXXXXXXxxxxxxx
-    //
-    // In contrast, the above case would illustrate a component where single-exon
-    // reads follow the same exonic pattern. This likely repesents uniform transcription.
-    //
     // For a clearer illustration go to HLpteAle1A HAP1_SUPER_1:112,960,536-112,964,453
     //
     // CASE: single-exon read partially overlap CDS
-    // INFO: the following case is presented:
     //
     // read1: xxxxxxxxxXXXXxxx
     // read2: -------xxxxXXXXX------XXX--
@@ -966,64 +784,717 @@ fn do_self_guided_check(
     // read5: ----------xXXXXX-----------
     //                   |||||      |||
     //
-    // The above case would illustrate a component where a single-exon read
-    // CDS overlaps partially with a non-single-exon read CDS. We would argue
-    // that this read - even if it matches at the CDS level - does not follow
-    // the same transcription pattern as the other reads.
-    //
     // For a clearer illustration go to mm39 chr8:72,042,766-72,051,539
     // or mm39 chr8:73,174,008-73,179,856
-    let mut rank = HashMap::new();
-    for read in reads.iter() {
-        for exon in read.exons().iter() {
-            rank.entry(exon.clone())
-                .and_modify(|e| *e += 1)
-                .or_insert(1);
-        }
-    }
+    let (multi_exon_indexed, single_exon_indexed): (Vec<_>, Vec<_>) = reads
+        .iter()
+        .enumerate()
+        .partition(|(_, r)| !r.introns().is_empty());
 
-    let unique_exons = rank.len();
-    for (exon, matches) in rank.iter() {
-        log::debug!("DEBUG: exon: {:?} matches: {}", exon, matches);
+    // -----------------------------------------------------------------------
+    // Multi-exon reads: cluster by intron chain + per-intron support + splice veto
+    // -----------------------------------------------------------------------
+    let me_reads: Vec<&GenePred> = multi_exon_indexed.iter().map(|(_, r)| *r).collect();
+    let me_indices: Vec<usize> = multi_exon_indexed.iter().map(|(i, _)| *i).collect();
 
-        if (*matches as f32 / unique_exons as f32) > 0.5 {
-            log::debug!(
-                "DEBUG: supported exon: {:?} with matches: {} in set of reads: {:?}",
-                exon,
-                matches,
-                reads
-            );
+    // Build component-wide intron support map
+    let intron_support = compute_intron_support(&me_reads);
+    let total_me = me_reads.len();
 
-            for read in reads.iter() {
-                let line = read.to_bed::<Bed12>();
-                if read.exons().contains(exon) {
-                    log::debug!("DEBUG: read: {:?} has exon: {:?} -> keep!", read, exon);
+    // Cluster by intron chain
+    let me_clusters = cluster_multi_exon(&me_reads, params.junction_tolerance);
 
-                    if !keep.contains(&line) {
+    for (_cid, members) in &me_clusters {
+        let is_dominant = members.len() >= params.min_cluster_support;
+
+        for &local_idx in members {
+            let global_idx = me_indices[local_idx];
+            let read = &reads[global_idx];
+            let line = read.to_bed::<Bed12>();
+
+            if is_dominant {
+                // Strong evidence: dominant intron-chain cluster → unconditional keep
+                keep.push(line);
+                counter.inc_denovo_me_cluster_keep();
+            } else {
+                // Check per-intron support across the component
+                let support_frac = intron_support_fraction(
+                    read,
+                    &intron_support,
+                    total_me,
+                    params.intron_support_threshold,
+                );
+
+                if support_frac >= params.min_intron_support_frac {
+                    // Intron support passes; apply splice-score veto if available
+                    let splice_pass = splice_scores
+                        .and_then(|scores| scores.median_splice_score(read))
+                        .map(|median| median >= params.min_splice_score)
+                        .unwrap_or(true); // No scores or no strand → pass
+
+                    if splice_pass {
                         keep.push(line);
+                        counter.inc_denovo_me_intron_keep();
+                    } else {
+                        orphans.push(line);
+                        counter.inc_denovo_me_splice_orphan();
                     }
                 } else {
-                    log::debug!(
-                        "DEBUG: read: {:?} does not have exon: {:?} -> orphan!",
-                        read,
-                        exon
-                    );
-
-                    if !orphans.contains(&line) {
-                        counter.inc_read_de_novo_unsupported();
-                        orphans.push(line);
-                    }
+                    orphans.push(line);
+                    counter.inc_denovo_me_cluster_orphan();
                 }
             }
-        } else {
-            log::debug!(
-                "DEBUG: non-supported exon: {:?} with matches: {} in set of reads: {:?}",
-                exon,
-                matches,
-                reads
-            );
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Single-exon reads: cluster by reciprocal overlap
+    // -----------------------------------------------------------------------
+    let se_reads: Vec<&GenePred> = single_exon_indexed.iter().map(|(_, r)| *r).collect();
+    let se_indices: Vec<usize> = single_exon_indexed.iter().map(|(i, _)| *i).collect();
+
+    let se_clusters = cluster_single_exon(&se_reads, params.min_overlap_frac);
+    for (_cid, members) in &se_clusters {
+        if members.len() >= params.min_cluster_support {
+            for &local_idx in members {
+                let global_idx = se_indices[local_idx];
+                keep.push(reads[global_idx].to_bed::<Bed12>());
+                counter.inc_denovo_se_cluster_keep();
+            }
+        } else {
+            for &local_idx in members {
+                let global_idx = se_indices[local_idx];
+                orphans.push(reads[global_idx].to_bed::<Bed12>());
+                counter.inc_denovo_se_cluster_orphan();
+            }
+        }
+    }
+
+    debug_assert_eq!(
+        keep.len() + orphans.len(),
+        reads.len(),
+        "Partition violation in de novo mode: keep({}) + orphan({}) != input({})",
+        keep.len(),
+        orphans.len(),
+        reads.len()
+    );
+
     (keep, orphans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scoring::ScoringParams;
+    use crate::utils::ParallelCounter;
+    use std::collections::HashMap;
+
+    fn make_record(
+        name: &[u8],
+        start: u64,
+        end: u64,
+        block_starts: Vec<u64>,
+        block_ends: Vec<u64>,
+    ) -> GenePred {
+        GenePred {
+            chrom: b"chr1".to_vec(),
+            start,
+            end,
+            name: Some(name.to_vec()),
+            strand: None,
+            thick_start: Some(start),
+            thick_end: Some(end),
+            block_count: Some(block_starts.len() as u32),
+            block_starts: Some(block_starts),
+            block_ends: Some(block_ends),
+            extras: HashMap::new(),
+        }
+    }
+
+    fn make_stranded_record(
+        name: &[u8],
+        start: u64,
+        end: u64,
+        block_starts: Vec<u64>,
+        block_ends: Vec<u64>,
+        strand: genepred::Strand,
+    ) -> GenePred {
+        GenePred {
+            chrom: b"chr1".to_vec(),
+            start,
+            end,
+            name: Some(name.to_vec()),
+            strand: Some(strand),
+            thick_start: Some(start),
+            thick_end: Some(end),
+            block_count: Some(block_starts.len() as u32),
+            block_starts: Some(block_starts),
+            block_ends: Some(block_ends),
+            extras: HashMap::new(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Guided: normal in-bounds case
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_guided_normal_in_bounds() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams::default();
+
+        let ref1 = make_record(b"r1", 100, 600, vec![100, 300, 500], vec![200, 400, 600]);
+
+        let queries: Vec<GenePred> = (0..5)
+            .map(|i| {
+                make_record(
+                    format!("q{}", i).as_bytes(),
+                    100 + i * 10,
+                    600,
+                    vec![100 + i * 10, 300, 500],
+                    vec![200, 400, 600],
+                )
+            })
+            .collect();
+
+        let n = queries.len();
+        let (keep, orphans) = guided(vec![ref1], queries, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+        assert!(
+            keep.len() >= 4,
+            "Most in-bounds reads with matching junctions should be kept"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Guided: bridging / out-of-bounds redirect
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_guided_oob_redirected_to_denovo() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 2,
+            ..ScoringParams::default()
+        };
+
+        // Reference: exons at [100,200), [300,400), [500,600)
+        let ref1 = make_record(b"r1", 100, 600, vec![100, 300, 500], vec![200, 400, 600]);
+
+        // 2 queries overlapping ref exons → guided
+        // 2 queries with NO exon overlap → de novo
+        let queries = vec![
+            // Overlaps ref exon [300,400)
+            make_record(b"in1", 100, 600, vec![100, 300, 500], vec![200, 400, 600]),
+            // Overlaps ref exon [100,200) partially
+            make_record(b"in2", 150, 250, vec![150], vec![250]),
+            // Sits in ref intron [200,300) — no exon overlap
+            make_record(b"oob1", 220, 280, vec![220], vec![280]),
+            // Entirely beyond ref — no exon overlap
+            make_record(b"oob2", 700, 900, vec![700, 850], vec![800, 900]),
+        ];
+
+        let n = queries.len();
+        let (keep, orphans) = guided(vec![ref1], queries, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+        let oob_count = counter
+            .guided_oob_denovo
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(oob_count, 2, "2 reads have no exon overlap with reference");
+    }
+
+    // -----------------------------------------------------------------------
+    // Guided: subset redirected to de novo (no refs)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_guided_no_refs_falls_to_denovo() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 2,
+            ..ScoringParams::default()
+        };
+
+        let queries: Vec<GenePred> = (0..5)
+            .map(|i| {
+                make_record(
+                    format!("q{}", i).as_bytes(),
+                    100,
+                    600,
+                    vec![100, 300, 500],
+                    vec![200, 400, 600],
+                )
+            })
+            .collect();
+
+        let n = queries.len();
+        let (keep, orphans) = guided(vec![], queries, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+    }
+
+    // -----------------------------------------------------------------------
+    // De novo: exact intron-chain cluster keep
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_denovo_exact_intron_chain_keep() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 3,
+            ..ScoringParams::default()
+        };
+
+        // 5 reads with exact same intron chain → dominant cluster → all kept
+        let reads: Vec<GenePred> = (0..5u64)
+            .map(|i| {
+                make_record(
+                    format!("r{}", i).as_bytes(),
+                    100 + i * 3,
+                    600,
+                    vec![100 + i * 3, 300, 500],
+                    vec![200, 400, 600],
+                )
+            })
+            .collect();
+
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, None);
+
+        assert_eq!(
+            keep.len(),
+            5,
+            "All reads in dominant cluster should be kept"
+        );
+        assert_eq!(orphans.len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // De novo: 9/10 supported introns → keep via intron support
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_denovo_9_of_10_introns_supported_keep() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 5,
+            min_intron_support_frac: 0.5,
+            intron_support_threshold: 0.5,
+            ..ScoringParams::default()
+        };
+
+        // 6 reads form the dominant cluster with chain [(200,300), (400,500)]
+        let mut reads: Vec<GenePred> = (0..6u64)
+            .map(|i| {
+                make_record(
+                    format!("dom{}", i).as_bytes(),
+                    100 + i * 2,
+                    600,
+                    vec![100 + i * 2, 300, 500],
+                    vec![200, 400, 600],
+                )
+            })
+            .collect();
+
+        // 1 variant read: shares intron (200,300) but has a different second intron (400,550)
+        // This read's cluster has only 1 member (< min_cluster_support=5).
+        // But intron (200,300) is supported (7/7 reads have it).
+        // Intron (400,550) is NOT supported (1/7 reads).
+        // So 1/2 = 0.5 of this read's introns are supported → passes 0.5 threshold
+        reads.push(make_record(
+            b"variant",
+            100,
+            650,
+            vec![100, 300, 550],
+            vec![200, 400, 650],
+        ));
+
+        let n = reads.len();
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+        // The variant read should be kept by intron support
+        assert_eq!(keep.len(), 7, "6 dominant + 1 intron-support-kept");
+    }
+
+    // -----------------------------------------------------------------------
+    // De novo: weak intron support → discard
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_denovo_weak_intron_support_discard() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 5,
+            min_intron_support_frac: 0.5,
+            intron_support_threshold: 0.5,
+            ..ScoringParams::default()
+        };
+
+        // 6 reads with chain [(200,300), (400,500)]
+        let mut reads: Vec<GenePred> = (0..6u64)
+            .map(|i| {
+                make_record(
+                    format!("dom{}", i).as_bytes(),
+                    100 + i * 2,
+                    600,
+                    vec![100 + i * 2, 300, 500],
+                    vec![200, 400, 600],
+                )
+            })
+            .collect();
+
+        // Outlier: completely different intron chain (no introns supported)
+        reads.push(make_record(
+            b"outlier",
+            700,
+            1200,
+            vec![700, 900, 1100],
+            vec![800, 1000, 1200],
+        ));
+
+        let n = reads.len();
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+        assert_eq!(keep.len(), 6, "Only dominant cluster kept");
+        assert_eq!(orphans.len(), 1, "Outlier orphaned");
+    }
+
+    // -----------------------------------------------------------------------
+    // Splice score: keep when above threshold
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_denovo_splice_score_keep() {
+        use crate::splice::SpliceScoreProvider;
+        use dashmap::DashMap;
+
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 5,
+            min_intron_support_frac: 0.5,
+            intron_support_threshold: 0.5,
+            min_splice_score: 0.5,
+            ..ScoringParams::default()
+        };
+
+        // Build splice scores: high scores at intron boundaries
+        let donor_fwd = DashMap::new();
+        let mut d = HashMap::new();
+        d.insert(200u64, 0.9f32);
+        d.insert(400u64, 0.8f32);
+        d.insert(450u64, 0.85f32); // for variant read
+        donor_fwd.insert("chr1".to_string(), d);
+
+        let acceptor_fwd = DashMap::new();
+        let mut a = HashMap::new();
+        a.insert(300u64, 0.85f32);
+        a.insert(500u64, 0.9f32);
+        a.insert(550u64, 0.8f32);
+        acceptor_fwd.insert("chr1".to_string(), a);
+
+        let provider =
+            SpliceScoreProvider::from_maps(donor_fwd, DashMap::new(), acceptor_fwd, DashMap::new());
+
+        // 6 dominant reads + 1 variant with good splice scores
+        let mut reads: Vec<GenePred> = (0..6u64)
+            .map(|i| {
+                make_stranded_record(
+                    format!("dom{}", i).as_bytes(),
+                    100 + i * 2,
+                    600,
+                    vec![100 + i * 2, 300, 500],
+                    vec![200, 400, 600],
+                    genepred::Strand::Forward,
+                )
+            })
+            .collect();
+
+        // Variant: shares (200,300) with dominant, novel (450,550)
+        reads.push(make_stranded_record(
+            b"variant",
+            100,
+            650,
+            vec![100, 300, 550],
+            vec![200, 450, 650],
+            genepred::Strand::Forward,
+        ));
+
+        let n = reads.len();
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, Some(&provider));
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+        // Variant has good splice scores → kept
+        assert_eq!(keep.len(), 7);
+    }
+
+    // -----------------------------------------------------------------------
+    // Splice score: discard when below threshold
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_denovo_splice_score_discard() {
+        use crate::splice::SpliceScoreProvider;
+        use dashmap::DashMap;
+
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 5,
+            min_intron_support_frac: 0.5,
+            intron_support_threshold: 0.3,
+            min_splice_score: 0.5,
+            ..ScoringParams::default()
+        };
+
+        // Build splice scores: LOW scores everywhere
+        let donor_fwd = DashMap::new();
+        let mut d = HashMap::new();
+        d.insert(200u64, 0.1f32);
+        d.insert(400u64, 0.1f32);
+        d.insert(450u64, 0.1f32);
+        donor_fwd.insert("chr1".to_string(), d);
+
+        let acceptor_fwd = DashMap::new();
+        let mut a = HashMap::new();
+        a.insert(300u64, 0.1f32);
+        a.insert(500u64, 0.1f32);
+        a.insert(550u64, 0.1f32);
+        acceptor_fwd.insert("chr1".to_string(), a);
+
+        let provider =
+            SpliceScoreProvider::from_maps(donor_fwd, DashMap::new(), acceptor_fwd, DashMap::new());
+
+        // 6 dominant reads (kept regardless of splice scores) + 1 variant
+        let mut reads: Vec<GenePred> = (0..6u64)
+            .map(|i| {
+                make_stranded_record(
+                    format!("dom{}", i).as_bytes(),
+                    100 + i * 2,
+                    600,
+                    vec![100 + i * 2, 300, 500],
+                    vec![200, 400, 600],
+                    genepred::Strand::Forward,
+                )
+            })
+            .collect();
+
+        // Variant: shares (200,300), novel intron — passes intron support but LOW splice scores
+        reads.push(make_stranded_record(
+            b"variant",
+            100,
+            650,
+            vec![100, 300, 550],
+            vec![200, 450, 650],
+            genepred::Strand::Forward,
+        ));
+
+        let n = reads.len();
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, Some(&provider));
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+        // Dominant 6 kept, variant orphaned by splice score veto
+        assert_eq!(keep.len(), 6);
+        assert_eq!(orphans.len(), 1);
+        let splice_orphan_count = counter
+            .denovo_me_splice_orphan
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(splice_orphan_count, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Partition correctness
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_partition_correctness_guided_single_exon() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams::default();
+
+        let ref1 = make_record(b"r1", 100, 200, vec![100], vec![200]);
+        let queries = vec![
+            make_record(b"q1", 100, 200, vec![100], vec![200]),
+            make_record(b"q2", 500, 600, vec![500], vec![600]),
+            make_record(b"q3", 110, 190, vec![110], vec![190]),
+        ];
+
+        let n = queries.len();
+        let (keep, orphans) = guided(vec![ref1], queries, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n);
+        assert!(keep.len() >= 1, "Exact match should be kept");
+    }
+
+    #[test]
+    fn test_denovo_partition_mixed() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 2,
+            ..ScoringParams::default()
+        };
+
+        let mut reads: Vec<GenePred> = Vec::new();
+        for i in 0..3u64 {
+            reads.push(make_record(
+                format!("me{}", i).as_bytes(),
+                100 + i * 5,
+                600,
+                vec![100 + i * 5, 300, 500],
+                vec![200, 400, 600],
+            ));
+        }
+        for i in 0..3u64 {
+            reads.push(make_record(
+                format!("se{}", i).as_bytes(),
+                100 + i * 10,
+                300 + i * 10,
+                vec![100 + i * 10],
+                vec![300 + i * 10],
+            ));
+        }
+
+        let n = reads.len();
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n, "Partition violation");
+    }
+
+    #[test]
+    fn test_keep_orphan_disjoint() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams::default();
+
+        let reference = make_record(b"r1", 100, 600, vec![100, 300, 500], vec![200, 400, 600]);
+
+        let queries: Vec<GenePred> = (0..10u64)
+            .map(|i| {
+                if i < 5 {
+                    make_record(
+                        format!("q{}", i).as_bytes(),
+                        100 + i * 3,
+                        600,
+                        vec![100 + i * 3, 300, 500],
+                        vec![200, 400, 600],
+                    )
+                } else {
+                    make_record(
+                        format!("q{}", i).as_bytes(),
+                        700 + i * 10,
+                        1200 + i * 10,
+                        vec![700 + i * 10, 900 + i * 10, 1100 + i * 10],
+                        vec![800 + i * 10, 1000 + i * 10, 1200 + i * 10],
+                    )
+                }
+            })
+            .collect();
+
+        let n = queries.len();
+        let (keep, orphans) = guided(vec![reference], queries, &counter, &params, None);
+
+        assert_eq!(keep.len() + orphans.len(), n, "All reads classified");
+        for k in &keep {
+            assert!(!orphans.contains(k), "Read appears in both keep and orphan");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Deterministic behavior
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_deterministic_across_runs() {
+        let params = ScoringParams {
+            min_cluster_support: 3,
+            ..ScoringParams::default()
+        };
+
+        let make_reads = || -> Vec<GenePred> {
+            let mut reads = Vec::new();
+            for i in 0..5u64 {
+                reads.push(make_record(
+                    format!("dom{}", i).as_bytes(),
+                    100 + i * 2,
+                    600,
+                    vec![100 + i * 2, 300, 500],
+                    vec![200, 400, 600],
+                ));
+            }
+            reads.push(make_record(
+                b"variant",
+                100,
+                650,
+                vec![100, 300, 550],
+                vec![200, 400, 650],
+            ));
+            reads
+        };
+
+        // Run twice and verify same result
+        let counter1 = ParallelCounter::default();
+        let (keep1, orphans1) = do_self_guided_check(&make_reads(), &counter1, &params, None);
+
+        let counter2 = ParallelCounter::default();
+        let (keep2, orphans2) = do_self_guided_check(&make_reads(), &counter2, &params, None);
+
+        assert_eq!(keep1.len(), keep2.len());
+        assert_eq!(orphans1.len(), orphans2.len());
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_denovo_single_read_orphaned() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams::default();
+
+        let reads = vec![make_record(b"lone", 100, 200, vec![100], vec![200])];
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, None);
+
+        assert!(keep.is_empty());
+        assert_eq!(orphans.len(), 1);
+    }
+
+    #[test]
+    fn test_denovo_small_component_orphaned() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams {
+            min_cluster_support: 5,
+            ..ScoringParams::default()
+        };
+
+        let reads: Vec<GenePred> = (0..3u64)
+            .map(|i| {
+                make_record(
+                    format!("r{}", i).as_bytes(),
+                    100 + i,
+                    200 + i,
+                    vec![100 + i],
+                    vec![200 + i],
+                )
+            })
+            .collect();
+
+        let (keep, orphans) = do_self_guided_check(&reads, &counter, &params, None);
+
+        assert!(keep.is_empty());
+        assert_eq!(orphans.len(), 3);
+    }
+
+    #[test]
+    fn test_multi_isoform_reference_coherence() {
+        let counter = ParallelCounter::default();
+        let params = ScoringParams::default();
+
+        let ref1 = make_record(b"r1", 100, 600, vec![100, 300, 500], vec![200, 400, 600]);
+        let ref2 = make_record(b"r2", 100, 800, vec![100, 350, 700], vec![300, 600, 800]);
+        let query = make_record(b"q1", 100, 800, vec![100, 350, 700], vec![300, 600, 800]);
+
+        let (keep, orphans) = guided(vec![ref1, ref2], vec![query], &counter, &params, None);
+
+        assert_eq!(keep.len(), 1);
+        assert_eq!(orphans.len(), 0);
+    }
 }

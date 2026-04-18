@@ -1,6 +1,6 @@
 [package]
 name = "iso-orphan"
-version = "0.0.3"
+version = "0.0.4"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "detect orphan reads in isoseq data"
 license.workspace = true
@@ -15,3 +15,4 @@ num_cpus.workspace = true
 simple_logger.workspace = true
 genepred.workspace = true
 packbed.workspace = true
+bigtools.workspace = true

@@ -38,4 +38,7 @@
 
 pub mod cli;
 pub mod core;
+pub mod denovo;
+pub mod scoring;
+pub mod splice;
 pub mod utils;

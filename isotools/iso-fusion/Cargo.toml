@@ -1,6 +1,6 @@
 [package]
 name = "iso-fusion"
-version = "0.0.11"
+version = "0.0.12"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -25,3 +25,4 @@ num-traits.workspace = true
 serde_json.workspace = true
 genepred.workspace = true
 packbed.workspace = true
+petgraph.workspace = true
