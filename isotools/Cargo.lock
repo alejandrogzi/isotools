@@ -1117,7 +1117,7 @@ dependencies = [
 
 [[package]]
 name = "iso-segment"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "bio",
  "clap",

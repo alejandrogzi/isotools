@@ -1635,7 +1635,7 @@ impl Read {
         }
 
         if cigar {
-            name = format!("{name}{SEP}CG");
+            name = format!("C{name}");
         }
 
         name
