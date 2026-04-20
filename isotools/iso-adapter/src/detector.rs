@@ -27,7 +27,7 @@ use noodles_sam::alignment::RecordBuf;
 use triple_accel::levenshtein::levenshtein_search_simd_with_opts;
 use triple_accel::{Match as EditMatch, SearchType};
 
-use crate::adapters::{ADAPTER_DB, MIN_ADAPTER_LEN};
+use crate::adapters::{is_homopolymer_label, ADAPTER_DB, MIN_ADAPTER_LEN};
 use crate::error::AdapterError;
 
 /// Which end of the read a clip came from.
@@ -35,6 +35,18 @@ use crate::error::AdapterError;
 pub enum ClipEnd {
     FivePrime,
     ThreePrime,
+}
+
+/// Biological class of a match; governs which trimming policy applies.
+///
+/// `Adapter` is a ligation / primer sequence that should be excised along
+/// with everything outward of it. `Homopolymer` is a polyA / polyT run that
+/// has real biological meaning at the 3' end (polyA tail) and is pure noise
+/// at the 5' end.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum AdapterKind {
+    Adapter,
+    Homopolymer,
 }
 
 /// A successful adapter hit inside a clip.
@@ -49,6 +61,8 @@ pub struct AdapterMatch {
     /// Whether the match was found as the stored sequence or its reverse
     /// complement.
     pub on_reverse_strand: bool,
+    /// Biological class of the match.
+    pub kind: AdapterKind,
 }
 
 /// Immutable adapter matcher shared across threads.
@@ -69,6 +83,7 @@ struct DbEntry {
     label: &'static str,
     sequence: Vec<u8>,
     reverse_complement: bool,
+    kind: AdapterKind,
 }
 
 impl AdapterDb {
@@ -81,12 +96,19 @@ impl AdapterDb {
             if seq.len() < MIN_ADAPTER_LEN {
                 continue;
             }
+            let kind = if is_homopolymer_label(label) {
+                AdapterKind::Homopolymer
+            } else {
+                AdapterKind::Adapter
+            };
+
             let forward = seq.to_vec();
             patterns.push(forward.clone());
             entries.push(DbEntry {
                 label,
                 sequence: forward,
                 reverse_complement: false,
+                kind,
             });
 
             let rc = reverse_complement(seq);
@@ -96,6 +118,7 @@ impl AdapterDb {
                     label,
                     sequence: rc,
                     reverse_complement: true,
+                    kind,
                 });
             }
         }
@@ -136,6 +159,7 @@ impl AdapterDb {
                 clip_range: m.start()..m.end(),
                 edit_distance: 0,
                 on_reverse_strand: entry.reverse_complement,
+                kind: entry.kind,
             });
         }
 
@@ -170,6 +194,7 @@ impl AdapterDb {
             clip_range: m.start..m.end,
             edit_distance: m.k,
             on_reverse_strand: entry.reverse_complement,
+            kind: entry.kind,
         })
     }
 }

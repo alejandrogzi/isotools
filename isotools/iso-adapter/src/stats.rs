@@ -245,12 +245,14 @@ mod tests {
 
     #[test]
     fn stats_records_per_adapter() {
+        use crate::detector::AdapterKind;
         let stats = ClipStats::default();
         let m = AdapterMatch {
             label: "pacbio:isoseq:primer_5p_tso",
             clip_range: 0..25,
             edit_distance: 0,
             on_reverse_strand: false,
+            kind: AdapterKind::Adapter,
         };
         stats.observe_match(&m);
         stats.observe_match(&m);
