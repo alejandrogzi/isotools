@@ -1,0 +1,33 @@
+[package]
+name = "iso-adapter"
+version = "0.0.1"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "detect and remove adapter sequences from soft-clipped long-read alignments"
+keywords = ["adapter", "cigar", "bam", "isoseq", "nanopore"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+aho-corasick.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+crossbeam-channel.workspace = true
+dashmap.workspace = true
+flate2.workspace = true
+log.workspace = true
+noodles-bam.workspace = true
+noodles-core.workspace = true
+noodles-csi.workspace = true
+noodles-sam.workspace = true
+num_cpus.workspace = true
+rayon.workspace = true
+simple_logger.workspace = true
+thiserror.workspace = true
+triple_accel.workspace = true
+
+[dev-dependencies]
+tempfile = "3.20.0"
