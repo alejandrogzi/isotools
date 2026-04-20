@@ -16,6 +16,17 @@
 /// shorter would produce an unacceptable false-positive rate.
 pub const MIN_ADAPTER_LEN: usize = 10;
 
+/// Label prefix that tags homopolymer entries (polyA / polyT). Separating
+/// them from ligation / primer adapters lets the trimmer apply a different
+/// policy (`--trim-polya`) without touching the adapter-removal path.
+pub const HOMOPOLYMER_PREFIX: &str = "homopolymer:";
+
+/// Returns true when a DB label points at a polyA / polyT homopolymer rather
+/// than a ligation or primer adapter.
+pub fn is_homopolymer_label(label: &str) -> bool {
+    label.starts_with(HOMOPOLYMER_PREFIX)
+}
+
 /// `(sequence, label)` pairs of known long-read adapters / primers.
 ///
 /// All sequences use uppercase IUPAC `ACGT`; any ambiguity base is dropped

@@ -29,9 +29,19 @@ pub struct Cli {
         short = 'R',
         long = "remove-adapters",
         action = ArgAction::SetTrue,
-        help = "Remove detected adapter sequences and write a trimmed BAM"
+        help = "Remove detected adapter sequences (excluding homopolymers) and write a trimmed BAM"
     )]
     pub remove_adapters: bool,
+
+    #[arg(
+        short = 'P',
+        long = "trim-polya",
+        action = ArgAction::SetTrue,
+        help = "Trim polyA (3' end) / polyT (5' end) homopolymer runs and write a trimmed BAM. \
+                3' polyA: keep the run, trim everything outward of it. \
+                5' polyT: remove the run and everything outward."
+    )]
+    pub trim_polya: bool,
 
     #[arg(
         short = 'o',
@@ -158,6 +168,20 @@ mod tests {
     fn cli_remove_flag_parses() {
         let cli = Cli::try_parse_from(["iso-adapter", "-R", "input.bam"]).unwrap();
         assert!(cli.remove_adapters);
+    }
+
+    #[test]
+    fn cli_polya_flag_parses() {
+        let cli = Cli::try_parse_from(["iso-adapter", "-P", "input.bam"]).unwrap();
+        assert!(cli.trim_polya);
+        assert!(!cli.remove_adapters);
+    }
+
+    #[test]
+    fn cli_both_trim_flags_independent() {
+        let cli = Cli::try_parse_from(["iso-adapter", "-R", "-P", "input.bam"]).unwrap();
+        assert!(cli.remove_adapters);
+        assert!(cli.trim_polya);
     }
 
     #[test]
