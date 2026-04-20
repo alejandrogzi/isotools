@@ -14,7 +14,8 @@ RUN cargo build --manifest-path Cargo.toml --release --locked --workspace && \
     strip target/release/iso-fusion && \
     strip target/release/iso-classify && \
     strip target/release/iso-orphan && \
-    strip target/release/iso-cigar
+    strip target/release/iso-cigar && \
+    strip target/release/iso-adapter
 
 # ---------- Runtime Stage ----------
 FROM debian:bookworm-slim
@@ -34,6 +35,7 @@ COPY --from=builder /app/target/release/iso-fusion /usr/local/bin/iso-fusion
 COPY --from=builder /app/target/release/iso-classify /usr/local/bin/iso-classify
 COPY --from=builder /app/target/release/iso-orphan /usr/local/bin/iso-orphan
 COPY --from=builder /app/target/release/iso-cigar /usr/local/bin/iso-cigar
+COPY --from=builder /app/target/release/iso-adapter /usr/local/bin/iso-adapter
 
 # Set up non-root user
 RUN useradd -m -u 1000 isotoolsuser && \
@@ -45,7 +47,8 @@ RUN useradd -m -u 1000 isotoolsuser && \
     chmod +x /usr/local/bin/iso-fusion && \
     chmod +x /usr/local/bin/iso-classify && \
     chmod +x /usr/local/bin/iso-orphan && \
-    chmod +x /usr/local/bin/iso-cigar
+    chmod +x /usr/local/bin/iso-cigar && \
+    chmod +x /usr/local/bin/iso-adapter
 
 USER isotoolsuser
 WORKDIR /data
@@ -58,4 +61,5 @@ RUN iso-segment --help && \
     iso-fusion --help && \
     iso-classify --help && \
     iso-orphan --help && \
-    iso-cigar --help
+    iso-cigar --help && \
+    iso-adapter --help

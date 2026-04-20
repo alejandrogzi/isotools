@@ -991,6 +991,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
+name = "iso-adapter"
+version = "0.0.1"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "clap",
+ "crossbeam-channel",
+ "dashmap",
+ "flate2",
+ "log",
+ "noodles-bam",
+ "noodles-core",
+ "noodles-csi",
+ "noodles-sam",
+ "num_cpus",
+ "rayon",
+ "simple_logger",
+ "tempfile",
+ "thiserror 2.0.11",
+ "triple_accel",
+]
+
+[[package]]
 name = "iso-cigar"
 version = "0.0.2"
 dependencies = [
