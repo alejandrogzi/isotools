@@ -70,6 +70,7 @@ pub struct Cli {
     pub level: LogLevel,
 
     #[arg(
+        short = 'm',
         long = "max-edit-dist",
         default_value_t = DEFAULT_MAX_EDIT_DIST,
         help = "Maximum edit distance for fuzzy adapter matching"
@@ -77,6 +78,7 @@ pub struct Cli {
     pub max_edit_dist: u32,
 
     #[arg(
+        short = 'l',
         long = "min-clip-len",
         default_value_t = DEFAULT_MIN_CLIP_LEN,
         help = "Minimum soft-clip length to consider for fuzzy matching"
@@ -84,6 +86,7 @@ pub struct Cli {
     pub min_clip_len: usize,
 
     #[arg(
+        short = 'f',
         long = "freq-threshold",
         default_value_t = DEFAULT_FREQ_THRESHOLD,
         help = "Unknown-clip occurrence count at which a clip is flagged as a candidate novel adapter"

@@ -19,21 +19,24 @@
 //!    `-P` is set, apply the polyA policy and stamp `pa:i:N` (3') or
 //!    `pt:i:N` (5').
 
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
-use std::sync::Arc;
-use std::thread;
+use std::{
+    collections::BTreeMap, ffi::OsString, fs::File, io::Read, path::Path, path::PathBuf, sync::Arc,
+    thread,
+};
 
 use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use log::{debug, info, trace, warn};
 use noodles_bam as bam;
+use noodles_core::Position;
+use noodles_csi::binning_index::index::reference_sequence::{bin::Chunk, index::LinearIndex, Bin};
+use noodles_csi::binning_index::index::ReferenceSequence as BinningReferenceSequence;
 use noodles_sam as sam;
 use noodles_sam::alignment::io::Write as _;
 use noodles_sam::alignment::record::data::field::Tag;
 use noodles_sam::alignment::record_buf::data::field::Value;
 use noodles_sam::alignment::record_buf::RecordBuf;
+use noodles_sam::alignment::Record;
 
 use crate::cli::Cli;
 use crate::detector::{
@@ -50,6 +53,10 @@ const TAG_ADAPTER: Tag = Tag::new(b'a', b'd');
 const TAG_POLYA: Tag = Tag::new(b'p', b'a');
 /// `pt:i:<N>` — number of bases trimmed at a 5' polyT run (run + outward).
 const TAG_POLYT: Tag = Tag::new(b'p', b't');
+/// Minimum shift for BAI indexing.
+const BAI_MIN_SHIFT: u8 = 14;
+/// Depth of BAI indexing.
+const BAI_DEPTH: u8 = 5;
 
 /// Runs the iso-adapter pipeline.
 pub fn run(cli: Cli) -> Result<()> {
@@ -143,6 +150,7 @@ pub fn run(cli: Cli) -> Result<()> {
     if let Some(out) = output_path.as_ref() {
         info!("[{}] writing trimmed BAM {}", elapsed(), out.display());
         write_trimmed_bam(out, &header, result_rx)?;
+        write_bam_index(out)?;
     } else {
         drain_results(result_rx)?;
     }
@@ -526,8 +534,8 @@ fn write_trimmed_bam(
         }
     }
 
-    let file = File::create(output)
-        .with_context(|| format!("failed to create {}", output.display()))?;
+    let file =
+        File::create(output).with_context(|| format!("failed to create {}", output.display()))?;
     let mut writer = bam::io::Writer::new(file);
     writer
         .write_header(header)
@@ -573,6 +581,151 @@ struct WorkItem {
 struct ProcessedItem {
     index: u64,
     record: RecordBuf,
+}
+
+/// Returns the associated BAM index path (`<bam>.bai`).
+fn bam_index_path(path: &Path) -> PathBuf {
+    let mut value = OsString::from(path.as_os_str());
+    value.push(".bai");
+    PathBuf::from(value)
+}
+
+/// Builds and writes a BAI for a BAM file.
+fn write_bam_index(path: &Path) -> Result<()> {
+    info!(
+        "[{}] write index {}",
+        elapsed(),
+        bam_index_path(path).display()
+    );
+    let index = build_bam_index(path)?;
+    bam::bai::fs::write(bam_index_path(path), &index)
+        .with_context(|| format!("failed to write BAM index for {}", path.display()))?;
+    Ok(())
+}
+
+/// Builds a BAM index from an output BAM without assuming coordinate sort order.
+fn build_bam_index(path: &Path) -> Result<bam::bai::Index> {
+    let mut reader = bam::io::reader::Builder
+        .build_from_path(path)
+        .with_context(|| format!("failed to open BAM for indexing {}", path.display()))?;
+    let header = reader
+        .read_header()
+        .with_context(|| format!("failed to read BAM header from {}", path.display()))?;
+
+    let mut reference_sequences =
+        vec![ReferenceSequenceIndexBuilder::default(); header.reference_sequences().len()];
+    let mut unplaced_unmapped_record_count = 0_u64;
+    let mut record = bam::Record::default();
+    let mut start_position = reader.get_ref().virtual_position();
+
+    while reader.read_record(&mut record)? != 0 {
+        let end_position = reader.get_ref().virtual_position();
+        let chunk = Chunk::new(start_position, end_position);
+
+        match record_alignment_context(&record)? {
+            Some((reference_sequence_id, start, end, _)) => {
+                if let Some(reference_sequence) = reference_sequences.get_mut(reference_sequence_id)
+                {
+                    reference_sequence.add_record(start, end, chunk);
+                } else {
+                    return Err(anyhow!(
+                        "record reference sequence {reference_sequence_id} exceeds header references"
+                    ));
+                }
+            }
+            None => {
+                unplaced_unmapped_record_count += 1;
+            }
+        }
+
+        start_position = end_position;
+    }
+
+    let reference_sequences = reference_sequences
+        .into_iter()
+        .map(ReferenceSequenceIndexBuilder::build)
+        .collect();
+
+    Ok(bam::bai::Index::builder()
+        .set_reference_sequences(reference_sequences)
+        .set_unplaced_unmapped_record_count(unplaced_unmapped_record_count)
+        .build())
+}
+
+#[derive(Clone, Default)]
+struct ReferenceSequenceIndexBuilder {
+    bins: BTreeMap<usize, Vec<Chunk>>,
+}
+
+impl ReferenceSequenceIndexBuilder {
+    fn add_record(&mut self, start: Position, end: Position, chunk: Chunk) {
+        let bin_id = reg2bin(start, end, BAI_MIN_SHIFT, BAI_DEPTH);
+        push_chunk(self.bins.entry(bin_id).or_default(), chunk);
+    }
+
+    fn build(self) -> BinningReferenceSequence<LinearIndex> {
+        let bins = self
+            .bins
+            .into_iter()
+            .map(|(id, chunks)| (id, Bin::new(chunks)))
+            .collect();
+        BinningReferenceSequence::new(bins, LinearIndex::default(), None)
+    }
+}
+
+/// Returns the alignment context used for BAM indexing.
+fn record_alignment_context(
+    record: &bam::Record,
+) -> Result<Option<(usize, Position, Position, bool)>> {
+    Ok(
+        match (
+            record.reference_sequence_id().transpose()?,
+            record.alignment_start().transpose()?,
+            record.alignment_end().transpose()?,
+        ) {
+            (Some(reference_sequence_id), Some(start), Some(end)) => Some((
+                reference_sequence_id,
+                start,
+                end,
+                !record.flags().is_unmapped(),
+            )),
+            _ => None,
+        },
+    )
+}
+
+/// Adds a chunk to a bin, merging directly adjacent overlaps in file order.
+fn push_chunk(chunks: &mut Vec<Chunk>, chunk: Chunk) {
+    if let Some(last_chunk) = chunks.last_mut() {
+        if chunk.start() <= last_chunk.end() {
+            *last_chunk = Chunk::new(last_chunk.start(), chunk.end());
+            return;
+        }
+    }
+
+    chunks.push(chunk);
+}
+
+/// Maps an alignment interval to its BAI bin.
+fn reg2bin(start: Position, end: Position, min_shift: u8, depth: u8) -> usize {
+    let beg = usize::from(start) - 1;
+    let end = usize::from(end) - 1;
+
+    let mut level = depth;
+    let mut shift = min_shift;
+    let mut offset = ((1 << (depth * 3)) - 1) / 7;
+
+    while level > 0 {
+        if beg >> shift == end >> shift {
+            return offset + (beg >> shift);
+        }
+
+        level -= 1;
+        shift += 3;
+        offset -= 1 << (level * 3);
+    }
+
+    0
 }
 
 #[cfg(test)]
