@@ -81,6 +81,19 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
                 );
                 return &lapper;
             } else {
+                // INFO: weird edge case where all chr components are made up by single exons only
+                // INFO: test if anything in components has introns > 0, if not, return empty index
+                if components
+                    .iter()
+                    .all(|comp| comp.iter().all(|read| read.introns().is_empty()))
+                {
+                    log::warn!(
+                        "WARN: No introns found in input -> {}. This is an edge case a whole chromsome of single exons. All reads will be free of IRs!",
+                        args.introns.display()
+                    );
+                    return &lapper;
+                }
+
                 log::error!("ERROR: Could not find introns for chromosome -> {chr:?}!");
                 std::process::exit(1);
             }
