@@ -930,7 +930,7 @@ pub fn group_components(
                 let mut group_name = Vec::with_capacity(chrom.len() + 24);
                 group_name.extend_from_slice(b"COMP_");
                 group_name.extend_from_slice(chrom);
-                write!(&mut group_name, "_{}_{}", comp_idx, sub_idx).unwrap();
+                write!(&mut group_name, "_{}_{}_{}", strand, comp_idx, sub_idx).unwrap();
 
                 let mut exons: BTreeSet<Exon> = BTreeSet::new();
                 let mut introns: BTreeSet<Exon> = BTreeSet::new();
