@@ -135,6 +135,11 @@ fn make_buckets(
     DashMap<Vec<u8>, GroupData>,
 )> {
     let (record_to_parent, parent_info) = create_reference_map(refs.clone())?;
+    log::info!(
+        "Created reference map with {} entries",
+        record_to_parent.len()
+    );
+    log::info!("Created parent info with {} entries", parent_info.len());
 
     let mut modes = Vec::new();
     modes.extend(std::iter::repeat(Role::Reference).take(refs.len()));

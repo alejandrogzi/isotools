@@ -10,6 +10,7 @@ members = [
     "iso-pas",
     "iso-cigar",
     "iso-adapter",
+    "iso-align",
 ]
 resolver = "2"
 
@@ -18,7 +19,7 @@ authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70.0"
-version = "0.0.27"
+version = "0.0.28"
 
 [workspace.dependencies]
 dashmap = { version = "6", features = ["rayon"] }
@@ -42,6 +43,7 @@ tokio = { version = "1.16", features = ["full"] }
 bio = "3.0.0"
 ndarray = "0.16.1"
 noodles-bam = "0.79.0"
+noodles-bgzf = "0.39.0"
 noodles-core = "0.17.0"
 noodles-sam = "0.75.0"
 noodles-csi = "0.47.0"
@@ -54,6 +56,9 @@ crossbeam-channel = "0.5.15"
 flate2 = { version = "1.1.9", features = ["rust_backend"], default-features = false }
 aho-corasick = "1.1"
 triple_accel = "0.4"
+needletail = "0.6"
+rustc-hash = "2"
+smallvec = "1"
 
 
 [profile.release]

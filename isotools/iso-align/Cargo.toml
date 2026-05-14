@@ -1,0 +1,29 @@
+[package]
+name = "iso-align"
+version = "0.0.1"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "select long reads whose pass-1 split alignment suggests a re-align with a larger intron cap"
+keywords = ["cigar", "junction", "align", "isoseq"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+log.workspace = true
+needletail.workspace = true
+noodles-bam.workspace = true
+noodles-bgzf.workspace = true
+noodles-sam.workspace = true
+num_cpus.workspace = true
+rustc-hash.workspace = true
+simple_logger.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.20.0"
