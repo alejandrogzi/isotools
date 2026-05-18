@@ -101,7 +101,10 @@ mod tests {
     #[test]
     fn single_alignment_rejected() {
         let alns = [aln(0, 100, 200, false, 50, 0)];
-        assert!(!is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(!is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 
     #[test]
@@ -110,7 +113,10 @@ mod tests {
             aln(0, 100, 200, false, 0, 50),
             aln(1, 600_000, 600_100, false, 50, 0),
         ];
-        assert!(!is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(!is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 
     #[test]
@@ -119,7 +125,10 @@ mod tests {
             aln(0, 100, 200, false, 0, 50),
             aln(0, 600_000, 600_100, true, 50, 0),
         ];
-        assert!(!is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(!is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 
     #[test]
@@ -128,7 +137,10 @@ mod tests {
             aln(0, 100, 200, false, 0, 50),
             aln(0, 1_000, 1_100, false, 50, 0),
         ];
-        assert!(!is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(!is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 
     #[test]
@@ -150,7 +162,10 @@ mod tests {
             aln(0, 100, 200, false, 50, 0),
             aln(0, 600_000, 600_100, false, 0, 50),
         ];
-        assert!(!is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(!is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 
     #[test]
@@ -169,7 +184,10 @@ mod tests {
             aln(0, 100, 200, false, 0, 50),
             aln(0, 600_000, 600_100, false, 50, 0),
         ];
-        assert!(is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 
     #[test]
@@ -180,7 +198,10 @@ mod tests {
             aln(0, 600_000, 600_100, false, 50, 0),
             aln(0, 100, 200, false, 0, 50),
         ];
-        assert!(is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 
     #[test]
@@ -191,6 +212,9 @@ mod tests {
             aln(0, 1_000, 1_100, false, 5, 30),
             aln(0, 600_000, 600_100, false, 50, 0),
         ];
-        assert!(is_candidate(&alns, &cfg(300_000, None, 20, FlankSide::Inner)));
+        assert!(is_candidate(
+            &alns,
+            &cfg(300_000, None, 20, FlankSide::Inner)
+        ));
     }
 }
