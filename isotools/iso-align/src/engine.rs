@@ -7,14 +7,14 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use log::info;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use crate::bam_scan::{scan, AlnGroups};
 use crate::cli::Cli;
-use crate::extract::{write_names, write_sequences, CandidateSet};
+use crate::extract::{write_fasta_from_bam, write_names, CandidateSet};
 use crate::logging::elapsed;
 use crate::predicate::is_candidate;
 use crate::types::{MiniAln, OutputFormat, PredicateConfig};
@@ -53,14 +53,8 @@ pub fn run(cli: Cli) -> Result<()> {
         OutputFormat::Names => {
             write_names(&cli.output, &candidates)?;
         }
-        OutputFormat::Fasta | OutputFormat::Fastq => {
-            let reads = cli.reads.as_deref().ok_or_else(|| {
-                anyhow!(
-                    "--reads is required for output-format={:?} (only --output-format=names skips it)",
-                    cli.output_format
-                )
-            })?;
-            write_sequences(reads, &cli.output, &candidates, cli.output_format)?;
+        OutputFormat::Fasta => {
+            write_fasta_from_bam(&cli.bam, &cli.output, &candidates, cli.bgzf_workers())?;
         }
     }
 
@@ -150,10 +144,7 @@ mod tests {
         let mut groups: AlnGroups = Default::default();
         groups.insert(
             b"good".to_vec(),
-            smallvec![
-                aln(0, 100, 200, 0, 50),
-                aln(0, 600_000, 600_100, 50, 0)
-            ],
+            smallvec![aln(0, 100, 200, 0, 50), aln(0, 600_000, 600_100, 50, 0)],
         );
         groups.insert(b"single".to_vec(), smallvec![aln(0, 100, 200, 0, 0)]);
         groups.insert(

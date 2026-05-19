@@ -20,18 +20,12 @@ pub const DEFAULT_MIN_FLANK_CLIP: u32 = 20;
 #[command(
     author = env!("CARGO_PKG_AUTHORS"),
     version = env!("CARGO_PKG_VERSION"),
-    about = "Identify long reads whose pass-1 split alignment suggests a re-align with a larger intron cap, and emit them as FASTA / FASTQ / names"
+    about = "Identify long reads whose pass-1 split alignment suggests a re-align with a larger intron cap, and emit them as FASTA / names"
 )]
 pub struct Cli {
     /// Pass-1 BAM (alignment selection signal).
     #[arg(short = 'b', long = "bam", value_name = "PATH")]
     pub bam: PathBuf,
-
-    /// Original reads (FASTA or FASTQ; gz/bz2/zst auto-detected).
-    /// Always required unless `--output-format names` is used, in which case
-    /// it is optional and ignored.
-    #[arg(short = 'r', long = "reads", value_name = "PATH")]
-    pub reads: Option<PathBuf>,
 
     /// Output path. Format is determined by `--output-format`.
     #[arg(short = 'o', long = "output", value_name = "PATH")]
@@ -56,9 +50,8 @@ pub struct Cli {
     #[arg(long = "flank-side", value_enum, default_value_t = FlankSide::Inner)]
     pub flank_side: FlankSide,
 
-    /// Output format. `fasta` is the recommended default; `fastq` requires
-    /// the input file to carry quality scores; `names` emits a sorted,
-    /// deduplicated list of read names.
+    /// Output format. `fasta` is the recommended default; `names` emits a
+    /// sorted, deduplicated list of read names.
     #[arg(long = "output-format", value_enum, default_value_t = OutputFormat::Fasta)]
     pub output_format: OutputFormat,
 
@@ -69,8 +62,8 @@ pub struct Cli {
     pub report: Option<PathBuf>,
 
     /// Number of worker threads. Drives the bgzf decompression worker pool
-    /// for the BAM scan; FASTQ extraction is I/O-bound and stays
-    /// single-threaded. `1` keeps everything on the calling thread.
+    /// for BAM scanning and BAM-backed FASTA extraction. `1` keeps
+    /// decompression on the calling thread.
     #[arg(short = 'T', long = "threads", default_value_t = num_cpus::get())]
     pub threads: usize,
 
@@ -126,16 +119,8 @@ mod tests {
 
     #[test]
     fn defaults_sane() {
-        let cli = Cli::try_parse_from([
-            "iso-align",
-            "--bam",
-            "in.bam",
-            "--reads",
-            "in.fq",
-            "--output",
-            "out.fa",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["iso-align", "--bam", "in.bam", "--output", "out.fa"]).unwrap();
         assert_eq!(cli.min_gap, DEFAULT_MIN_GAP);
         assert!(cli.max_gap.is_none());
         assert_eq!(cli.min_flank_clip, DEFAULT_MIN_FLANK_CLIP);
@@ -144,24 +129,22 @@ mod tests {
     }
 
     #[test]
-    fn explicit_output_format() {
+    fn explicit_fasta_output_format() {
         let cli = Cli::try_parse_from([
             "iso-align",
             "--bam",
             "in.bam",
-            "--reads",
-            "in.fq",
             "--output",
-            "out.fq",
+            "out.fa",
             "--output-format",
-            "fastq",
+            "fasta",
         ])
         .unwrap();
-        assert_eq!(cli.output_format, OutputFormat::Fastq);
+        assert_eq!(cli.output_format, OutputFormat::Fasta);
     }
 
     #[test]
-    fn names_format_does_not_require_reads() {
+    fn names_format_is_supported() {
         let cli = Cli::try_parse_from([
             "iso-align",
             "--bam",
@@ -173,7 +156,36 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.output_format, OutputFormat::Names);
-        assert!(cli.reads.is_none());
+    }
+
+    #[test]
+    fn reads_arg_is_rejected() {
+        let err = Cli::try_parse_from([
+            "iso-align",
+            "--bam",
+            "in.bam",
+            "--reads",
+            "in.fq",
+            "--output",
+            "out.fa",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn fastq_output_format_is_rejected() {
+        let err = Cli::try_parse_from([
+            "iso-align",
+            "--bam",
+            "in.bam",
+            "--output",
+            "out.fq",
+            "--output-format",
+            "fastq",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 
     #[test]
@@ -182,8 +194,6 @@ mod tests {
             "iso-align",
             "--bam",
             "in.bam",
-            "--reads",
-            "in.fq",
             "--output",
             "out.fa",
             "--max-gap",
