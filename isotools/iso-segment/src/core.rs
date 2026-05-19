@@ -33,12 +33,14 @@ use noodles_core::{region::Interval, Position};
 use noodles_sam::{
     alignment::{
         io::Write as BamWrite,
-        record::{cigar::op::Kind, Cigar},
+        record::{cigar::op::Kind, data::field::Tag, Cigar},
         RecordBuf,
     },
     Header,
 };
 use rayon::prelude::*;
+
+const TAG_CORRECTED: Tag = Tag::new(b'x', b'c');
 
 /// Segment reads based on their polyA features
 ///
@@ -99,7 +101,6 @@ pub fn segment(args: Args) -> Result<(), String> {
                         &hmm,
                         &outputs,
                         args.singleton,
-                        args.cigar,
                     );
                 }
             });
@@ -628,12 +629,17 @@ fn record_to_bed_line(record: &RecordBuf, chr: &str, rgb: &str) -> Option<String
         .unwrap_or(0)
         .to_string();
 
-    let name = record.name().unwrap();
+    let mut name = record.name().unwrap().to_string();
     let strand = if record.flags().is_reverse_complemented() {
         '-'
     } else {
         '+'
     };
+
+    let is_corrected = record.data().get(&TAG_CORRECTED).is_some();
+    if is_corrected {
+        name = format!("C{name}").into();
+    }
 
     let mut blocks = Vec::new();
     let mut ref_pos = start;
@@ -800,7 +806,6 @@ fn process_record(
     hmm: &HMM,
     outputs: &OutputSenders,
     singleton: bool,
-    cigar: bool,
 ) {
     let mut read = Read::from_mapping_record(&record);
 
@@ -841,10 +846,7 @@ fn process_record(
         .unwrap_or_else(|err| panic!("ERROR: failed to convert record: {err:?}"));
 
     if args.tag {
-        *record.name_mut() = Some(
-            read.tag_read(track, chr, &args.batch, singleton, cigar)
-                .into(),
-        );
+        *record.name_mut() = Some(read.tag_read(track, chr, &args.batch, singleton).into());
     }
 
     outputs.send(accepted, record);
@@ -1612,7 +1614,7 @@ impl Read {
     ///
     /// assert_eq!(read.name, "R1_chr1::FC5:TC24:PA45:PR65:IY98");
     /// ```
-    fn tag_read(&self, index: u64, chr: &str, batch: &str, singleton: bool, cigar: bool) -> String {
+    fn tag_read(&self, index: u64, chr: &str, batch: &str, singleton: bool) -> String {
         let batch = if !batch.is_empty() {
             format!("@{batch}")
         } else {
@@ -1632,10 +1634,6 @@ impl Read {
 
         if singleton {
             name = format!("{name}{SEP}SG");
-        }
-
-        if cigar {
-            name = format!("C{name}");
         }
 
         name

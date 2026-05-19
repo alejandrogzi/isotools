@@ -39,7 +39,8 @@ pub type AlnGroups = FxHashMap<Vec<u8>, SmallVec<[MiniAln; 2]>>;
 /// dropped. QNAMEs are stored as raw bytes (never UTF-8-validated) — this
 /// is both faster and strictly correct, since SAM permits any printable ASCII.
 pub fn scan(path: &Path, bgzf_workers: NonZeroUsize) -> Result<AlnGroups> {
-    let file = File::open(path).with_context(|| format!("failed to open BAM {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("failed to open BAM {}", path.display()))?;
     let bgzf_reader = bgzf::MultithreadedReader::with_worker_count(bgzf_workers, file);
     let mut reader = bam::io::Reader::from(bgzf_reader);
     let _header = reader
@@ -68,14 +69,15 @@ pub fn scan(path: &Path, bgzf_workers: NonZeroUsize) -> Result<AlnGroups> {
         total += 1;
 
         let flags = record.flags();
-        if flags.is_unmapped() || flags.is_secondary() || flags.is_supplementary() {
+        if flags.is_unmapped() || flags.is_secondary() {
             continue;
         }
 
         let Some(rid_res) = record.reference_sequence_id() else {
             continue;
         };
-        let rid = rid_res.with_context(|| format!("invalid reference id at record #{total}"))? as u32;
+        let rid =
+            rid_res.with_context(|| format!("invalid reference id at record #{total}"))? as u32;
 
         let Some(start_res) = record.alignment_start() else {
             continue;
@@ -188,9 +190,12 @@ mod tests {
 
     #[test]
     fn soft_clip_both_ends() {
-        let summary =
-            cigar_summary(ops(&[(Kind::SoftClip, 5), (Kind::Match, 90), (Kind::SoftClip, 7)]))
-                .unwrap();
+        let summary = cigar_summary(ops(&[
+            (Kind::SoftClip, 5),
+            (Kind::Match, 90),
+            (Kind::SoftClip, 7),
+        ]))
+        .unwrap();
         assert_eq!(summary, (5, 7, 90));
     }
 
@@ -245,7 +250,8 @@ mod tests {
 
     #[test]
     fn empty_cigar() {
-        let summary = cigar_summary::<std::iter::Empty<io::Result<Op>>>(std::iter::empty()).unwrap();
+        let summary =
+            cigar_summary::<std::iter::Empty<io::Result<Op>>>(std::iter::empty()).unwrap();
         assert_eq!(summary, (0, 0, 0));
     }
 }

@@ -191,15 +191,6 @@ pub struct Args {
     pub singleton: bool,
 
     #[arg(
-        short = 'C',
-        long = "cigar",
-        help = "Flag to add CIGAR-corrected (CG) tag to read",
-        value_name = "FLAG",
-        action = ArgAction::SetTrue,
-    )]
-    pub cigar: bool,
-
-    #[arg(
         global = true,
         short = 't',
         long = "threads",
