@@ -18,7 +18,4 @@ pub enum AlignError {
 
     #[error("output format {0:?} requires a different code path; this is a bug")]
     OutputFormatMismatch(&'static str),
-
-    #[error("FASTQ output requested but {path} carries no quality scores (FASTA input?)")]
-    FastqWithoutQuality { path: PathBuf },
 }

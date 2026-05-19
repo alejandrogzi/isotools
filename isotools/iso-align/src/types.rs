@@ -9,8 +9,8 @@ use clap::ValueEnum;
 ///
 /// We keep only the fields required by the predicate so that ~5 M reads with
 /// up to a handful of split alignments each fit in a few GB of RAM. Notably
-/// SEQ / QUAL / MD / aux are never touched on the BAM side — the canonical
-/// sequence comes from the user-supplied FASTQ during stage 3.
+/// QUAL / MD / aux are never touched during the predicate scan; FASTA output
+/// comes from a second BAM pass over candidate QNAMEs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MiniAln {
     /// Reference sequence index (BAM tid), not the textual chromosome.
@@ -47,9 +47,6 @@ pub enum OutputFormat {
     /// FASTA — the recommended default for feeding minimap2 `-x splice:hq`
     /// on the second pass.
     Fasta,
-    /// FASTQ — preserves base qualities (not used by splice scoring, but
-    /// available for tools that consume FASTQ).
-    Fastq,
     /// Sorted, deduplicated list of candidate read names, one per line.
     /// Composes with `seqkit grep -f`, `samtools view -N`, etc.
     Names,
