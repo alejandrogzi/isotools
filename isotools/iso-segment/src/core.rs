@@ -1649,7 +1649,7 @@ impl Read {
         }
 
         if fragmented {
-            name = format!("{name}{SEP}FG");
+            name = format!("F{name}{SEP}FG");
         }
 
         name
