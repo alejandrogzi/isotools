@@ -199,4 +199,13 @@ pub struct Args {
         default_value_t = num_cpus::get()
     )]
     pub threads: usize,
+
+    #[arg(
+        short = 'F',
+        long = "fragmented",
+        help = "Flag to add fragmenteed (FG) tag to read name",
+        value_name = "FLAG",
+        action = ArgAction::SetTrue,
+    )]
+    pub fragmented: bool,
 }

@@ -101,6 +101,7 @@ pub fn segment(args: Args) -> Result<(), String> {
                         &hmm,
                         &outputs,
                         args.singleton,
+                        args.fragmented,
                     );
                 }
             });
@@ -806,6 +807,7 @@ fn process_record(
     hmm: &HMM,
     outputs: &OutputSenders,
     singleton: bool,
+    fragmented: bool,
 ) {
     let mut read = Read::from_mapping_record(&record);
 
@@ -846,7 +848,10 @@ fn process_record(
         .unwrap_or_else(|err| panic!("ERROR: failed to convert record: {err:?}"));
 
     if args.tag {
-        *record.name_mut() = Some(read.tag_read(track, chr, &args.batch, singleton).into());
+        *record.name_mut() = Some(
+            read.tag_read(track, chr, &args.batch, singleton, fragmented)
+                .into(),
+        );
     }
 
     outputs.send(accepted, record);
@@ -1614,7 +1619,14 @@ impl Read {
     ///
     /// assert_eq!(read.name, "R1_chr1::FC5:TC24:PA45:PR65:IY98");
     /// ```
-    fn tag_read(&self, index: u64, chr: &str, batch: &str, singleton: bool) -> String {
+    fn tag_read(
+        &self,
+        index: u64,
+        chr: &str,
+        batch: &str,
+        singleton: bool,
+        fragmented: bool,
+    ) -> String {
         let batch = if !batch.is_empty() {
             format!("@{batch}")
         } else {
@@ -1634,6 +1646,10 @@ impl Read {
 
         if singleton {
             name = format!("{name}{SEP}SG");
+        }
+
+        if fragmented {
+            name = format!("{name}{SEP}FG");
         }
 
         name
