@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 
 use crate::bam_scan::{scan, AlnGroups};
 use crate::cli::Cli;
-use crate::extract::{write_fasta_from_bam, write_names, CandidateSet};
+use crate::extract::{write_fasta_from_bam, write_fasta_from_reads, write_names, CandidateSet};
 use crate::logging::elapsed;
 use crate::predicate::is_candidate;
 use crate::types::{MiniAln, OutputFormat, PredicateConfig};
@@ -22,10 +22,11 @@ use crate::types::{MiniAln, OutputFormat, PredicateConfig};
 /// Runs the iso-align pipeline end-to-end.
 pub fn run(cli: Cli) -> Result<()> {
     info!(
-        "[{}] start bam={} output={} format={:?} threads={} min_gap={} max_gap={:?} min_flank_clip={} flank_side={:?}",
+        "[{}] start bam={} output={} reads={:?} format={:?} threads={} min_gap={} max_gap={:?} min_flank_clip={} flank_side={:?}",
         elapsed(),
         cli.bam.display(),
         cli.output.display(),
+        cli.reads.as_deref(),
         cli.output_format,
         cli.threads,
         cli.min_gap,
@@ -53,9 +54,14 @@ pub fn run(cli: Cli) -> Result<()> {
         OutputFormat::Names => {
             write_names(&cli.output, &candidates)?;
         }
-        OutputFormat::Fasta => {
-            write_fasta_from_bam(&cli.bam, &cli.output, &candidates, cli.bgzf_workers())?;
-        }
+        OutputFormat::Fasta => match cli.reads.as_deref() {
+            Some(reads) if !reads.is_empty() => {
+                write_fasta_from_reads(reads, &cli.output, &candidates)?;
+            }
+            _ => {
+                write_fasta_from_bam(&cli.bam, &cli.output, &candidates, cli.bgzf_workers())?;
+            }
+        },
     }
 
     info!("[{}] done!", elapsed());
