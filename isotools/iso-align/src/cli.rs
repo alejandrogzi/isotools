@@ -31,6 +31,12 @@ pub struct Cli {
     #[arg(short = 'o', long = "output", value_name = "PATH")]
     pub output: PathBuf,
 
+    /// Original read FASTA/FASTQ file(s), comma-delimited. When set with
+    /// FASTA output, sequences are emitted from these files instead of
+    /// best-effort reconstruction from BAM.
+    #[arg(long = "reads", value_name = "PATH", value_delimiter = ',')]
+    pub reads: Option<Vec<PathBuf>>,
+
     /// Minimum reference-coord gap between adjacent split segments (bp).
     #[arg(long = "min-gap", default_value_t = DEFAULT_MIN_GAP)]
     pub min_gap: u64,
@@ -126,6 +132,7 @@ mod tests {
         assert_eq!(cli.min_flank_clip, DEFAULT_MIN_FLANK_CLIP);
         assert_eq!(cli.flank_side, FlankSide::Inner);
         assert_eq!(cli.output_format, OutputFormat::Fasta);
+        assert!(cli.reads.is_none());
     }
 
     #[test]
@@ -159,8 +166,8 @@ mod tests {
     }
 
     #[test]
-    fn reads_arg_is_rejected() {
-        let err = Cli::try_parse_from([
+    fn reads_arg_is_supported() {
+        let cli = Cli::try_parse_from([
             "iso-align",
             "--bam",
             "in.bam",
@@ -169,8 +176,30 @@ mod tests {
             "--output",
             "out.fa",
         ])
-        .unwrap_err();
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+        .unwrap();
+        assert_eq!(cli.reads, Some(vec![PathBuf::from("in.fq")]));
+    }
+
+    #[test]
+    fn reads_arg_accepts_comma_delimited_paths() {
+        let cli = Cli::try_parse_from([
+            "iso-align",
+            "--bam",
+            "in.bam",
+            "--reads",
+            "reads1.fa,reads2.fasta,reads3.fq.gz",
+            "--output",
+            "out.fa",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.reads,
+            Some(vec![
+                PathBuf::from("reads1.fa"),
+                PathBuf::from("reads2.fasta"),
+                PathBuf::from("reads3.fq.gz"),
+            ])
+        );
     }
 
     #[test]
