@@ -469,25 +469,36 @@ pub fn process_component(
                 ratio,
                 &mut accumulator,
             );
+        } else {
+            push_descriptors(&queries, &mut descriptor, ratio, &mut accumulator);
         }
     } else {
-        for query in queries.iter() {
-            let query_key = Some(query.name().unwrap_or_else(|| {
-                log::error!("ERROR: Could not get name from record -> {:?}", query);
-                std::process::exit(1);
-            }));
-
-            let schema = descriptor.get_mut(&query_key).unwrap_or_else(|| {
-                log::error!("ERROR: Could not get handle for query {:?}", query.name());
-                std::process::exit(1);
-            });
-
-            schema.ratio = ratio;
-            accumulator.push(schema.to_line());
-        }
+        push_descriptors(&queries, &mut descriptor, ratio, &mut accumulator);
     }
 
     accumulator
+}
+
+fn push_descriptors<'a>(
+    queries: &'a [GenePred],
+    descriptor: &mut HashMap<Option<&'a [u8]>, Schema<'a>>,
+    ratio: f32,
+    accumulator: &mut Vec<Vec<u8>>,
+) {
+    for query in queries.iter() {
+        let query_key = Some(query.name().unwrap_or_else(|| {
+            log::error!("ERROR: Could not get name from record -> {:?}", query);
+            std::process::exit(1);
+        }));
+
+        let schema = descriptor.get_mut(&query_key).unwrap_or_else(|| {
+            log::error!("ERROR: Could not get handle for query {:?}", query.name());
+            std::process::exit(1);
+        });
+
+        schema.ratio = ratio;
+        accumulator.push(schema.to_line());
+    }
 }
 
 /// Recovers reads from the Bucket
@@ -650,7 +661,7 @@ mod tests {
     #[test]
     fn test_detection_fn_with_tempfile() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let path = file.path().to_path_buf();
+        let _path = file.path().to_path_buf();
         write!(
             file,
             "s1/t778845/t804002/tm54164U_210309_085211/65275776/ccs_PerID0.996_5Clip0_3Clip0_PolyA274_PolyARead275/t60/t-/t778845/t804002/t255,0,0/t14/t1268,142,88,200,253,203,254,167,120,142,218,197,132,302/t0,14396,14736,14943,16461,16846,17598,18073,18511,18890,20330,21290,22627,24855"
@@ -660,5 +671,50 @@ mod tests {
             file,
             "s1/t778870/t803968/tm54164U_210309_085211/92276372/ccs_PerID1.000_5Clip0_3Clip0_PolyA71_PolyARead72/t60/t-/t778870/t803968/t255,0,0/t11/t1243,142,88,200,253,1006,167,218,197,132,268/t0,14371,14711,14918,16436,16821,18048,20305,21265,22602,24830"
         ).unwrap();
+    }
+
+    #[test]
+    fn recover_mode_emits_non_dirty_component_descriptors() {
+        let reference = record(b"ref", &[(100, 150), (200, 250)]);
+        let query_a = record(b"query_a", &[(110, 145), (200, 250)]);
+        let query_b = record(b"query_b", &[(120, 140), (205, 240)]);
+        let counter = ParallelCounter::default();
+
+        let lines = process_component(
+            vec![reference],
+            vec![query_a, query_b],
+            true,
+            0.5,
+            0.5,
+            &counter,
+        );
+
+        assert_eq!(lines.len(), 2);
+
+        let lines = lines
+            .into_iter()
+            .map(|line| String::from_utf8(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("query_a\tPASS\tA\t")));
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("query_b\tPASS\tA\t")));
+    }
+
+    fn record(name: &[u8], exons: &[(u64, u64)]) -> GenePred {
+        let mut record = GenePred::from_coords(
+            b"chr1".to_vec(),
+            exons.first().unwrap().0,
+            exons.last().unwrap().1,
+            Default::default(),
+        );
+        record.set_name(Some(name.to_vec()));
+        record.set_strand(Some(Strand::Forward));
+        record.set_block_count(Some(exons.len() as u32));
+        record.set_block_starts(Some(exons.iter().map(|(start, _)| *start).collect()));
+        record.set_block_ends(Some(exons.iter().map(|(_, end)| *end).collect()));
+        record
     }
 }
