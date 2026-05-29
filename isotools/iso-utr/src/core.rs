@@ -532,70 +532,72 @@ fn recover_reads<'a>(
     ratio: f32,
     accumulator: &mut Vec<Vec<u8>>,
 ) {
-    for (ref_exon, support) in reference_exon_support.iter() {
-        // 2. if the owner (middle exon) has more than 50% support, we consider it
-        //  a valid owner and keep reads truncated by that owner as
-        //  truncated reads; otherwise, we consider the owner to be
-        //  a weak ownner and send all truncated reads to the pass
-        //  bucket
+    for query in queries.iter() {
+        let query_key = Some(query.name().unwrap_or_else(|| {
+            log::error!("ERROR: Could not get name from record -> {:?}", query);
+            std::process::exit(1);
+        }));
 
-        let (owner_start, owner_end) = *ref_exon;
+        let schema = descriptor.get_mut(&query_key).unwrap_or_else(|| {
+            log::error!("ERROR: Could not get handle for query {:?}", query.name());
+            std::process::exit(1);
+        });
 
-        // send reads truncated by this owner to pass
-        for query in queries.iter() {
-            let query_key = Some(query.name().unwrap_or_else(|| {
-                log::error!("ERROR: Could not get name from record -> {:?}", query);
-                std::process::exit(1);
-            }));
+        schema.ratio = ratio;
 
-            let schema = descriptor.get_mut(&query_key).unwrap_or_else(|| {
-                log::error!("ERROR: Could not get handle for query {:?}", query.name());
-                std::process::exit(1);
-            });
+        // INFO: if read was already a pass, leave it as pass
+        if schema.status == b"PASS" {
+            // INFO: marker for reviewed reads
+            schema.code = b"AW";
+            accumulator.push(schema.to_line());
+            continue;
+        }
 
-            schema.ratio = ratio;
+        let (query_start, query_end) = terminal_exon(query);
+        let mut has_weak_owner = false;
+        let mut has_supported_owner = false;
 
-            // INFO: if read was already a pass, leave it as pass
-            if schema.status == b"PASS" {
-                // INFO: marker for reviewed reads
-                schema.code = b"AW";
-                accumulator.push(schema.to_line());
+        for (ref_exon, support) in reference_exon_support.iter() {
+            let (owner_start, owner_end) = *ref_exon;
+            if !overlaps(query_start, query_end, owner_start, owner_end) {
                 continue;
             }
 
-            // INFO: from this point we only have truncated reads to evaluate
-            let (query_start, query_end) = terminal_exon(query);
-
-            if (query_start >= owner_start && query_start < owner_end)
-                || (query_end > owner_start && query_end <= owner_end)
-                || (query_start < owner_start && query_end > owner_end)
-            {
-                // INFO: read is truncated by this owner and owner is NOT supported
-                // INFO: modifying read as a forced pass
-                if *support < recovery_threshold {
-                    log::debug!(
-                        "DEBUG: Owner {:?} has less than threshold {:?}",
-                        ref_exon,
-                        support
-                    );
-
-                    schema.status = b"PASS";
-                    schema.code = b"FW";
-                } else {
-                    // INFO: read is truncated by this owner and owner is supported
-                    log::debug!(
-                        "DEBUG: Owner {:?} has more than threshold {:?}",
-                        ref_exon,
-                        support
-                    );
-                    schema.status = b"TRUNCATED";
-                    schema.code = b"TW";
-                }
+            if *support < recovery_threshold {
+                log::debug!(
+                    "DEBUG: Owner {:?} has less than threshold {:?}",
+                    ref_exon,
+                    support
+                );
+                has_weak_owner = true;
+            } else {
+                log::debug!(
+                    "DEBUG: Owner {:?} has more than threshold {:?}",
+                    ref_exon,
+                    support
+                );
+                has_supported_owner = true;
+                break;
             }
-
-            accumulator.push(schema.to_line());
         }
+
+        if has_supported_owner {
+            schema.status = b"TRUNCATED";
+            schema.code = b"TW";
+        } else if has_weak_owner {
+            schema.status = b"PASS";
+            schema.code = b"FW";
+        }
+
+        accumulator.push(schema.to_line());
     }
+}
+
+#[inline(always)]
+fn overlaps(query_start: u64, query_end: u64, owner_start: u64, owner_end: u64) -> bool {
+    (query_start >= owner_start && query_start < owner_end)
+        || (query_end > owner_start && query_end <= owner_end)
+        || (query_start < owner_start && query_end > owner_end)
 }
 
 /// Schema
@@ -701,6 +703,79 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.starts_with("query_b\tPASS\tA\t")));
+    }
+
+    #[test]
+    fn recovery_emits_once_per_query_after_evaluating_all_owners() {
+        let queries = vec![
+            record(b"supported", &[(130, 140)]),
+            record(b"weak", &[(210, 220)]),
+            record(b"already_pass", &[(310, 320)]),
+            record(b"unchanged", &[(410, 420)]),
+        ];
+        let mut descriptor: HashMap<Option<&[u8]>, Schema<'_>> = HashMap::new();
+        for query in queries.iter() {
+            let name = query.name().unwrap();
+            let mut schema = Schema {
+                id: name,
+                status: b"TRUNCATED",
+                code: b"T",
+                ..Default::default()
+            };
+
+            if name == b"already_pass" {
+                schema.status = b"PASS";
+                schema.code = b"A";
+            }
+
+            descriptor.insert(Some(name), schema);
+        }
+
+        let mut reference_exon_support = BTreeMap::new();
+        reference_exon_support.insert((100, 150), 0.25);
+        reference_exon_support.insert((120, 170), 0.75);
+        reference_exon_support.insert((200, 250), 0.25);
+
+        let mut lines = Vec::new();
+        recover_reads(
+            &queries,
+            reference_exon_support,
+            &mut descriptor,
+            0.5,
+            0.75,
+            &mut lines,
+        );
+
+        assert_eq!(lines.len(), queries.len());
+
+        let lines = lines
+            .into_iter()
+            .map(|line| String::from_utf8(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(count_rows_for(&lines, "supported"), 1);
+        assert_eq!(count_rows_for(&lines, "weak"), 1);
+        assert_eq!(count_rows_for(&lines, "already_pass"), 1);
+        assert_eq!(count_rows_for(&lines, "unchanged"), 1);
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("supported\tTRUNCATED\tTW\t")));
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("weak\tPASS\tFW\t")));
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("already_pass\tPASS\tAW\t")));
+        assert!(lines
+            .iter()
+            .any(|line| line.starts_with("unchanged\tTRUNCATED\tT\t")));
+    }
+
+    fn count_rows_for(lines: &[String], id: &str) -> usize {
+        let prefix = format!("{id}\t");
+        lines
+            .iter()
+            .filter(|line| line.starts_with(&prefix))
+            .count()
     }
 
     fn record(name: &[u8], exons: &[(u64, u64)]) -> GenePred {
