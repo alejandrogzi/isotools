@@ -8,6 +8,11 @@ use std::path::PathBuf;
 pub const FUSION_RATIO_THRESHOLD: f32 = 0.5;
 
 #[derive(Debug, Parser)]
+#[command(
+    author = env!("CARGO_PKG_AUTHORS"),
+    version = env!("CARGO_PKG_VERSION"),
+    about = env!("CARGO_PKG_DESCRIPTION"),
+)]
 pub struct Args {
     #[arg(
         short = 'r',
