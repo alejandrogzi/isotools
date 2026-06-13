@@ -332,7 +332,7 @@ impl Schema<'_> {
             std::str::from_utf8(&self.status).unwrap_or("NULL")
         ));
         body.push_str(&format!(
-            "- code: {} [R: retention, K: RT retention, X: has RT intron, G: retains artifact, A: no events]<br>",
+            "- code: {} [R: retention, K: RT retention, X: has RT intron, G: retains artifact, A: no events, Q: has artifact]<br>",
             std::str::from_utf8(&self.code).unwrap_or("NULL")
         ));
         body.push_str(&format!("- events: {}<br>", self.events));
@@ -421,20 +421,59 @@ fn detect_rt_intron<'a>(
             );
         });
 
-        if info.support == SupportType::StrongRT || info.support == SupportType::WeakRT {
-            if !rt {
-                rt = true;
-                // INFO: add 'X' to code representing that read has RT intron
-                if !schema.code.contains(&b'X') {
-                    schema.code.push(b'X');
+        match info.support {
+            SupportType::StrongRT => {
+                if !rt {
+                    rt = true;
+                    // INFO: add 'X' to code representing that read has RT intron
+                    if !schema.code.contains(&b'X') {
+                        schema.code.push(b'X');
+                    }
+
+                    if schema.status != b"RETENTION" && schema.status != b"HAS_STRONG_RT" {
+                        schema.status = b"HAS_STRONG_RT".to_vec();
+                    }
                 }
 
-                if schema.status != b"RETENTION" {
-                    schema.status = b"RETENTION".to_vec();
-                }
+                schema.rt_html.push(info);
             }
+            SupportType::WeakRT => {
+                if !rt {
+                    rt = true;
+                    // INFO: add 'X' to code representing that read has RT intron
+                    if !schema.code.contains(&b'X') {
+                        schema.code.push(b'X');
+                    }
 
-            schema.rt_html.push(info);
+                    if schema.status != b"RETENTION"
+                        && schema.status != b"HAS_STRONG_RT"
+                        && schema.status != b"HAS_WEAK_RT"
+                    {
+                        schema.status = b"HAS_WEAK_RT".to_vec();
+                    }
+                }
+
+                schema.rt_html.push(info);
+            }
+            SupportType::Artifact => {
+                if !rt {
+                    rt = true;
+                    // INFO: add 'Q' to code representing that read has an artifact
+                    if !schema.code.contains(&b'Q') {
+                        schema.code.push(b'Q');
+                    }
+
+                    if schema.status != b"RETENTION"
+                        && schema.status != b"HAS_STRONG_RT"
+                        && schema.status != b"HAS_ARTIFACT"
+                    {
+                        schema.status = b"HAS_ARTIFACT".to_vec();
+                    }
+                }
+
+                schema.rt_html.push(info);
+            }
+            _ => {}
         }
     }
 }
@@ -469,7 +508,7 @@ fn detect_retention<'a, 'b>(
     schema: &'b mut Schema<'a>,
 ) {
     let read_exons = read.exons();
-    let mut flawed = false;
+    let mut flawed = schema.code.contains(&b'Q') || schema.code.contains(&b'X');
 
     for exon in read_exons {
         for (retention_start, retention_stop) in intron_retentions(&index, exon) {

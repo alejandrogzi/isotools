@@ -450,6 +450,8 @@ pub struct Intron {
     pub splice_u_type: USpliceType,
     /// A boolean indicating if the intron is within a repeat.
     pub within_repeat: SpanRepeat,
+    /// Intron length
+    pub intron_len: u64,
     /// A classification of the intron's support type.
     pub support: SupportType,
 }
@@ -563,6 +565,11 @@ impl Intron {
             .unwrap_or_else(|| panic!("ERROR: Could not get within_repeat from {}!", record))
             .parse::<SpanRepeat>()
             .unwrap_or_else(|_| panic!("ERROR: Could not parse within_repeat from {}!", record));
+        let intron_len = fields
+            .next()
+            .unwrap_or_else(|| panic!("ERROR: Could not get intron_len from {}!", record))
+            .parse::<u64>()
+            .unwrap_or_else(|_| panic!("ERROR: Could not parse intron_len from {}!", record));
         let support = fields
             .next()
             .unwrap_or_else(|| panic!("ERROR: Could not get support from {}!", record))
@@ -599,6 +606,7 @@ impl Intron {
             is_nag_intron,
             splice_u_type,
             within_repeat,
+            intron_len,
             support,
         })
     }
@@ -608,7 +616,7 @@ impl std::fmt::Display for Intron {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             std::str::from_utf8(&self.chrom).unwrap_or("NULL"),
             self.start,
             self.end,
@@ -632,6 +640,7 @@ impl std::fmt::Display for Intron {
             std::str::from_utf8(&self.is_nag_intron).unwrap_or("NULL"),
             self.splice_u_type,
             self.within_repeat,
+            self.intron_len,
             self.support
         )
     }
