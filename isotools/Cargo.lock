@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "iso-classify"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "iso-intron"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "clap",
  "dashmap",

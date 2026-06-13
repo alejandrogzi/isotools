@@ -213,6 +213,15 @@ pub struct IntronArgs {
     pub prefix: Option<String>,
 
     #[arg(
+        long = "intron-track",
+        required = false,
+        value_name = "FLAG",
+        help = "Flag to output artifacts/unclear/RT introns as a BED4 track",
+        action = ArgAction::SetTrue,
+    )]
+    pub do_intron_track: bool,
+
+    #[arg(
         long = "outdir",
         required = false,
         value_name = "PATH",

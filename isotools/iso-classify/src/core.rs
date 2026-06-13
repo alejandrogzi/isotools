@@ -47,6 +47,9 @@ const NULLG_PATTERNS: [&[u8]; 3] = [b"CAG", b"TAG", b"AAG"];
 
 type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
 
+const INTRON_SIZE_THRESHOLD: u64 = 50000; // 50kb
+const MINIMUM_SPLICEAI_SS_SIGNAL: f32 = 0.001;
+
 /// Classifies introns based on various criteria,
 /// including splice site scores, genomic context,
 /// and repeat sequences.
@@ -201,13 +204,14 @@ pub fn classify_introns(args: Args) -> Result<()> {
             args.maxent_min_ss_signal,
             &spliceosome,
             repeats,
+            args.do_intron_track,
         );
     });
     log::info!("INFO: Classified {} introns", accumulator.introns.len());
 
     let filename = format!(
         "{}.{}",
-        args.prefix.unwrap_or("isotools".to_string()),
+        args.prefix.clone().unwrap_or("isotools".to_string()),
         INTRON_CLASSIFICATION
     );
     std::fs::create_dir_all(&args.outdir)
@@ -229,17 +233,40 @@ pub fn classify_introns(args: Args) -> Result<()> {
             .unwrap_or_else(|e| panic!("ERROR: Could not write newline -> {e}!"));
     });
 
+    if args.do_intron_track {
+        log::info!("INFO: Writing intron track");
+
+        let mut writer = BufWriter::new(
+            File::create(format!(
+                "{}.introns_track,bed",
+                args.prefix.unwrap_or("isotools".to_string())
+            ))
+            .unwrap_or_else(|e| panic!("ERROR: Could not create output file -> {e}!")),
+        );
+
+        accumulator.track.iter().for_each(|track| {
+            writer
+                .write_all(&track)
+                .unwrap_or_else(|e| panic!("ERROR: Could not write intron -> {e}!"));
+            writer
+                .write_all(b"\n")
+                .unwrap_or_else(|e| panic!("ERROR: Could not write newline -> {e}!"));
+        });
+    }
+
     Ok(())
 }
 
 struct ParallelAccumulator {
     introns: DashSet<Vec<u8>>,
+    track: DashSet<Vec<u8>>,
 }
 
 impl Default for ParallelAccumulator {
     fn default() -> Self {
         Self {
             introns: DashSet::new(),
+            track: DashSet::new(),
         }
     }
 }
@@ -279,6 +306,7 @@ fn distribute(
     maxent_min_ss_signal: f32,
     spliceosome: &HashMap<String, USpliceType>,
     repeats: Option<&Lapper<u64, ()>>,
+    do_intron_track: bool,
 ) {
     components.into_par_iter().for_each(|comp| {
         let (refs, queries) = comp.into_iter().partition(|record| {
@@ -304,13 +332,24 @@ fn distribute(
             maxent_min_ss_signal,
             spliceosome,
             repeats,
+            do_intron_track,
         );
 
-        result.into_iter().for_each(|descriptor| {
+        let (lines, track_lines) = result;
+
+        lines.into_iter().for_each(|descriptor| {
             if !descriptor.is_empty() {
                 accumulator.introns.insert(descriptor);
             }
         });
+
+        if do_intron_track {
+            track_lines.into_iter().for_each(|track| {
+                if !track.is_empty() {
+                    accumulator.track.insert(track);
+                }
+            });
+        }
     });
 }
 
@@ -356,9 +395,10 @@ fn process_component(
     maxent_min_ss_signal: f32,
     spliceosome: &HashMap<String, USpliceType>,
     repeats: Option<&Lapper<u64, ()>>,
-) -> Vec<Vec<u8>> {
+    do_intron_track: bool,
+) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
     if queries.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // INFO: on queries in case of no references -> panics
@@ -429,6 +469,7 @@ fn process_component(
                     stats.strand = strand;
                     stats.seen = 1;
                     stats.is_in_frame = is_in_frame;
+                    stats.intron_len = *end - *start;
 
                     // INFO: ask if intron is within how many spans
                     for (span_start, span_end) in &spans {
@@ -521,7 +562,7 @@ fn process_component(
     // INFO: merging NULLG introns in after all entries are inserted
     query_introns.extend(nag_introns);
 
-    log::debug!("INFO: Second pass over introns...");
+    log::debug!("DEBUG: Second pass over introns...");
     __veredict(
         &mut query_introns,
         rt_frequency_threshold,
@@ -531,11 +572,30 @@ fn process_component(
     );
 
     let mut rows = Vec::new();
+    let mut track_rows = Vec::new();
+
     query_introns.values().for_each(|descriptor| {
         rows.push(descriptor.as_bytes());
+
+        if do_intron_track {
+            match descriptor.support {
+                SupportType::Artifact
+                | SupportType::Unclear
+                | SupportType::WeakRT
+                | SupportType::StrongRT => {
+                    track_rows.push(descriptor.as_track_bytes());
+                }
+                _ => {
+                    log::debug!(
+                        "DEBUG: Intron not classified as artifacts/unclear/RT: {:?}",
+                        descriptor
+                    );
+                }
+            }
+        }
     });
 
-    rows
+    (rows, track_rows)
 }
 
 /// Determines the support type for each intron.
@@ -613,7 +673,21 @@ pub fn __veredict(
                             if (descriptor.seen as f32 / descriptor.spanned as f32)
                                 >= rt_frequency_threshold
                             {
-                                descriptor.support = SupportType::Unclear;
+                                // INFO: second assertion due to 1/1 clear artifacts passing as
+                                // unclear:
+                                // scaffold_1	120379762	120496991	+	1	1	0	0	0	-33.18959	tt	TG
+                                // taagcaacattttcagt	GCAGCAGAGAGAGCAACATGGGT	NEW	NO_TOGA_SUPPORT
+                                // OUT_OF_FRAME	taagcaacattt	AGAGCAACATGG	RT_INTRON	NOT_NAG_SS
+                                // U2	NO_REPEAT	UNCLEAR
+                                if descriptor.splice_ai_donor > 0.0
+                                    && descriptor.splice_ai_acceptor > 0.0
+                                    && (descriptor.max_ent_donor > 0.0
+                                        || descriptor.max_ent_acceptor > 0.0)
+                                {
+                                    descriptor.support = SupportType::Unclear;
+                                } else {
+                                    descriptor.support = SupportType::Artifact;
+                                }
                             } else {
                                 // INFO: low frequency RT intron -> spliceAi scores decide
                                 // strong/weak
@@ -629,6 +703,14 @@ pub fn __veredict(
                     }
                 }
             } else {
+                let has_signal = (descriptor.max_ent_donor >= maxent_min_ss_signal
+                    && descriptor.max_ent_acceptor >= maxent_min_ss_signal)
+                    && (descriptor.splice_ai_donor > 0.01 && descriptor.splice_ai_acceptor > 0.01);
+                let has_minimum_signal = (descriptor.max_ent_donor >= 0.0
+                    && descriptor.max_ent_acceptor >= 0.0)
+                    && (descriptor.splice_ai_donor >= MINIMUM_SPLICEAI_SS_SIGNAL
+                        && descriptor.splice_ai_acceptor >= MINIMUM_SPLICEAI_SS_SIGNAL);
+
                 if descriptor.is_toga_supported
                     || (descriptor.splice_ai_donor >= spliceai_min_ss_signal
                         && descriptor.splice_ai_acceptor >= spliceai_min_ss_signal)
@@ -636,26 +718,34 @@ pub fn __veredict(
                     descriptor.support = SupportType::Splicing;
                 } else if ((descriptor.seen as f32 / descriptor.spanned as f32)
                     >= intron_frequency_threshold)
-                    || ((descriptor.max_ent_donor >= maxent_min_ss_signal
-                        && descriptor.max_ent_acceptor >= maxent_min_ss_signal)
-                        && (descriptor.splice_ai_donor > 0.01
-                            && descriptor.splice_ai_acceptor > 0.01))
+                    || has_signal
                 {
+                    // INFO: new branch testing size threshold
+                    // INFO: intron bigger than 50kb without any signal is likely an artifact
+                    if descriptor.intron_len >= INTRON_SIZE_THRESHOLD {
+                        if descriptor.splice_u_type == USpliceType::U12
+                            || (descriptor.splice_ai_donor > 0.01
+                                && descriptor.splice_ai_acceptor > 0.01)
+                        {
+                            descriptor.support = SupportType::Unclear;
+                        } else {
+                            descriptor.support = SupportType::Artifact;
+                        }
                     // WARN: how do we deal with 1/2 (50%) cases?
                     // INFO: new branch for MaxEnt only -> not trusting it alone
                     // INFO: here we test if maxEnt is significant + if there is
                     // INFO: spliceAi signal [> 0.0]
-                    if descriptor.splice_u_type == USpliceType::U2
-                        || descriptor.splice_u_type == USpliceType::U12
-                    {
+                    } else if descriptor.splice_u_type == USpliceType::U12 {
                         descriptor.support = SupportType::Splicing;
+                    } else if has_minimum_signal {
+                        descriptor.support = SupportType::Unclear;
                     } else {
                         // INFO: intron type is unknown but is high frequency OR has ss signal -> unclear
-                        descriptor.support = SupportType::Unclear;
+                        descriptor.support = SupportType::Artifact;
                     }
                 } else {
                     // INFO: if intron is U12 -> unclear directly
-                    if descriptor.splice_u_type == USpliceType::U12 {
+                    if descriptor.splice_u_type == USpliceType::U12 || has_minimum_signal {
                         descriptor.support = SupportType::Unclear;
                     } else {
                         // INFO: intron is U2 or unknown + low freq + low ss signal
@@ -946,6 +1036,7 @@ fn process_nag_pattern(
         new_descriptor.start = intron.0;
         new_descriptor.end = intron.1;
         new_descriptor.strand = *strand;
+        new_descriptor.intron_len = intron.1 - intron.0;
 
         get_sj_context(
             &(intron.0 + 1, intron.1 - 1),
@@ -1385,6 +1476,8 @@ pub struct Intron {
     pub splice_u_type: USpliceType,
     /// A boolean indicating if the intron is within a repeat.
     pub within_repeat: SpanRepeat,
+    /// Length of the intron
+    pub intron_len: u64,
     /// A classification of the intron's support type.
     pub support: SupportType,
 }
@@ -1423,12 +1516,25 @@ impl Intron {
             is_nag_intron: false,
             splice_u_type: USpliceType::Unknown,
             within_repeat: SpanRepeat::Null,
+            intron_len: 0,
             support: SupportType::Unclear,
         }
     }
 
     pub fn as_bytes(&self) -> Vec<u8> {
         format!("{}", self).as_bytes().to_vec()
+    }
+
+    pub fn as_track_bytes(&self) -> Vec<u8> {
+        format!(
+            "{}\t{}\t{}\t{}",
+            std::str::from_utf8(&self.chrom).unwrap_or("NULL"),
+            self.start,
+            self.end,
+            self.support
+        )
+        .as_bytes()
+        .to_vec()
     }
 }
 
@@ -1437,7 +1543,7 @@ impl std::fmt::Display for Intron {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             std::str::from_utf8(&self.chrom).unwrap_or("NULL"),
             self.start,
             self.end,
@@ -1461,6 +1567,7 @@ impl std::fmt::Display for Intron {
             if self.is_nag_intron { "NAG_SS" } else { "NOT_NAG_SS" },
             self.splice_u_type,
             self.within_repeat,
+            self.intron_len,
             self.support
         )
     }
