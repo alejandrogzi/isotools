@@ -1297,57 +1297,67 @@ impl Read {
     /// assert_eq!(read.end_site, 200);
     /// ```
     fn set_mapping_features(&mut self, record: &Record) {
-        let mut alignment_length = 0;
-        let mut matches = 0;
-        let mut expansion = 0;
+        let mut aligned_columns = 0usize; // M / = / X  (consume query AND ref)
+        let mut indels = 0usize; // I + D bases
+        let mut ref_span = 0usize; // reference length: M/=/X + D + N
+        let mut alignment_length = 0usize; // denominator: M/=/X + I + D  (excludes N)
 
         let mut five_clip = 0;
         let mut three_clip = 0;
         let mut hard_clip_five = false;
         let mut hard_clip_three = false;
+        let mut seen_aligned = false; // replaces the `alignment_length == 0` leading/trailing test
 
-        let mut end_site = record
+        let start = record
             .alignment_start()
-            .and_then(|start| start.ok())
-            .unwrap_or_else(|| panic!("ERROR: could not get end site from read!"))
+            .and_then(|s| s.ok())
+            .unwrap_or_else(|| panic!("ERROR: could not get alignment start from read!"))
             .get();
 
         record.cigar().iter().for_each(|op| {
             let op = op.unwrap();
-
             match op.kind() {
-                Kind::SequenceMatch => {
+                Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                    aligned_columns += op.len();
                     alignment_length += op.len();
-                    matches += op.len();
-                    expansion += op.len();
+                    ref_span += op.len();
+                    seen_aligned = true;
                 }
-                Kind::SequenceMismatch | Kind::Insertion | Kind::Deletion => {
+                Kind::Insertion => {
+                    indels += op.len();
                     alignment_length += op.len();
-                    expansion += op.len();
+                }
+                Kind::Deletion => {
+                    indels += op.len();
+                    alignment_length += op.len();
+                    ref_span += op.len();
+                }
+                Kind::Skip => {
+                    ref_span += op.len(); // intron: consumes ref, excluded from identity
                 }
                 Kind::HardClip | Kind::SoftClip => {
-                    if alignment_length == 0 {
+                    let is_hard = op.kind() == Kind::HardClip;
+                    if !seen_aligned {
                         five_clip += op.len();
-
-                        if op.kind() == Kind::HardClip {
-                            hard_clip_five = true;
-                        }
+                        hard_clip_five |= is_hard;
                     } else {
                         three_clip += op.len();
-
-                        if op.kind() == Kind::HardClip {
-                            hard_clip_three = true;
-                        }
+                        hard_clip_three |= is_hard;
                     }
                 }
-                _ => {}
+                Kind::Pad => {}
             }
         });
 
+        // M can't be split into match/mismatch from the CIGAR, so use NM.
+        let nm = get_nm(record).unwrap_or(0);
+        let mismatches = nm.saturating_sub(indels);
+        let matches = aligned_columns.saturating_sub(mismatches);
+
+        let end_site = start + ref_span - 1;
+
         match self.strand {
             Strand::Forward => {
-                end_site += expansion - 1;
-
                 self.five_clip = five_clip;
                 self.three_clip = three_clip;
                 self.has_hard_clip_three = hard_clip_three;
@@ -1359,7 +1369,11 @@ impl Read {
             }
         }
 
-        let identity = (matches as f32 / alignment_length as f32 * 1000.0).round() / 10.0;
+        let identity = if alignment_length == 0 {
+            0.0
+        } else {
+            (matches as f32 / alignment_length as f32 * 1000.0).round() / 10.0
+        };
 
         self.set_matches(matches);
         self.set_alignment_length(alignment_length);
@@ -2147,6 +2161,26 @@ impl Sequence {
     }
 }
 
+/// Get the NM tag from a BAM record
+///
+/// # Example
+///
+/// ```rust, no_run
+/// use iso::get_nm;
+///
+/// let record = Record::new();
+/// record.data().insert(Tag::from([b'N', b'M']), Value::Int(100));
+/// assert_eq!(get_nm(&record), Some(100));
+/// ```
+fn get_nm(record: &Record) -> Option<usize> {
+    record
+        .data()
+        .get(&Tag::from([b'N', b'M'])) // recent noodles also has Tag::EDIT_DISTANCE
+        .and_then(|v| v.ok())
+        .and_then(|v| v.as_int()) // handles all int widths; else match Value variants
+        .map(|n| n as usize)
+}
+
 impl std::fmt::Display for Sequence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.seq)
@@ -2156,6 +2190,244 @@ impl std::fmt::Display for Sequence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MappingFeatures {
+        matches: usize,
+        alignment_length: usize,
+        end_site: usize,
+        identity: f32,
+        five_clip: usize,
+        three_clip: usize,
+        has_hard_clip_three: bool,
+    }
+
+    // Readable CIGAR literals in tests.
+    fn cig(s: &str) -> Vec<(Kind, usize)> {
+        let mut out = Vec::new();
+        let mut num = String::new();
+        for c in s.chars() {
+            if c.is_ascii_digit() {
+                num.push(c);
+            } else {
+                let len = num.parse().unwrap();
+                num.clear();
+                let kind = match c {
+                    'M' => Kind::Match,
+                    '=' => Kind::SequenceMatch,
+                    'X' => Kind::SequenceMismatch,
+                    'I' => Kind::Insertion,
+                    'D' => Kind::Deletion,
+                    'N' => Kind::Skip,
+                    'S' => Kind::SoftClip,
+                    'H' => Kind::HardClip,
+                    'P' => Kind::Pad,
+                    o => panic!("bad cigar op {o}"),
+                };
+                out.push((kind, len));
+            }
+        }
+        out
+    }
+
+    fn compute_mapping_features(
+        cigar: &[(Kind, usize)],
+        start: usize,
+        nm: usize,
+        strand: Strand,
+    ) -> MappingFeatures {
+        let mut aligned_columns = 0usize; // M / = / X  — consume both query and ref
+        let mut indels = 0usize; // I + D bases
+        let mut ref_span = 0usize; // reference length: M/=/X + D + N
+        let mut alignment_length = 0usize; // identity denominator: M/=/X + I + D (excludes N)
+
+        let mut five_clip = 0usize;
+        let mut three_clip = 0usize;
+        let mut hard_clip_five = false;
+        let mut hard_clip_three = false;
+        let mut seen_aligned = false; // replaces the `alignment_length == 0` leading/trailing test
+
+        for &(kind, len) in cigar {
+            match kind {
+                Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                    aligned_columns += len;
+                    alignment_length += len;
+                    ref_span += len;
+                    seen_aligned = true;
+                }
+                Kind::Insertion => {
+                    indels += len;
+                    alignment_length += len;
+                }
+                Kind::Deletion => {
+                    indels += len;
+                    alignment_length += len;
+                    ref_span += len;
+                }
+                Kind::Skip => {
+                    ref_span += len; // intron: consumes ref, excluded from identity
+                }
+                Kind::HardClip | Kind::SoftClip => {
+                    let is_hard = kind == Kind::HardClip;
+                    if !seen_aligned {
+                        five_clip += len;
+                        hard_clip_five |= is_hard;
+                    } else {
+                        three_clip += len;
+                        hard_clip_three |= is_hard;
+                    }
+                }
+                Kind::Pad => {}
+            }
+        }
+
+        // `M` can't be split into match/mismatch from the CIGAR alone, so use NM.
+        // For a well-formed record this also reproduces the =/X result exactly.
+        let mismatches = nm.saturating_sub(indels);
+        let matches = aligned_columns.saturating_sub(mismatches);
+
+        // Guard against ref_span == 0 (e.g. a fully clipped record) so we don't underflow.
+        let end_site = if ref_span == 0 {
+            start
+        } else {
+            start + ref_span - 1
+        };
+
+        let (five, three, hc_three) = match strand {
+            Strand::Forward => (five_clip, three_clip, hard_clip_three),
+            Strand::Reverse => (three_clip, five_clip, hard_clip_five),
+        };
+
+        let identity = if alignment_length == 0 {
+            0.0
+        } else {
+            (matches as f32 / alignment_length as f32 * 1000.0).round() / 10.0
+        };
+
+        MappingFeatures {
+            matches,
+            alignment_length,
+            end_site,
+            identity,
+            five_clip: five,
+            three_clip: three,
+            has_hard_clip_three: hc_three,
+        }
+    }
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    // ---- The regression that started all this ----
+    #[test]
+    fn desalt_m_cigar_is_not_zero_identity() {
+        // 16S808M969N401M, reverse strand, NM:i:2  (the deSALT record)
+        let f = compute_mapping_features(&cig("16S808M969N401M"), 3_254_931, 2, Strand::Reverse);
+        assert_eq!(f.matches, 1207); // 808+401 aligned cols, minus 2 mismatches
+        assert_eq!(f.alignment_length, 1209); // N excluded
+        assert!(approx(f.identity, 99.8)); // was 0.0 / NaN before the fix
+        assert_eq!(f.end_site, 3_257_108); // 3254931 + (808+969+401) - 1
+                                           // reverse strand swaps the leading 16S onto three_clip
+        assert_eq!(f.five_clip, 0);
+        assert_eq!(f.three_clip, 16);
+        assert!(!f.has_hard_clip_three);
+    }
+
+    // ---- minimap2 --eqx: must reproduce the hand calc exactly ----
+    #[test]
+    fn minimap2_eqx_cigar() {
+        // 1S28=1X971=2I226=1D16=1I43=, reverse, NM:i:5
+        let f = compute_mapping_features(
+            &cig("1S28=1X971=2I226=1D16=1I43="),
+            3_717_505,
+            5,
+            Strand::Reverse,
+        );
+        assert_eq!(f.matches, 1284); // == sum of '=' ops
+        assert_eq!(f.alignment_length, 1289);
+        assert!(approx(f.identity, 99.6));
+        assert_eq!(f.end_site, 3_718_790); // start + 1286 ref-cols - 1
+        assert_eq!(f.five_clip, 0);
+        assert_eq!(f.three_clip, 1);
+    }
+
+    // ---- The core claim: M+NM and =/X describe the same alignment identically ----
+    #[test]
+    fn m_and_eqx_agree_for_same_alignment() {
+        let eqx =
+            compute_mapping_features(&cig("1S28=1X971=2I226=1D16=1I43="), 100, 5, Strand::Forward);
+        // Same alignment, =/X collapsed into M runs, same NM.
+        let m = compute_mapping_features(&cig("1S1000M2I226M1D16M1I43M"), 100, 5, Strand::Forward);
+        assert_eq!(eqx.matches, m.matches);
+        assert_eq!(eqx.alignment_length, m.alignment_length);
+        assert_eq!(eqx.end_site, m.end_site);
+        assert!(approx(eqx.identity, m.identity));
+    }
+
+    // ---- Intron consumes reference but not the identity denominator ----
+    #[test]
+    fn intron_excluded_from_identity_included_in_span() {
+        let f = compute_mapping_features(&cig("100M2000N100M"), 1, 0, Strand::Forward);
+        assert_eq!(f.alignment_length, 200); // NOT 2200
+        assert_eq!(f.end_site, 2200); // N is in the span
+        assert!(approx(f.identity, 100.0));
+    }
+
+    // ---- Indels count toward the denominator ----
+    #[test]
+    fn indels_in_denominator() {
+        // 30 aligned, 5 ins + 5 del, 0 mismatch
+        let f = compute_mapping_features(&cig("10=5I10=5D10="), 1, 10, Strand::Forward);
+        assert_eq!(f.matches, 30);
+        assert_eq!(f.alignment_length, 40);
+        assert!(approx(f.identity, 75.0));
+        assert_eq!(f.end_site, 35); // 10+10+5(D)+10 ref cols
+    }
+
+    // ---- Clip placement + hard-clip flag, both strands ----
+    #[test]
+    fn forward_clips() {
+        let f = compute_mapping_features(&cig("10H50M5S"), 100, 1, Strand::Forward);
+        assert_eq!(f.five_clip, 10);
+        assert_eq!(f.three_clip, 5);
+        assert!(!f.has_hard_clip_three); // trailing clip was soft
+        assert_eq!(f.end_site, 149);
+        assert!(approx(f.identity, 98.0)); // 49/50
+    }
+
+    #[test]
+    fn reverse_swaps_clips_and_hardclip_flag() {
+        let f = compute_mapping_features(&cig("10H50M5S"), 100, 0, Strand::Reverse);
+        assert_eq!(f.five_clip, 5); // swapped
+        assert_eq!(f.three_clip, 10);
+        assert!(f.has_hard_clip_three); // picks up the (originally 5') hard clip
+    }
+
+    // ---- Degenerate: no aligned columns → 0.0, never NaN, no underflow ----
+    #[test]
+    fn empty_alignment_is_zero_not_nan() {
+        let f = compute_mapping_features(&cig("50S"), 100, 0, Strand::Forward);
+        assert_eq!(f.matches, 0);
+        assert_eq!(f.alignment_length, 0);
+        assert!(!f.identity.is_nan());
+        assert!(approx(f.identity, 0.0));
+        assert_eq!(f.end_site, 100); // ref_span==0 guard
+    }
+
+    // ---- NM inconsistencies must saturate, not panic ----
+    #[test]
+    fn nm_larger_than_alignment_saturates() {
+        let f = compute_mapping_features(&cig("10M"), 1, 100, Strand::Forward);
+        assert_eq!(f.matches, 0); // 10.saturating_sub(100)
+        assert!(approx(f.identity, 0.0));
+    }
+
+    #[test]
+    fn nm_smaller_than_indels_saturates() {
+        // NM below indel-base count is malformed; must not underflow.
+        let f = compute_mapping_features(&cig("10M5I"), 1, 2, Strand::Forward);
+        assert_eq!(f.matches, 10); // mismatches clamps to 0
+    }
 
     #[test]
     fn build_output_path_ignores_chromosome_when_split_disabled() {
