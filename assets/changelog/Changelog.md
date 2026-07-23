@@ -1,5 +1,14 @@
 # isotools Changelog
 
+## v0.0.38
+
+**iso-intron v0.0.13 — REVIEW suffix preserved alongside classification**
+
+- The `REVIEW` status no longer replaces the existing classification. When a component exceeds the retention ratio threshold during recovery, `/REVIEW` is appended as a suffix (e.g., `PASS/REVIEW`), preserving the original class information so downstream tools can act on both the classification and the review flag independently.
+- Added `component_events` and `component_size` fields to the intron component schema, exposing per-component event counts and transcript size directly in the output. These metrics were previously unavailable at the component level.
+- HTML report output now includes the component-level breakdown alongside the retention ratio (displayed as `ratio (events/size)`), giving a clearer picture of what drives a component's retention signal.
+- Renamed the "RT retentions" section in HTML reports to "RT/Artifact retentions" to accurately reflect what the section covers.
+
 ## v0.0.37
 
 **iso-segment v0.0.9 — identity and mapping feature overhaul**
