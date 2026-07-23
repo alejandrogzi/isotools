@@ -254,10 +254,15 @@ pub fn process_component<'a>(
             });
 
         schema.ratio = ratio;
+        schema.component_events = count as u32;
+        schema.component_size = component.len() as u32;
 
         if recover && ratio > RETENTION_RATIO_THRESHOLD {
             // INFO: set component status to 'REVIEW'
-            schema.status = b"REVIEW".to_vec();
+            // INFO: check current class and append REVIEW not replace
+            let mut new_status = schema.status.clone();
+            new_status.extend_from_slice(b"/REVIEW");
+            schema.status = new_status;
         }
 
         accumulator.push(schema.to_line());
@@ -282,6 +287,8 @@ struct Schema<'a> {
     pub id: Vec<u8>,
     pub status: Vec<u8>,
     pub ratio: f32,
+    pub component_events: u32,
+    pub component_size: u32,
     pub events: u32,
     pub code: Vec<u8>,
     pub size: u32,
@@ -336,7 +343,10 @@ impl Schema<'_> {
             std::str::from_utf8(&self.code).unwrap_or("NULL")
         ));
         body.push_str(&format!("- events: {}<br>", self.events));
-        body.push_str(&format!("- ratio: {}<br>", self.ratio));
+        body.push_str(&format!(
+            "- ratio: {} ({}/{})<br>",
+            self.ratio, self.component_events, self.component_size
+        ));
 
         body.push_str("<h3>True retentions:</h3><br>");
         if self.ir_html.is_empty() {
@@ -348,7 +358,7 @@ impl Schema<'_> {
             }
         }
 
-        body.push_str("<h3>RT retentions:</h3><br>");
+        body.push_str("<h3>RT/Artifact retentions:</h3><br>");
         if self.fr_html.is_empty() {
             body.push_str("none<br>");
         } else {
