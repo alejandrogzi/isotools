@@ -16,24 +16,33 @@
 
 use dashmap::DashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+
+use crate::report::{ClassifiedRead, FinalDecision, ReadReport};
 
 /// Parallel accumulator for the processing function
+///
+/// Every classified read is routed by its own [`FinalDecision`], so the BED files and
+/// the TSV report always describe the same decision.
 ///
 /// # Fields
 ///
 /// * `keep` - Keeps the lines of the input file that are kept
 /// * `orphans` - Keeps the lines of the input file that are orphans
+/// * `reports` - Keeps one classification report per processed query record
 ///
 /// # Example
 ///
 /// ```
-/// use isotools::utils::ParallelAccumulator;
+/// use iso_orphan::utils::ParallelAccumulator;
 ///
 /// let accumulator = ParallelAccumulator::default();
+/// assert_eq!(accumulator.num_reports(), 0);
 /// ```
 pub struct ParallelAccumulator {
     pub keep: DashSet<Vec<u8>>,
     pub orphans: DashSet<Vec<u8>>,
+    pub reports: Mutex<Vec<ReadReport>>,
 }
 
 /// Default implementation for the parallel accumulator
@@ -41,58 +50,118 @@ pub struct ParallelAccumulator {
 /// # Example
 ///
 /// ```
-/// use isotools::utils::ParallelAccumulator;
+/// use iso_orphan::utils::ParallelAccumulator;
 ///
 /// let accumulator = ParallelAccumulator::default();
+/// assert!(accumulator.keep.is_empty());
 /// ```
 impl Default for ParallelAccumulator {
     fn default() -> Self {
         Self {
             keep: DashSet::new(),
             orphans: DashSet::new(),
+            reports: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl ParallelAccumulator {
-    /// Number of fields in the accumulator of type DashSet<String>
-    pub const NUM_FIELDS: usize = 2;
-
-    /// Add items to the accumulator
+    /// Add classified reads to the accumulator
+    ///
+    /// The BED line of each read is inserted into the retention or the scrap set
+    /// according to its decision, while its report is appended verbatim. BED sets
+    /// deduplicate identical lines; reports never do, so every processed query record
+    /// keeps exactly one row.
     ///
     /// # Parameters
     ///
-    /// - `keep`: A vector of strings to be retained.
-    /// - `discard`: A vector of strings to be discarded.
-    /// - `descriptor`: A HashMap of strings to boxed `ModuleMap` trait objects.
+    /// - `classified`: The classified reads of one component.
     ///
     /// # Example
     ///
-    /// ```rust, no_run
-    /// let mut accumulator = ParallelAccumulator::default();
-    /// accumulator.add(vec!["item1".to_string()], vec!["item2".to_string()], HashMap::new());
-    ///
-    /// assert_eq!(accumulator.num_retentions(), 1);
     /// ```
-    pub fn add(&self, keep: Vec<Vec<u8>>, discard: Vec<Vec<u8>>) {
-        for item in keep {
-            self.keep.insert(item);
+    /// use iso_orphan::report::ClassifiedRead;
+    /// use iso_orphan::utils::ParallelAccumulator;
+    ///
+    /// let accumulator = ParallelAccumulator::default();
+    /// let classified: Vec<ClassifiedRead> = Vec::new();
+    /// accumulator.add(classified);
+    ///
+    /// assert_eq!(accumulator.num_reports(), 0);
+    /// ```
+    pub fn add(&self, classified: Vec<ClassifiedRead>) {
+        let mut reports = Vec::with_capacity(classified.len());
+
+        for read in classified {
+            let ClassifiedRead { bed_line, report } = read;
+
+            match report.decision {
+                FinalDecision::Pass => self.keep.insert(bed_line),
+                FinalDecision::Scrap => self.orphans.insert(bed_line),
+            };
+
+            reports.push(report);
         }
-        for item in discard {
-            self.orphans.insert(item);
-        }
+
+        self.reports
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .extend(reports);
     }
 
     /// Get the number of orphans
     ///
     /// # Example
     ///
-    /// ```rust, no_run
+    /// ```
+    /// use iso_orphan::utils::ParallelAccumulator;
+    ///
     /// let accumulator = ParallelAccumulator::default();
-    /// assert_eq!(accumulator.oprhans(), 0);
+    /// assert_eq!(accumulator.num_orphans(), 0);
     /// ```
     pub fn num_orphans(&self) -> usize {
         self.orphans.len()
+    }
+
+    /// Get the number of accumulated reports
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iso_orphan::utils::ParallelAccumulator;
+    ///
+    /// let accumulator = ParallelAccumulator::default();
+    /// assert_eq!(accumulator.num_reports(), 0);
+    /// ```
+    pub fn num_reports(&self) -> usize {
+        self.reports
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+
+    /// Take the accumulated reports out of the accumulator
+    ///
+    /// Rows are returned in accumulation order, which depends on thread scheduling;
+    /// callers must sort them with `crate::report::sort_reports` before writing.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use iso_orphan::utils::ParallelAccumulator;
+    ///
+    /// let accumulator = ParallelAccumulator::default();
+    /// let reports = accumulator.take_reports();
+    ///
+    /// assert!(reports.is_empty());
+    /// ```
+    pub fn take_reports(&self) -> Vec<ReadReport> {
+        std::mem::take(
+            &mut *self
+                .reports
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 }
 
@@ -103,25 +172,25 @@ pub struct ParallelCounter {
     // general
     pub components: AtomicU32,
 
-    // guided mode — multi-exon reads
+    // guided mode — reads retained on reference evidence
     pub guided_me_junction_keep: AtomicU32,
     pub guided_me_boundary_keep: AtomicU32,
-    pub guided_me_splice_keep: AtomicU32,
-    pub guided_me_orphan: AtomicU32,
-
-    // guided mode — single-exon reads
     pub guided_se_keep: AtomicU32,
-    pub guided_se_orphan: AtomicU32,
 
-    // guided mode — out-of-bounds redirect
+    // guided mode — reads that continue to de novo evaluation
     pub guided_oob_denovo: AtomicU32,
+    pub guided_fallback_denovo: AtomicU32,
 
-    // de novo mode
-    pub denovo_single_read: AtomicU32,
-    pub denovo_small_component: AtomicU32,
+    // de novo mode — component context, reported but never terminal
+    pub reads_in_single_read_component: AtomicU32,
+    pub reads_in_low_support_component: AtomicU32,
+
+    // de novo mode — outcomes
+    pub splice_score_unavailable: AtomicU32,
     pub denovo_me_cluster_keep: AtomicU32,
     pub denovo_me_cluster_orphan: AtomicU32,
     pub denovo_me_intron_keep: AtomicU32,
+    pub denovo_me_splice_keep: AtomicU32,
     pub denovo_me_splice_orphan: AtomicU32,
     pub denovo_se_cluster_keep: AtomicU32,
     pub denovo_se_cluster_orphan: AtomicU32,
@@ -133,16 +202,16 @@ impl Default for ParallelCounter {
             components: AtomicU32::new(0),
             guided_me_junction_keep: AtomicU32::new(0),
             guided_me_boundary_keep: AtomicU32::new(0),
-            guided_me_splice_keep: AtomicU32::new(0),
-            guided_me_orphan: AtomicU32::new(0),
             guided_se_keep: AtomicU32::new(0),
-            guided_se_orphan: AtomicU32::new(0),
             guided_oob_denovo: AtomicU32::new(0),
-            denovo_single_read: AtomicU32::new(0),
-            denovo_small_component: AtomicU32::new(0),
+            guided_fallback_denovo: AtomicU32::new(0),
+            reads_in_single_read_component: AtomicU32::new(0),
+            reads_in_low_support_component: AtomicU32::new(0),
+            splice_score_unavailable: AtomicU32::new(0),
             denovo_me_cluster_keep: AtomicU32::new(0),
             denovo_me_cluster_orphan: AtomicU32::new(0),
             denovo_me_intron_keep: AtomicU32::new(0),
+            denovo_me_splice_keep: AtomicU32::new(0),
             denovo_me_splice_orphan: AtomicU32::new(0),
             denovo_se_cluster_keep: AtomicU32::new(0),
             denovo_se_cluster_orphan: AtomicU32::new(0),
@@ -177,45 +246,46 @@ impl ParallelCounter {
         self.guided_me_boundary_keep.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Multi-exon read rescued by splice site score (fallback when junction score is low).
-    pub fn inc_guided_me_splice_keep(&self) {
-        self.guided_me_splice_keep.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Multi-exon read orphaned (no junction support, no boundary match).
-    pub fn inc_guided_me_orphan(&self) {
-        self.guided_me_orphan.fetch_add(1, Ordering::Relaxed);
-    }
-
-    // -- guided mode: single-exon reads --
-
     /// Single-exon read kept by reciprocal overlap with reference exon.
     pub fn inc_guided_se_keep(&self) {
         self.guided_se_keep.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Single-exon read orphaned (insufficient overlap with any reference exon).
-    pub fn inc_guided_se_orphan(&self) {
-        self.guided_se_orphan.fetch_add(1, Ordering::Relaxed);
-    }
+    // -- guided mode: reads continuing to de novo evaluation --
 
-    // -- guided mode: out-of-bounds redirect --
-
-    /// Out-of-bounds reads redirected from guided to de novo.
+    /// Reads with no reference-exon overlap, evaluated de novo.
     pub fn inc_guided_oob_denovo(&self, count: u32) {
         self.guided_oob_denovo.fetch_add(count, Ordering::Relaxed);
     }
 
-    // -- de novo mode --
-
-    /// Single-read component orphaned (insufficient evidence without support).
-    pub fn inc_denovo_single_read(&self) {
-        self.denovo_single_read.fetch_add(1, Ordering::Relaxed);
+    /// Reads that overlap a reference exon but whose reference evidence was
+    /// insufficient, continuing to de novo evaluation.
+    pub fn inc_guided_fallback_denovo(&self) {
+        self.guided_fallback_denovo.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Component smaller than min_cluster_support → all reads orphaned.
-    pub fn inc_denovo_small_component(&self) {
-        self.denovo_small_component.fetch_add(1, Ordering::Relaxed);
+    // -- de novo mode --
+
+    /// Read sitting alone in its component. Context only, never terminal.
+    pub fn inc_reads_in_single_read_component(&self) {
+        self.reads_in_single_read_component
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Read in a component smaller than min_cluster_support. Context only.
+    pub fn inc_reads_in_low_support_component(&self) {
+        self.reads_in_low_support_component
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Read for which no splice-site evidence could be computed.
+    ///
+    /// Counted whether or not scores were supplied: an unstranded read, or one outside
+    /// BigWig coverage, cannot be rescued or vetoed by splice evidence, and a large count
+    /// here explains an otherwise surprising number of scraps.
+    pub fn inc_splice_score_unavailable(&self) {
+        self.splice_score_unavailable
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Multi-exon read kept (in a supported intron-chain cluster).
@@ -232,6 +302,11 @@ impl ParallelCounter {
     /// Multi-exon read kept by per-intron support (non-dominant cluster).
     pub fn inc_denovo_me_intron_keep(&self) {
         self.denovo_me_intron_keep.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Multi-exon read kept by splice-site evidence alone (no structural support).
+    pub fn inc_denovo_me_splice_keep(&self) {
+        self.denovo_me_splice_keep.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Multi-exon read orphaned by low splice-site score (would have passed intron support).
@@ -262,43 +337,45 @@ impl ParallelCounter {
         // guided mode stats
         let me_jk = self.guided_me_junction_keep.load(Ordering::Relaxed);
         let me_bk = self.guided_me_boundary_keep.load(Ordering::Relaxed);
-        let me_sk = self.guided_me_splice_keep.load(Ordering::Relaxed);
-        let me_or = self.guided_me_orphan.load(Ordering::Relaxed);
         let se_k = self.guided_se_keep.load(Ordering::Relaxed);
-        let se_o = self.guided_se_orphan.load(Ordering::Relaxed);
 
         report.push_str(&format!(
-            "Guided multi-exon: junction-keep={}, boundary-keep={}, splice-keep={}, orphan={}\n",
-            me_jk, me_bk, me_sk, me_or
-        ));
-        report.push_str(&format!(
-            "Guided single-exon: keep={}, orphan={}\n",
-            se_k, se_o
+            "Reference-supported: multi-exon junction={}, multi-exon boundary={}, single-exon overlap={}\n",
+            me_jk, me_bk, se_k
         ));
         let oob = self.guided_oob_denovo.load(Ordering::Relaxed);
-        report.push_str(&format!("Guided out-of-bounds -> de novo: {}\n", oob));
+        let fallback = self.guided_fallback_denovo.load(Ordering::Relaxed);
+        report.push_str(&format!(
+            "Guided -> de novo: no-reference-exon-overlap={}, insufficient-reference-evidence={}\n",
+            oob, fallback
+        ));
 
         // de novo stats
-        let dn_sr = self.denovo_single_read.load(Ordering::Relaxed);
-        let dn_sc = self.denovo_small_component.load(Ordering::Relaxed);
+        let dn_sr = self.reads_in_single_read_component.load(Ordering::Relaxed);
+        let dn_sc = self.reads_in_low_support_component.load(Ordering::Relaxed);
         let dn_mek = self.denovo_me_cluster_keep.load(Ordering::Relaxed);
         let dn_meo = self.denovo_me_cluster_orphan.load(Ordering::Relaxed);
         let dn_mik = self.denovo_me_intron_keep.load(Ordering::Relaxed);
+        let dn_msk = self.denovo_me_splice_keep.load(Ordering::Relaxed);
         let dn_mso = self.denovo_me_splice_orphan.load(Ordering::Relaxed);
         let dn_sek = self.denovo_se_cluster_keep.load(Ordering::Relaxed);
         let dn_seo = self.denovo_se_cluster_orphan.load(Ordering::Relaxed);
 
         report.push_str(&format!(
-            "De novo: single-read-orphan={}, small-component-orphan={}\n",
+            "De novo context: reads alone in a component={}, reads in a low-support component={}\n",
             dn_sr, dn_sc
         ));
         report.push_str(&format!(
-            "De novo multi-exon: cluster-keep={}, intron-support-keep={}, cluster-orphan={}, splice-orphan={}\n",
-            dn_mek, dn_mik, dn_meo, dn_mso
+            "De novo multi-exon: cluster-keep={}, intron-support-keep={}, splice-keep={}, unsupported-orphan={}, splice-orphan={}\n",
+            dn_mek, dn_mik, dn_msk, dn_meo, dn_mso
         ));
         report.push_str(&format!(
             "De novo single-exon clusters: keep={}, orphan={}\n",
             dn_sek, dn_seo
+        ));
+        report.push_str(&format!(
+            "Reads without splice-site evidence: {}\n",
+            self.splice_score_unavailable.load(Ordering::Relaxed)
         ));
 
         report
@@ -313,8 +390,8 @@ impl ParallelCounter {
 ///
 /// # Example
 ///
-/// ```rust, no_run
-/// use isotools::utils::ParallelCounter;
+/// ```
+/// use iso_orphan::utils::{__report_stats, ParallelCounter};
 ///
 /// let counter = ParallelCounter::new();
 /// __report_stats(&counter);

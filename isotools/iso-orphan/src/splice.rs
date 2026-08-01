@@ -22,10 +22,35 @@ use crate::scoring::median_f32;
 // SpliceScoreProvider
 // ---------------------------------------------------------------------------
 
+/// Splice-site evidence for one read, aggregated across all of its junctions.
+///
+/// `median` is the value classification compares against `min_splice_score`. A minimum
+/// would be brittle: BigWig coverage is not uniform, and a single site that happens to be
+/// uncovered scores 0.0 and would sink a read whose other sites are all strong. The
+/// median summarises the read instead of letting its worst site speak for it.
+///
+/// `weakest` is reported alongside as a diagnostic. It gates nothing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpliceEvidence {
+    /// Median score across all donor and acceptor sites.
+    pub median: f32,
+    /// Lowest score across all donor and acceptor sites. Diagnostic only.
+    pub weakest: f32,
+    /// Number of scored sites, two per junction.
+    pub sites: usize,
+}
+
+impl SpliceEvidence {
+    /// Whether the read's median splice-site score reaches `min_score`.
+    pub fn passes(&self, min_score: f32) -> bool {
+        self.median >= min_score
+    }
+}
+
 /// Pre-loaded splice-site scores for querying at specific genomic positions.
 ///
 /// Stores scores above a minimum threshold from four SpliceAI BigWig files.
-/// Provides a `median_splice_score` method for computing per-read splice quality.
+/// Provides a `splice_evidence` method for computing per-read splice quality.
 pub struct SpliceScoreProvider {
     donor_fwd: DashMap<String, HashMap<u64, f32>>,
     donor_rev: DashMap<String, HashMap<u64, f32>>,
@@ -94,33 +119,64 @@ impl SpliceScoreProvider {
         }
     }
 
-    /// Query the best splice-site score at a given position and strand.
-    ///
-    /// Returns max(donor_score, acceptor_score) at that position, or 0.0 if absent.
-    fn splice_score_at(&self, chrom: &str, pos: u64, is_forward: bool) -> f32 {
-        let (donor_map, acceptor_map) = if is_forward {
-            (&self.donor_fwd, &self.acceptor_fwd)
+    /// Donor score at a single genomic base.
+    fn donor_score_at(&self, chrom: &str, base: u64, is_forward: bool) -> f32 {
+        let map = if is_forward {
+            &self.donor_fwd
         } else {
-            (&self.donor_rev, &self.acceptor_rev)
+            &self.donor_rev
         };
 
-        let d = donor_map
-            .get(chrom)
-            .and_then(|m| m.get(&pos).copied())
-            .unwrap_or(0.0);
-        let a = acceptor_map
-            .get(chrom)
-            .and_then(|m| m.get(&(pos - 1)).copied())
-            .unwrap_or(0.0);
-        d.max(a)
+        map.get(chrom)
+            .and_then(|m| m.get(&base).copied())
+            .unwrap_or(0.0)
     }
 
-    /// Compute median splice-site score across all intron boundaries of a record.
+    /// Acceptor score at a single genomic base.
+    fn acceptor_score_at(&self, chrom: &str, base: u64, is_forward: bool) -> f32 {
+        let map = if is_forward {
+            &self.acceptor_fwd
+        } else {
+            &self.acceptor_rev
+        };
+
+        map.get(chrom)
+            .and_then(|m| m.get(&base).copied())
+            .unwrap_or(0.0)
+    }
+
+    /// Donor and acceptor score of one intron, in that order.
     ///
-    /// For each intron (start, end), queries the splice score at both boundaries
-    /// on the appropriate strand. Returns None if the record has no introns,
-    /// no strand info, or unknown strand.
-    pub fn median_splice_score(&self, record: &GenePred) -> Option<f32> {
+    /// BigWig scores are 0-based per-base values while a BED intron `(start, end)` has an
+    /// exclusive end, so the two intronic bases carrying splice signal are `start` and
+    /// `end - 1`. Which of them is the donor depends on the strand: transcription runs
+    /// left to right on the plus strand, so `start` is the donor and `end - 1` the
+    /// acceptor; on the minus strand the roles are reversed.
+    ///
+    /// Each site is read from the track that can actually carry its signal. Taking the
+    /// maximum of both tracks at both ends, as this previously did, let a strong donor
+    /// stand in for a missing acceptor and read the acceptor track at a base belonging to
+    /// the preceding exon.
+    fn junction_scores(&self, chrom: &str, intron: (u64, u64), is_forward: bool) -> (f32, f32) {
+        let (start, last) = (intron.0, intron.1.saturating_sub(1));
+
+        if is_forward {
+            (
+                self.donor_score_at(chrom, start, true),
+                self.acceptor_score_at(chrom, last, true),
+            )
+        } else {
+            (
+                self.donor_score_at(chrom, last, false),
+                self.acceptor_score_at(chrom, start, false),
+            )
+        }
+    }
+
+    /// Splice-site evidence across every junction of a record.
+    ///
+    /// Returns None if the record has no introns, no strand info, or unknown strand.
+    pub fn splice_evidence(&self, record: &GenePred) -> Option<SpliceEvidence> {
         let introns = record.introns();
         if introns.is_empty() {
             return None;
@@ -134,14 +190,30 @@ impl SpliceScoreProvider {
         };
 
         let mut scores: Vec<f32> = Vec::with_capacity(introns.len() * 2);
-        for &(start, end) in &introns {
-            scores.push(self.splice_score_at(chrom, start, is_forward));
-            scores.push(self.splice_score_at(chrom, end, is_forward));
+        for &intron in &introns {
+            let (donor, acceptor) = self.junction_scores(chrom, intron, is_forward);
+            scores.push(donor);
+            scores.push(acceptor);
         }
 
         log::debug!("DEBUG: splice scores for {:?}: {:?}", record.name(), scores);
 
-        median_f32(&mut scores)
+        let weakest = scores.iter().copied().fold(f32::INFINITY, f32::min);
+        let median = median_f32(&mut scores)?;
+
+        Some(SpliceEvidence {
+            median,
+            weakest,
+            sites: scores.len(),
+        })
+    }
+
+    /// Median splice-site score across all junctions of a record.
+    ///
+    /// Thin wrapper over [`SpliceScoreProvider::splice_evidence`] for callers that only
+    /// need the median.
+    pub fn median_splice_score(&self, record: &GenePred) -> Option<f32> {
+        self.splice_evidence(record).map(|evidence| evidence.median)
     }
 }
 
@@ -701,10 +773,149 @@ mod tests {
         let provider =
             SpliceScoreProvider::from_maps(donor_fwd, DashMap::new(), acceptor_fwd, DashMap::new());
 
-        assert_eq!(provider.splice_score_at("chr1", 200, true), 0.9);
-        assert_eq!(provider.splice_score_at("chr1", 300, true), 0.8);
-        assert_eq!(provider.splice_score_at("chr1", 200, false), 0.0); // no rev scores
-        assert_eq!(provider.splice_score_at("chr1", 999, true), 0.0); // missing position
+        // donor of intron (200,301) is its first base, acceptor its last one
+        assert_eq!(
+            provider.junction_scores("chr1", (200, 301), true),
+            (0.9, 0.8)
+        );
+        // on the minus strand the two roles swap ends
+        assert_eq!(
+            provider.junction_scores("chr1", (200, 301), false),
+            (0.0, 0.0),
+            "no reverse-strand scores were supplied"
+        );
+        // a junction at unscored positions yields zeros rather than a panic
+        assert_eq!(
+            provider.junction_scores("chr1", (999, 1999), true),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn test_junction_scores_use_the_site_specific_track() {
+        // a strong donor must not stand in for a missing acceptor
+        let donor_fwd = DashMap::new();
+        let mut chr1 = HashMap::new();
+        chr1.insert(200u64, 0.9f32);
+        donor_fwd.insert("chr1".to_string(), chr1);
+
+        let provider = SpliceScoreProvider::from_maps(
+            donor_fwd,
+            DashMap::new(),
+            DashMap::new(),
+            DashMap::new(),
+        );
+
+        assert_eq!(
+            provider.junction_scores("chr1", (200, 300), true),
+            (0.9, 0.0)
+        );
+    }
+
+    #[test]
+    fn test_junction_scores_swap_roles_on_the_reverse_strand() {
+        // on the minus strand the intron's last base is the donor
+        let donor_rev = DashMap::new();
+        let acceptor_rev = DashMap::new();
+        let mut d = HashMap::new();
+        let mut a = HashMap::new();
+        d.insert(299u64, 0.7f32);
+        a.insert(200u64, 0.6f32);
+        donor_rev.insert("chr1".to_string(), d);
+        acceptor_rev.insert("chr1".to_string(), a);
+
+        let provider =
+            SpliceScoreProvider::from_maps(DashMap::new(), donor_rev, DashMap::new(), acceptor_rev);
+
+        assert_eq!(
+            provider.junction_scores("chr1", (200, 300), false),
+            (0.7, 0.6)
+        );
+    }
+
+    #[test]
+    fn test_splice_evidence_reports_median_and_weakest() {
+        let donor_fwd = DashMap::new();
+        let acceptor_fwd = DashMap::new();
+        let mut d = HashMap::new();
+        let mut a = HashMap::new();
+        d.insert(200u64, 0.9f32);
+        d.insert(400u64, 0.8f32);
+        a.insert(299u64, 0.7f32);
+        // acceptor of intron (400,500) is absent
+        donor_fwd.insert("chr1".to_string(), d);
+        acceptor_fwd.insert("chr1".to_string(), a);
+
+        let provider =
+            SpliceScoreProvider::from_maps(donor_fwd, DashMap::new(), acceptor_fwd, DashMap::new());
+
+        let record = GenePred {
+            chrom: b"chr1".to_vec(),
+            start: 100,
+            end: 600,
+            name: Some(b"test".to_vec()),
+            strand: Some(GpStrand::Forward),
+            thick_start: Some(100),
+            thick_end: Some(600),
+            block_count: Some(3),
+            block_starts: Some(vec![100, 300, 500]),
+            block_ends: Some(vec![200, 400, 600]),
+            extras: HashMap::new(),
+        };
+
+        let evidence = provider.splice_evidence(&record).unwrap();
+
+        assert_eq!(evidence.sites, 4);
+        // scores [0.9, 0.7, 0.8, 0.0] -> median (0.7 + 0.8) / 2
+        assert!((evidence.median - 0.75).abs() < 1e-6);
+        assert_eq!(evidence.weakest, 0.0);
+        assert!(
+            evidence.passes(0.5),
+            "one uncovered site does not sink an otherwise supported read"
+        );
+    }
+
+    #[test]
+    fn test_median_decides_not_the_weakest_site() {
+        // three junctions scoring 0.9/0.8, 0.9/0.6 and 0.9/absent: the median is 0.850
+        // and the read is supported, even though its weakest site is 0.0
+        let donor_fwd = DashMap::new();
+        let acceptor_fwd = DashMap::new();
+        let mut d = HashMap::new();
+        let mut a = HashMap::new();
+        d.insert(200u64, 0.9f32);
+        d.insert(400u64, 0.9f32);
+        d.insert(600u64, 0.9f32);
+        a.insert(299u64, 0.8f32);
+        a.insert(499u64, 0.6f32);
+        // acceptor of intron (600,700) is outside BigWig coverage
+        donor_fwd.insert("chr1".to_string(), d);
+        acceptor_fwd.insert("chr1".to_string(), a);
+
+        let provider =
+            SpliceScoreProvider::from_maps(donor_fwd, DashMap::new(), acceptor_fwd, DashMap::new());
+
+        let record = GenePred {
+            chrom: b"chr1".to_vec(),
+            start: 100,
+            end: 800,
+            name: Some(b"test".to_vec()),
+            strand: Some(GpStrand::Forward),
+            thick_start: Some(100),
+            thick_end: Some(800),
+            block_count: Some(4),
+            block_starts: Some(vec![100, 300, 500, 700]),
+            block_ends: Some(vec![200, 400, 600, 800]),
+            extras: HashMap::new(),
+        };
+
+        let evidence = provider.splice_evidence(&record).unwrap();
+
+        assert_eq!(evidence.sites, 6);
+        // sorted [0.0, 0.6, 0.8, 0.9, 0.9, 0.9] -> median (0.8 + 0.9) / 2
+        assert!((evidence.median - 0.85).abs() < 1e-6);
+        assert_eq!(evidence.weakest, 0.0);
+        assert!(evidence.passes(0.5));
     }
 
     #[test]
@@ -712,14 +923,17 @@ mod tests {
         let donor_fwd = DashMap::new();
         let acceptor_fwd = DashMap::new();
 
+        // BigWig scores are per-base: the donor sits on the first intronic base and the
+        // acceptor on the last one, so an intron (start, end) is scored at start and
+        // at end - 1
         let mut d = HashMap::new();
-        d.insert(200u64, 0.9f32); // intron start (donor)
-        d.insert(400u64, 0.7f32); // intron start (donor)
+        d.insert(200u64, 0.9f32); // first base of intron (200,300) (donor)
+        d.insert(400u64, 0.7f32); // first base of intron (400,500) (donor)
         donor_fwd.insert("chr1".to_string(), d);
 
         let mut a = HashMap::new();
-        a.insert(300u64, 0.8f32); // intron end (acceptor)
-        a.insert(500u64, 0.6f32); // intron end (acceptor)
+        a.insert(299u64, 0.8f32); // last base of intron (200,300) (acceptor)
+        a.insert(499u64, 0.6f32); // last base of intron (400,500) (acceptor)
         acceptor_fwd.insert("chr1".to_string(), a);
 
         let provider =
@@ -740,7 +954,7 @@ mod tests {
             extras: HashMap::new(),
         };
 
-        // Scores: donor@200=0.9, acceptor@300=0.8, donor@400=0.7, acceptor@500=0.6
+        // Scores: donor@200=0.9, acceptor@299=0.8, donor@400=0.7, acceptor@499=0.6
         // Sorted: [0.6, 0.7, 0.8, 0.9], median = (0.7 + 0.8) / 2 = 0.75
         let median = provider.median_splice_score(&record).unwrap();
         assert!((median - 0.75).abs() < 1e-6);

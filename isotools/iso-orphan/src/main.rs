@@ -40,7 +40,10 @@ use clap::{self, Parser};
 use log::info;
 use simple_logger::init_with_level;
 
-use iso_orphan::{cli::Args, core::__detect_orphans};
+use iso_orphan::{
+    cli::{validate, Args},
+    core::__detect_orphans,
+};
 
 fn main() {
     let start = std::time::Instant::now();
@@ -48,10 +51,18 @@ fn main() {
     let args: Args = Args::parse();
     init_with_level(args.level).unwrap();
 
+    validate(&args);
+
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
-        .build()
-        .unwrap();
+        .build_global()
+        .unwrap_or_else(|e| {
+            log::error!(
+                "ERROR: Could not build a thread pool of {} threads: {e}",
+                args.threads
+            );
+            std::process::exit(1);
+        });
 
     __detect_orphans(args);
 
