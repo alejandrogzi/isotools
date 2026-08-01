@@ -32,14 +32,14 @@ use std::path::PathBuf;
         .args(&["all", "overlapping", "non_overlapping"])
     )
 )]
-#[command(
-    group(
-        ArgGroup::new("guided")
-        .required(true)
-        .multiple(true)
-        .args(&["refs", "overlapping"])
-    )
-)]
+// #[command(
+//     group(
+//         ArgGroup::new("guided")
+//         .required(true)
+//         .multiple(true)
+//         .args(&["refs", "overlapping"])
+//     )
+// )]
 pub struct Args {
     #[arg(
         short = 'q',
@@ -81,6 +81,8 @@ pub struct Args {
     )]
     pub overlapping: bool,
 
+    // INFO: no conflicts_with here; the removed 'toga' argument no longer exists and
+    // clap panics on startup in debug builds when a constraint names a missing argument
     #[arg(
         short = 'N',
         long = "non-overlapping",
@@ -88,27 +90,36 @@ pub struct Args {
         value_name = "FLAG",
         help = "Non-overlapping mode, triggers self-guided algorithm to discard orphans",
         action = ArgAction::SetTrue,
-        conflicts_with = "toga"
     )]
     pub non_overlapping: bool,
 
     #[arg(
         short = 'm',
         long = "min-read-num-denovo",
-        help = "Threshold for minimum number of reads to be considered a component when self-guided (default: 5)",
+        help = "Minimum reads sharing an intron chain for the cluster to be self-supporting (default: 5)",
         value_name = "NUM",
         default_value_t = 5
     )]
     pub min_read_num_denovo: usize,
 
+    // INFO: never wired into classification. Kept so existing command lines keep
+    // parsing, as an Option so that passing it can be detected and warned about
     #[arg(
         short = 'P',
         long = "min-discard-percent",
-        help = "Threshold for minimum percentage of discards to apply splice match rescueing",
+        help = "[deprecated, no effect] Threshold for minimum percentage of discards to apply splice match rescueing",
         value_name = "NUM",
-        default_value_t = 0.5
+        required = false
     )]
-    pub min_discard_percentage: f32,
+    pub min_discard_percentage: Option<f32>,
+
+    #[arg(
+        long = "min-single-exon-support",
+        help = "Minimum reads per single-exon overlap cluster to keep (default: --min-read-num-denovo)",
+        value_name = "NUM",
+        required = false
+    )]
+    pub min_single_exon_support: Option<usize>,
 
     #[arg(
         short = 'o',
@@ -187,7 +198,7 @@ pub struct Args {
     #[arg(
         short = 'e',
         long = "end-tolerance",
-        help = "Tolerance in bp for terminal exon boundary matching (default: 50)",
+        help = "Tolerance in bp for matching both transcript ends to a reference (default: 0 = exact match)",
         value_name = "NUM",
         default_value_t = 0
     )]
@@ -212,7 +223,7 @@ pub struct Args {
 
     #[arg(
         long = "intron-support-threshold",
-        help = "Minimum fraction of component reads containing an intron for it to count as supported (default: 0.5)",
+        help = "Minimum fraction of the other component reads containing an intron for it to count as supported (default: 0.5)",
         value_name = "NUM",
         default_value_t = 0.5
     )]
@@ -220,7 +231,7 @@ pub struct Args {
 
     #[arg(
         long = "min-splice-score",
-        help = "Minimum median splice-site score from BigWig to keep a de novo read (default: 0.5)",
+        help = "Minimum median splice-site score from BigWig across a read's splice sites (default: 0.5)",
         value_name = "NUM",
         default_value_t = 0.5
     )]
@@ -240,6 +251,36 @@ impl Mode {
             Mode::DeNovo
         } else {
             unreachable!()
+        }
+    }
+}
+
+/// Reports argument combinations that are accepted but do not mean what they look like.
+///
+/// Guided mode without a reference cannot run at all, and a reference passed to
+/// self-guided mode is silently unused, so both deserve to be said out loud rather than
+/// discovered from the output.
+pub fn validate(args: &Args) {
+    if args.min_discard_percentage.is_some() {
+        log::warn!("WARN: --min-discard-percent is deprecated and has no effect on classification");
+    }
+
+    match Mode::from(args) {
+        Mode::Guided => {
+            if args.refs.as_ref().is_none_or(|refs| refs.is_empty()) {
+                log::error!(
+                    "ERROR: {} requires at least one --ref file; use --non-overlapping to run without a reference",
+                    if args.all { "--all" } else { "--overlapping" }
+                );
+                std::process::exit(1);
+            }
+        }
+        Mode::DeNovo => {
+            if args.refs.is_some() {
+                log::warn!(
+                    "WARN: --ref is ignored in --non-overlapping mode; reads are scored against each other only"
+                );
+            }
         }
     }
 }

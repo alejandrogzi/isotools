@@ -91,4 +91,13 @@ pub struct Args {
         default_value = "."
     )]
     pub outdir: PathBuf,
+
+    #[arg(
+        short = 'u',
+        long = "ignore-utr",
+        help = "Flag to ignore intron retentions in UTR regions",
+        value_name = "FLAG",
+        action = ArgAction::SetTrue
+    )]
+    pub ignore_utr: bool,
 }

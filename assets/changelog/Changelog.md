@@ -1,5 +1,22 @@
 # isotools Changelog
 
+## v0.0.39
+
+**iso-orphan v0.0.5 — orphan classifier overhaul and per-read TSV report; iso-intron v0.0.14 — `--ignore-utr`; iso-classify v0.0.12 — CDS/UTR intron classification fix**
+
+- Iso-classify v0.0.12 corrects a classification inconsistency for introns that span CDS and UTR regions. An intron already collected in the UTR set is now removed from it the moment it appears in a CDS, enforcing the rule that any intron within a CDS is a CDS intron. Before this fix, such introns could be assigned to the wrong region and distort downstream classification.
+- Iso-intron v0.0.14 adds `-u`/`--ignore-utr`, a flag that stops retentions located in UTR regions from being counted as events. When enabled, the affected retentions are excluded from the event tally: a new `W` code (ignored retention) joins the read code legend, the HTML report gains an "Ignored retentions" section, and the run summary now reports how many reads carried ignored introns.
+- Iso-orphan v0.0.5 is a major rework of the orphan classification pipeline:
+  - Guided and self-guided evaluation are now clearly separated, and in self-guided mode (`--non-overlapping`) the reference step is skipped entirely.
+  - Single-exon reads are scored by reciprocal overlap against the best reference exon (`--min-overlap-frac`); multi-exon reads by splice-junction agreement with each reference transcript (`--min-junction-frac`). A rescue is only allowed when the read shares a complete structural feature with one single reference transcript — a lone shared coordinate never rescues a read, and evidence cannot be assembled from mutually incompatible references. Multi-exon reads whose references are all single-exon report `NO_COMPARABLE_REFERENCE_JUNCTIONS` and fall through to de novo evaluation.
+  - Component size is treated as context only (`SINGLE_READ_COMPONENT`, `LOW_COMPONENT_SUPPORT`) and never decides an outcome on its own. For multi-exon reads, low abundance now demands stronger evidence instead of causing automatic rejection.
+  - De novo evaluation proceeds in three tiers: an intron-chain cluster of at least `--min-read-num-denovo` reads passes unconditionally; failing that, junction support is measured against `--min-intron-support-frac` (a read never counts towards its own junctions); and if structural support is missing or unmeasurable, a median splice-site score reaching `--min-splice-score` can still carry the read. An unavailable splice score never vetoes a read.
+  - Single-exon reads keep a terminal abundance requirement through the new `--min-single-exon-support` flag, which defaults to `--min-read-num-denovo`.
+  - Splice scoring now compares the **median** score across a read's splice sites instead of the minimum, since BigWig coverage is not uniform and a single uncovered site would otherwise sink an otherwise strong read. The weakest site is still reported as a diagnostic, but it gates nothing.
+  - Added `<prefix>.report.tsv`, a per-read report produced on every run: one row per query record explaining which classifier evaluated it, which features and thresholds were compared, what rescued or rejected it, and where its BED record was written. The report is generated from the classification result itself — the same single source of truth that drives BED selection, so the two outputs cannot disagree — and it is never deduplicated, unlike the BED outputs.
+  - `--min-discard-percent` is deprecated and has no effect on classification. It is kept only so existing command lines keep parsing, and passing it emits an explicit warning.
+  - Fixed a clap constraint that referenced a removed argument, which could panic at startup in debug builds.
+
 ## v0.0.38
 
 **iso-intron v0.0.13 — REVIEW suffix preserved alongside classification**

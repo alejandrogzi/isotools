@@ -16,6 +16,9 @@ use genepred::GenePred;
 
 use crate::scoring::{intron_chain, intron_chains_match, reciprocal_overlap};
 
+/// An intron chain paired with the indices of the reads that carry it.
+type ChainCluster = (Vec<(u64, u64)>, Vec<usize>);
+
 /// Cluster multi-exon reads by intron chain similarity.
 ///
 /// Reads with matching intron chains (within `tolerance` bp at each junction)
@@ -30,7 +33,7 @@ pub fn cluster_multi_exon(reads: &[&GenePred], tolerance: u64) -> HashMap<usize,
 
     let chains: Vec<Vec<(u64, u64)>> = reads.iter().map(|r| intron_chain(r)).collect();
 
-    let mut clusters: Vec<(Vec<(u64, u64)>, Vec<usize>)> = Vec::new();
+    let mut clusters: Vec<ChainCluster> = Vec::new();
 
     log::debug!("Clustering {} reads", chains.len());
 
