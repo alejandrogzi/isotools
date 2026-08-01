@@ -427,6 +427,12 @@ fn process_component(
                     if !ref_cds_introns.contains(&(*start, *end)) {
                         ref_cds_introns.insert((*start, *end));
                     }
+
+                    // INFO: we remove any intron that was already in the UTR
+                    // INFO: rule -> any intron in CDS must be considered as CDS intron
+                    if ref_utr_introns.contains(&(*start, *end)) {
+                        ref_utr_introns.remove(&(*start, *end));
+                    }
                 } else {
                     if !ref_utr_introns.contains(&(*start, *end)) {
                         ref_utr_introns.insert((*start, *end));
