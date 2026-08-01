@@ -107,6 +107,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
             &accumulator,
             &counter,
             args.recover,
+            args.ignore_utr
         );
     });
 
@@ -119,6 +120,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
     }
 
     info!("Reads with retained introns: {}", counter.num_retentions());
+    info!("Reads with ignored introns: {}", counter.num_ignored());
     Ok(())
 }
 
@@ -158,6 +160,7 @@ fn process_components<'a>(
     accumulator: &DashSet<Vec<u8>>,
     counter: &ParallelCounter,
     recover: bool,
+    ignore_utr: bool,
 ) {
     components.into_iter().for_each(|component| {
         let local_collector = process_component(
@@ -167,6 +170,7 @@ fn process_components<'a>(
             banned,
             counter,
             recover,
+            ignore_utr,
         );
 
         local_collector.into_iter().for_each(|item| {
@@ -214,6 +218,7 @@ pub fn process_component<'a>(
     ban: &HashSet<(u64, u64)>,
     counter: &ParallelCounter,
     recover: bool,
+    ignore_utr: bool,
 ) -> Vec<Vec<u8>> {
     let mut descriptor: HashMap<&[u8], Schema<'a>> = HashMap::new();
     let mut accumulator: Vec<Vec<u8>> = Vec::new();
@@ -230,11 +235,15 @@ pub fn process_component<'a>(
         schema.size = component.len() as u32;
 
         detect_rt_intron(&read, ban, &reference_introns, &mut schema);
-        detect_retention(&read, &reference_introns, index, &mut schema);
+        detect_retention(&read, &reference_introns, index, &mut schema, ignore_utr);
 
         if schema.events > 0 {
             count += 1.0;
             counter.inc_retentions();
+        }
+
+        if schema.ig_html.len() > 0 {
+            counter.inc_ignored();
         }
 
         descriptor.insert(read.name().unwrap(), schema.clone());
@@ -295,6 +304,7 @@ struct Schema<'a> {
     pub ir_html: Vec<&'a Intron>,
     pub fr_html: Vec<&'a Intron>,
     pub rt_html: Vec<&'a Intron>,
+    pub ig_html: Vec<&'a Intron>,
 }
 
 impl Schema<'_> {
@@ -339,7 +349,7 @@ impl Schema<'_> {
             std::str::from_utf8(&self.status).unwrap_or("NULL")
         ));
         body.push_str(&format!(
-            "- code: {} [R: retention, K: RT retention, X: has RT intron, G: retains artifact, A: no events, Q: has artifact]<br>",
+            "- code: {} [R: retention, K: RT retention, X: has RT intron, G: retains artifact, A: no events, Q: has artifact, W: ignored retention]<br>",
             std::str::from_utf8(&self.code).unwrap_or("NULL")
         ));
         body.push_str(&format!("- events: {}<br>", self.events));
@@ -363,6 +373,15 @@ impl Schema<'_> {
             body.push_str("none<br>");
         } else {
             for intron in &self.fr_html {
+                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+            }
+        }
+
+        body.push_str("<h3>Ignored retentions:</h3><br>");
+        if self.ig_html.is_empty() {
+            body.push_str("none<br>");
+        } else {
+            for intron in &self.ig_html {
                 body.push_str(&format!("{}<br>", intron).replace('\n', ""));
             }
         }
@@ -516,6 +535,7 @@ fn detect_retention<'a, 'b>(
     reference_introns: &'a HashMap<Vec<u8>, Intron>,
     index: &Lapper<u64, ()>,
     schema: &'b mut Schema<'a>,
+    ignore_utr: bool,
 ) {
     let read_exons = read.exons();
     let mut flawed = schema.code.contains(&b'Q') || schema.code.contains(&b'X');
@@ -556,18 +576,47 @@ fn detect_retention<'a, 'b>(
                     schema.fr_html.push(info);
                 }
                 SupportType::Unclear | SupportType::Splicing => {
-                    if schema.events == 0 {
-                        // INFO: add 'R' to code representing that reads retains a true intron
-                        schema.code.push(b'R');
-                        flawed = true;
+                    if !ignore_utr {
+                        if schema.events == 0 {
+                            // INFO: add 'R' to code representing that reads retains a true intron
+                            schema.code.push(b'R');
+                            flawed = true;
 
-                        if schema.status != b"RETENTION" {
-                            schema.status = b"RETENTION".to_vec();
+                            if schema.status != b"RETENTION" {
+                                schema.status = b"RETENTION".to_vec();
+                            }
+                        }
+
+                        schema.events += 1;
+                        schema.ir_html.push(info);
+                    } else {
+                        match info.intron_position {
+                            Position::UTR => {
+                                // INFO: we must ignore this retention but still count it
+                                schema.events += 1;
+                                schema.ig_html.push(info);
+
+                                if !schema.code.contains(&b'W') {
+                                    schema.code.push(b'W');
+                                }
+                            }
+                            Position::CDS | Position::Unknown => {
+                                // INFO: true retention
+                                if schema.events == 0 {
+                                    // INFO: add 'R' to code representing that reads retains a true intron
+                                    schema.code.push(b'R');
+                                    flawed = true;
+
+                                    if schema.status != b"RETENTION" {
+                                        schema.status = b"RETENTION".to_vec();
+                                    }
+                                }
+
+                                schema.events += 1;
+                                schema.ir_html.push(info);
+                            }
                         }
                     }
-
-                    schema.events += 1;
-                    schema.ir_html.push(info);
                 }
             }
         }

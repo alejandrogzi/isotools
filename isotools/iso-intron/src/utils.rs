@@ -36,6 +36,7 @@ pub type IntronIndex = HashMap<Vec<u8>, Lapper<u64, ()>>;
 /// - `dirties`: Atomic counter for dirty items.
 /// - `components`: Atomic counter for components.
 /// - `retentions`: Atomic counter for retentions.
+/// - `ignored`: Atomic counter for ignored retentions.
 ///
 /// # Example
 ///
@@ -48,6 +49,7 @@ pub struct ParallelCounter {
     pub dirties: AtomicU32,
     pub components: AtomicU32,
     pub retentions: AtomicU32,
+    pub ignored: AtomicU32,
 }
 
 impl ParallelCounter {
@@ -67,6 +69,7 @@ impl ParallelCounter {
             dirties: AtomicU32::new(0),
             components: AtomicU32::new(0),
             retentions: AtomicU32::new(0),
+            ignored: AtomicU32::new(0),
         }
     }
 
@@ -160,6 +163,34 @@ impl ParallelCounter {
     /// ```
     pub fn num_retentions(&self) -> u32 {
         self.retentions.load(Ordering::Relaxed)
+    }
+
+    /// Get the number of ignored retentions
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_ignored();
+    ///
+    /// assert_eq!(counter.get_ignored(), 1);
+    /// ```
+    pub fn num_ignored(&self) -> u32 {
+        self.ignored.load(Ordering::Relaxed)
+    }
+
+    /// Increment the number of ignored retentions
+    ///
+    /// # Example
+    ///
+    /// ```rust, no_run
+    /// let counter = ParallelCounter::new();
+    /// counter.inc_ignored();
+    ///
+    /// assert_eq!(counter.get_ignored(), 1);
+    /// ```
+    pub fn inc_ignored(&self) {
+        self.ignored.fetch_add(1, Ordering::Relaxed);
     }
 }
 
