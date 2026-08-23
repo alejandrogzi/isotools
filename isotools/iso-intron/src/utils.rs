@@ -230,9 +230,7 @@ impl Default for ParallelCounter {
 /// assert!(result.is_some());
 /// ```
 pub fn unpack_blacklist(path: Option<PathBuf>) -> Option<HashMap<Vec<u8>, HashSet<(u64, u64)>>> {
-    if path.is_none() {
-        return None;
-    }
+    path.as_ref()?;
 
     let path = path.unwrap();
 
@@ -716,11 +714,11 @@ pub fn load_introns<P: AsRef<Path> + Debug + Copy>(
         let mut key = Vec::new();
         key.extend_from_slice(&record.chrom);
         key.extend_from_slice(b":");
-        key.extend_from_slice(&record.start.to_string().as_bytes());
+        key.extend_from_slice(record.start.to_string().as_bytes());
         key.extend_from_slice(b"-");
-        key.extend_from_slice(&record.end.to_string().as_bytes());
+        key.extend_from_slice(record.end.to_string().as_bytes());
         key.extend_from_slice(b"(");
-        key.extend_from_slice(&record.strand.to_string().as_bytes());
+        key.extend_from_slice(record.strand.to_string().as_bytes());
         key.extend_from_slice(b")");
 
         // INFO: add to interval collector for Lapper index
@@ -733,7 +731,7 @@ pub fn load_introns<P: AsRef<Path> + Debug + Copy>(
         let mut chr_stranded = Vec::new();
         chr_stranded.extend_from_slice(&record.chrom);
         chr_stranded.push(b':');
-        chr_stranded.extend_from_slice(&record.strand.to_string().as_bytes());
+        chr_stranded.extend_from_slice(record.strand.to_string().as_bytes());
         iv_collector.entry(chr_stranded).or_default().push(iv);
 
         introns.insert(key, record);

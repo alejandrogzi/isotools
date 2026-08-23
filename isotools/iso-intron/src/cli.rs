@@ -100,4 +100,12 @@ pub struct Args {
         action = ArgAction::SetTrue
     )]
     pub ignore_utr: bool,
+
+    #[arg(
+        long = "allow-missing",
+        help = "Allow read/retention introns missing from reference (warn instead of panic)",
+        value_name = "FLAG",
+        action = ArgAction::SetTrue
+    )]
+    pub allow_missing: bool,
 }
