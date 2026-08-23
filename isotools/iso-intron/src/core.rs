@@ -88,10 +88,11 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
                 // INFO: test if anything in components has introns > 0, if not, return empty index
                 if components
                     .iter()
-                    .all(|comp| comp.iter().all(|read| read.introns().is_empty()))
+                    .all(|comp| comp.iter().all(|read| read.introns().is_empty())) || args.allow_missing
                 {
                     log::warn!(
-                        "WARN: No introns found in input -> {}. This is an edge case a whole chromsome of single exons. All reads will be free of IRs!",
+                        "WARN: No introns found for {} in input -> {}. This is an edge case a whole chromsome of single exons. All reads will be free of IRs!",
+                        chr,
                         args.introns.display()
                     );
                     return &lapper;

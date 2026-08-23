@@ -1,5 +1,13 @@
 # isotools Changelog
 
+## v0.0.41
+
+**iso-intron v0.0.16 — `--allow-missing` covers chromosomes missing from the reference index**
+
+- Iso-intron v0.0.16 extends `--allow-missing` to the chromosome-level index lookup. Previously, when a chromosome had intron-bearing reads but was absent from the reference intron index, iso-intron logged an `ERROR` and exited; with the flag set, that case now logs a `WARN` and continues with an empty index, so all reads on that chromosome are reported free of IRs. Without the flag the strict error and exit are preserved.
+- The `WARN` for the no-introns edge case now includes the chromosome name (`No introns found for <chr> in input -> ...`), so multi-chromosome runs no longer log identical messages that are impossible to attribute.
+- Bumped `iso-intron` to `0.0.16` and the workspace to `0.0.41` (`Cargo.toml`/`Cargo.lock`).
+
 ## v0.0.40
 
 **iso-intron v0.0.15 — `--allow-missing` for tolerant intron lookup**
