@@ -1,5 +1,13 @@
 # isotools Changelog
 
+## v0.0.40
+
+**iso-intron v0.0.15 — `--allow-missing` for tolerant intron lookup**
+
+- Iso-intron v0.0.15 adds `--allow-missing` to handle query introns absent from the reference catalog. When set, both the spliced-intron check (`detect_rt_intron`) and the exon-embedded retention check (`detect_retention`) log a `WARN` and skip the missing `chrom:start-end(strand)` key instead of panicking; without the flag the previous strict behaviour is preserved.
+- Fixed the `&Intron` lifetime bug where the `--allow-missing` path tried to return `&Intron` borrowing a temporary synthetic `Intron` (`E0515`). Replaced with skip-and-warn without fabricating a reference, fixing the lifetime and keeping `Schema<'a>` borrowed from the reference map. Threaded the flag from `Args` through `detect_intron_retentions` → `process_components` → `process_component` → `detect_*`.
+- Bumped workspace to `0.0.40` and `iso-intron` to `0.0.15` (`Cargo.toml`/`Cargo.lock`).
+
 ## v0.0.39
 
 **iso-orphan v0.0.5 — orphan classifier overhaul and per-read TSV report; iso-intron v0.0.14 — `--ignore-utr`; iso-classify v0.0.12 — CDS/UTR intron classification fix**

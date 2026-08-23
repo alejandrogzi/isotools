@@ -55,6 +55,9 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
 
     let accumulator = DashSet::new();
     let counter = ParallelCounter::default();
+    let allow_missing = args.allow_missing;
+    let recover = args.recover;
+    let ignore_utr = args.ignore_utr;
 
     tracks.into_par_iter().for_each(|bucket| {
         let chr = bucket.0;
@@ -79,7 +82,7 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
                     "WARN: No introns found in input -> {}. All reads will be free of IRs!",
                     args.introns.display()
                 );
-                return &lapper;
+                &lapper
             } else {
                 // INFO: weird edge case where all chr components are made up by single exons only
                 // INFO: test if anything in components has introns > 0, if not, return empty index
@@ -102,12 +105,13 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
         process_components(
             components,
             &reference_introns,
-            &local_index,
+            local_index,
             banned,
             &accumulator,
             &counter,
-            args.recover,
-            args.ignore_utr
+            recover,
+            ignore_utr,
+            allow_missing,
         );
     });
 
@@ -152,15 +156,16 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
 /// assert_eq!(counter.num_components(), 0);
 /// ```
 #[inline(always)]
-fn process_components<'a>(
+fn process_components(
     components: Vec<Vec<GenePred>>,
-    reference_introns: &'a HashMap<Vec<u8>, Intron>,
+    reference_introns: &HashMap<Vec<u8>, Intron>,
     index: &Lapper<u64, ()>,
     banned: &HashSet<(u64, u64)>,
     accumulator: &DashSet<Vec<u8>>,
     counter: &ParallelCounter,
     recover: bool,
     ignore_utr: bool,
+    allow_missing: bool,
 ) {
     components.into_iter().for_each(|component| {
         let local_collector = process_component(
@@ -171,6 +176,7 @@ fn process_components<'a>(
             counter,
             recover,
             ignore_utr,
+            allow_missing,
         );
 
         local_collector.into_iter().for_each(|item| {
@@ -219,6 +225,7 @@ pub fn process_component<'a>(
     counter: &ParallelCounter,
     recover: bool,
     ignore_utr: bool,
+    allow_missing: bool,
 ) -> Vec<Vec<u8>> {
     let mut descriptor: HashMap<&[u8], Schema<'a>> = HashMap::new();
     let mut accumulator: Vec<Vec<u8>> = Vec::new();
@@ -234,15 +241,22 @@ pub fn process_component<'a>(
             .to_vec();
         schema.size = component.len() as u32;
 
-        detect_rt_intron(&read, ban, &reference_introns, &mut schema);
-        detect_retention(&read, &reference_introns, index, &mut schema, ignore_utr);
+        detect_rt_intron(read, ban, reference_introns, &mut schema, allow_missing);
+        detect_retention(
+            read,
+            reference_introns,
+            index,
+            &mut schema,
+            ignore_utr,
+            allow_missing,
+        );
 
         if schema.events > 0 {
             count += 1.0;
             counter.inc_retentions();
         }
 
-        if schema.ig_html.len() > 0 {
+        if !schema.ig_html.is_empty() {
             counter.inc_ignored();
         }
 
@@ -258,7 +272,7 @@ pub fn process_component<'a>(
             .unwrap_or_else(|| {
                 panic!(
                     "ERROR: Read not found in component, this is likely a bug! -> {}",
-                    std::str::from_utf8(&read.name().unwrap()).unwrap()
+                    std::str::from_utf8(read.name().unwrap()).unwrap()
                 );
             });
 
@@ -423,6 +437,7 @@ fn detect_rt_intron<'a>(
     ban: &HashSet<(u64, u64)>,
     reference_introns: &'a HashMap<Vec<u8>, Intron>,
     schema: &mut Schema<'a>,
+    allow_missing: bool,
 ) {
     let read_introns = read.introns();
     let mut rt = false;
@@ -436,19 +451,27 @@ fn detect_rt_intron<'a>(
         let mut key = Vec::new();
         key.extend_from_slice(&read.chrom);
         key.extend_from_slice(b":");
-        key.extend_from_slice(&intron.0.to_string().as_bytes());
+        key.extend_from_slice(intron.0.to_string().as_bytes());
         key.extend_from_slice(b"-");
-        key.extend_from_slice(&intron.1.to_string().as_bytes());
+        key.extend_from_slice(intron.1.to_string().as_bytes());
         key.extend_from_slice(b"(");
-        key.extend_from_slice(&read.strand().unwrap().to_string().as_bytes());
+        key.extend_from_slice(read.strand().unwrap().to_string().as_bytes());
         key.extend_from_slice(b")");
 
-        let info = reference_introns.get(&key).unwrap_or_else(|| {
-            panic!(
-                "ERROR: Intron not found, this is likely a bug! -> {:?}",
-                key
-            );
-        });
+        let Some(info) = reference_introns.get(&key) else {
+            if allow_missing {
+                log::warn!(
+                    "WARN: Intron not found but allowed because of --allow-missing! -> {:?}",
+                    key
+                );
+                continue;
+            } else {
+                panic!(
+                    "ERROR: Intron not found, this is likely a bug! -> {:?}",
+                    key
+                );
+            }
+        };
 
         match info.support {
             SupportType::StrongRT => {
@@ -530,35 +553,45 @@ fn detect_rt_intron<'a>(
 ///     false => println!("No intron retention detected"),
 /// }
 /// ```
-fn detect_retention<'a, 'b>(
+fn detect_retention<'a>(
     read: &GenePred,
     reference_introns: &'a HashMap<Vec<u8>, Intron>,
     index: &Lapper<u64, ()>,
-    schema: &'b mut Schema<'a>,
+    schema: &mut Schema<'a>,
     ignore_utr: bool,
+    allow_missing: bool,
 ) {
     let read_exons = read.exons();
     let mut flawed = schema.code.contains(&b'Q') || schema.code.contains(&b'X');
 
     for exon in read_exons {
-        for (retention_start, retention_stop) in intron_retentions(&index, exon) {
+        for (retention_start, retention_stop) in intron_retentions(index, exon) {
             let mut key = Vec::new();
             key.extend_from_slice(&read.chrom);
             key.extend_from_slice(b":");
-            key.extend_from_slice(&retention_start.to_string().as_bytes());
+            key.extend_from_slice(retention_start.to_string().as_bytes());
             key.extend_from_slice(b"-");
-            key.extend_from_slice(&retention_stop.to_string().as_bytes());
+            key.extend_from_slice(retention_stop.to_string().as_bytes());
             key.extend_from_slice(b"(");
-            key.extend_from_slice(&read.strand().unwrap().to_string().as_bytes());
+            key.extend_from_slice(read.strand().unwrap().to_string().as_bytes());
             key.extend_from_slice(b")");
 
-            let info = reference_introns.get(&key).unwrap_or_else(|| {
-                panic!(
-                    "ERROR: Intron not found, this is likely a bug! -> {} from {}",
-                    std::str::from_utf8(&key).unwrap(),
-                    read
-                );
-            });
+            let Some(info) = reference_introns.get(&key) else {
+                if allow_missing {
+                    log::warn!(
+                        "WARN: Intron not found but allowed because of --allow-missing! -> {} from {}",
+                        std::str::from_utf8(&key).unwrap(),
+                        read
+                    );
+                    continue;
+                } else {
+                    panic!(
+                        "ERROR: Intron not found, this is likely a bug! -> {} from {}",
+                        std::str::from_utf8(&key).unwrap(),
+                        read
+                    );
+                }
+            };
 
             match info.support {
                 // INFO: add 'K' to code representing that read retains true RT intron
