@@ -129,14 +129,14 @@ pub struct IntronArgs {
         long = "nag",
         required = false,
         value_name = "FLAG",
-        help = "Use TOGA-nag for splice site prediction",
+        help = "Use reference-nag for splice site prediction",
         default_missing_value("true"),
         default_value("false"),
         num_args(0..=1),
         require_equals(true),
         action = ArgAction::Set,
         requires("sequence"),
-        requires("toga")
+        requires("reference")
     )]
     pub nag: bool,
 
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_intron_outdir_defaults_to_current_directory() {
-        let args = Args::parse_from(["iso-classify", "intron", "--isoseq", "input.bed"]);
+        let args = Args::parse_from(["iso-classify", "intron", "--input", "input.bed"]);
 
         let SubArgs::Intron { args } = args.command else {
             panic!("ERROR: Failed to parse intron subcommand arguments");
@@ -253,9 +253,18 @@ mod tests {
     #[test]
     fn test_scan_requires_sequence_argument() {
         let err =
-            Args::try_parse_from(["iso-classify", "intron", "--isoseq", "input.bed", "--scan"])
+            Args::try_parse_from(["iso-classify", "intron", "--input", "input.bed", "--scan"])
                 .expect_err("ERROR: --scan should require --sequence");
 
         assert!(err.to_string().contains("--sequence"));
+    }
+
+    #[test]
+    fn test_nag_requires_reference_argument() {
+        let err =
+            Args::try_parse_from(["iso-classify", "intron", "--input", "input.bed", "--nag"])
+                .expect_err("ERROR: --nag should require --reference");
+
+        assert!(err.to_string().contains("--reference"));
     }
 }

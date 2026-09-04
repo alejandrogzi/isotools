@@ -461,9 +461,9 @@ pub struct Intron {
     pub donor_context: Vec<u8>,
     /// The MaxEntScan 23-mer acceptor context sequence.
     pub acceptor_context: Vec<u8>,
-    /// The classification of the intron's position according to TOGA.
+    /// The classification of the intron's position according to a reference set.
     pub intron_position: Position,
-    /// A boolean indicating if the intron is supported by TOGA.
+    /// A boolean indicating if the intron is supported by a reference set.
     pub is_reference_supported: Vec<u8>,
     /// A boolean indicating if the intron maintains the reading frame.
     pub is_in_frame: Vec<u8>,
@@ -473,7 +473,7 @@ pub struct Intron {
     pub acceptor_rt_context: Vec<u8>,
     /// A boolean indicating if the intron is an RT-switch intron.
     pub is_rt_intron: Vec<u8>,
-    /// A boolean indicating if the intron is a TOGA-nag intron.
+    /// A boolean indicating if the intron is a reference-nag intron.
     pub is_nag_intron: Vec<u8>,
     /// A classification of the intron's splice type.
     pub splice_u_type: USpliceType,
@@ -559,7 +559,7 @@ impl Intron {
             .unwrap_or_else(|| panic!("ERROR: Could not get intron_position from {}!", record))
             .parse::<Position>()
             .unwrap_or_else(|_| panic!("ERROR: Could not parse intron_position from {}!", record));
-        // INFO: match REFERENCE_SUPPORT or NOT_REFERENCE_SUPPORT
+        // INFO: match REFERENCE_SUPPORT or NO_REFERENCE_SUPPORT
         let is_reference_supported = fields
             .next()
             .unwrap_or_else(|| {
