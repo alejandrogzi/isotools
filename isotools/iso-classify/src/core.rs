@@ -83,13 +83,13 @@ const MINIMUM_SPLICEAI_SS_SIGNAL: f32 = 0.001;
 /// # acceptor_sequence: Nucleotide sequence around the acceptor site
 /// # donor_context: MaxEntScan 9-mer donor context sequence
 /// # acceptor_context: MaxEntScan 23-mer acceptor context sequence
-/// # intron_position: Classification of the intron's position according to TOGA
-/// # is_toga_supported: Boolean indicating if the intron is supported by TOGA
+/// # intron_position: Classification of the intron's position according to a reference set
+/// # is_reference_supported: Boolean indicating if the intron is supported by a reference set
 /// # is_in_frame: Boolean indicating if the intron maintains the reading frame
 /// # donor_rt_context: RT-switch context sequence for the donor site
 /// # acceptor_rt_context: RT-switch context sequence for the acceptor site
 /// # is_rt_intron: Boolean indicating if the intron is an RT-switch intron
-/// # is_nag_intron: Boolean indicating if the intron is a TOGA-nag intron
+/// # is_nag_intron: Boolean indicating if the intron is a reference-nag intron
 /// # support: Classification of the intron's support type
 ///
 /// # Example
@@ -110,17 +110,17 @@ pub fn classify_introns(args: Args) -> Result<()> {
         HashMap::new()
     };
 
-    let isoseqs = if let Some(mut reference) = args.toga {
+    let isoseqs = if let Some(mut reference) = args.reference {
         let mut modes = std::iter::repeat(Role::Reference)
             .take(reference.len())
             .collect::<Vec<_>>();
         modes.extend(vec![Role::Query]);
-        reference.extend(vec![args.isoseq]);
+        reference.extend(vec![args.input]);
 
         packbed::pack(reference, modes, packbed::OverlapType::Exon)?
     } else {
         pack(
-            vec![args.isoseq],
+            vec![args.input],
             vec![Role::Query],
             packbed::OverlapType::Exon,
         )?
@@ -484,9 +484,9 @@ fn process_component(
                         }
                     }
 
-                    // INFO: if intron is within reference introns, set is_toga_supported
+                    // INFO: if intron is within reference introns, set is_reference_supported
                     if ref_introns.contains(&(*start, *end)) {
-                        stats.is_toga_supported = true;
+                        stats.is_reference_supported = true;
                     }
 
                     // INFO: get splice context and spliceAI scores
@@ -509,7 +509,7 @@ fn process_component(
                         strand
                     );
                     let splice_u_type = spliceosome.get(&sup_key).unwrap_or_else(|| {
-                        if stats.is_toga_supported {
+                        if stats.is_reference_supported {
                             &USpliceType::Unknown
                         } else {
                             log::debug!(
@@ -543,8 +543,8 @@ fn process_component(
                         }
                     }
 
-                    // INFO: if --nag set and acceptor is AG and TOGA supported, look for NULLGNULLG
-                    if nag && stats.acceptor_sequence == b"AG" && stats.is_toga_supported {
+                    // INFO: if --nag set and acceptor is AG and reference supported, look for NULLGNULLG
+                    if nag && stats.acceptor_sequence == b"AG" && stats.is_reference_supported {
                         scan_nag_repeats(
                             &(*start, *end),
                             &mut stats,
@@ -643,7 +643,7 @@ pub fn __veredict(
             // INFO: not including NAG-derived introns bc they are already Splicing
             // WARN: strange TOGA supported RT introns -> s14	9965456	9968743
             if descriptor.is_rt_intron {
-                if descriptor.is_toga_supported {
+                if descriptor.is_reference_supported {
                     if descriptor.intron_position == Position::UTR {
                         // INFO: TOGA2 UTRs are not 100% reliable yet
                         match descriptor.within_repeat {
@@ -682,7 +682,7 @@ pub fn __veredict(
                                 // INFO: second assertion due to 1/1 clear artifacts passing as
                                 // unclear:
                                 // scaffold_1	120379762	120496991	+	1	1	0	0	0	-33.18959	tt	TG
-                                // taagcaacattttcagt	GCAGCAGAGAGAGCAACATGGGT	NEW	NO_TOGA_SUPPORT
+                                // taagcaacattttcagt	GCAGCAGAGAGAGCAACATGGGT	NEW	NO_REFERENCE_SUPPORT
                                 // OUT_OF_FRAME	taagcaacattt	AGAGCAACATGG	RT_INTRON	NOT_NAG_SS
                                 // U2	NO_REPEAT	UNCLEAR
                                 if descriptor.splice_ai_donor > 0.0
@@ -717,7 +717,7 @@ pub fn __veredict(
                     && (descriptor.splice_ai_donor >= MINIMUM_SPLICEAI_SS_SIGNAL
                         && descriptor.splice_ai_acceptor >= MINIMUM_SPLICEAI_SS_SIGNAL);
 
-                if descriptor.is_toga_supported
+                if descriptor.is_reference_supported
                     || (descriptor.splice_ai_donor >= spliceai_min_ss_signal
                         && descriptor.splice_ai_acceptor >= spliceai_min_ss_signal)
                 {
@@ -1464,10 +1464,10 @@ pub struct Intron {
     pub donor_context: Sequence,
     /// The MaxEntScan 23-mer acceptor context sequence.
     pub acceptor_context: Sequence,
-    /// The classification of the intron's position according to TOGA.
+    /// The classification of the intron's position according to reference set.
     pub intron_position: Position,
-    /// A boolean indicating if the intron is supported by TOGA.
-    pub is_toga_supported: bool,
+    /// A boolean indicating if the intron is supported by reference set.
+    pub is_reference_supported: bool,
     /// A boolean indicating if the intron maintains the reading frame.
     pub is_in_frame: bool,
     /// The RT-switch context sequence for the donor site.
@@ -1476,7 +1476,7 @@ pub struct Intron {
     pub acceptor_rt_context: Vec<u8>,
     /// A boolean indicating if the intron is an RT-switch intron.
     pub is_rt_intron: bool,
-    /// A boolean indicating if the intron is a TOGA-nag intron.
+    /// A boolean indicating if the intron is a reference-nag intron.
     pub is_nag_intron: bool,
     /// A classification of the intron's splice type.
     pub splice_u_type: USpliceType,
@@ -1514,7 +1514,7 @@ impl Intron {
             donor_context: Sequence::new(&[]),
             acceptor_context: Sequence::new(&[]),
             intron_position: Position::Unknown,
-            is_toga_supported: false,
+            is_reference_supported: false,
             is_in_frame: false,
             donor_rt_context: Vec::new(),
             acceptor_rt_context: Vec::new(),
@@ -1565,7 +1565,7 @@ impl std::fmt::Display for Intron {
             std::str::from_utf8(&self.donor_context.seq).unwrap_or("NULL"),
             std::str::from_utf8(&self.acceptor_context.seq).unwrap_or("NULL"),
             self.intron_position,
-            if self.is_toga_supported { "TOGA_SUPPORT" } else { "NO_TOGA_SUPPORT" },
+            if self.is_reference_supported { "REFERENCE_SUPPORT" } else { "NO_REFERENCE_SUPPORT" },
             if self.is_in_frame { "IN_FRAME" } else { "OUT_OF_FRAME" },
             std::str::from_utf8(&self.donor_rt_context).unwrap_or("NULL"),
             std::str::from_utf8(&self.acceptor_rt_context).unwrap_or("NULL"),

@@ -74,12 +74,12 @@ pub enum SubArgs {
 pub struct IntronArgs {
     #[arg(
         short = 'i',
-        long = "isoseq",
+        long = "input",
         required = true,
         value_name = "PATH",
-        help = "Paths to IsoSeq BED12 file"
+        help = "Paths to input reads BED12 file"
     )]
-    pub isoseq: PathBuf,
+    pub input: PathBuf,
 
     #[arg(
         short = 'w',
@@ -101,15 +101,15 @@ pub struct IntronArgs {
     pub sequence: Option<PathBuf>,
 
     #[arg(
-        short = 't',
-        long = "toga",
+        short = 'r',
+        long = "reference",
         required = false,
         value_name = "PATH",
         value_delimiter = ',',
         num_args = 1..,
-        help = "Path to TOGA annotation .bed file"
+        help = "Path to reference annotation .bed file"
     )]
-    pub toga: Option<Vec<PathBuf>>,
+    pub reference: Option<Vec<PathBuf>>,
 
     #[arg(
         long = "scan",
