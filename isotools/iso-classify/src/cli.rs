@@ -74,12 +74,12 @@ pub enum SubArgs {
 pub struct IntronArgs {
     #[arg(
         short = 'i',
-        long = "isoseq",
+        long = "input",
         required = true,
         value_name = "PATH",
-        help = "Paths to IsoSeq BED12 file"
+        help = "Paths to input reads BED12 file"
     )]
-    pub isoseq: PathBuf,
+    pub input: PathBuf,
 
     #[arg(
         short = 'w',
@@ -101,15 +101,15 @@ pub struct IntronArgs {
     pub sequence: Option<PathBuf>,
 
     #[arg(
-        short = 't',
-        long = "toga",
+        short = 'r',
+        long = "reference",
         required = false,
         value_name = "PATH",
         value_delimiter = ',',
         num_args = 1..,
-        help = "Path to TOGA annotation .bed file"
+        help = "Path to reference annotation .bed file"
     )]
-    pub toga: Option<Vec<PathBuf>>,
+    pub reference: Option<Vec<PathBuf>>,
 
     #[arg(
         long = "scan",
@@ -129,14 +129,14 @@ pub struct IntronArgs {
         long = "nag",
         required = false,
         value_name = "FLAG",
-        help = "Use TOGA-nag for splice site prediction",
+        help = "Use reference-nag for splice site prediction",
         default_missing_value("true"),
         default_value("false"),
         num_args(0..=1),
         require_equals(true),
         action = ArgAction::Set,
         requires("sequence"),
-        requires("toga")
+        requires("reference")
     )]
     pub nag: bool,
 
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_intron_outdir_defaults_to_current_directory() {
-        let args = Args::parse_from(["iso-classify", "intron", "--isoseq", "input.bed"]);
+        let args = Args::parse_from(["iso-classify", "intron", "--input", "input.bed"]);
 
         let SubArgs::Intron { args } = args.command else {
             panic!("ERROR: Failed to parse intron subcommand arguments");
@@ -253,9 +253,18 @@ mod tests {
     #[test]
     fn test_scan_requires_sequence_argument() {
         let err =
-            Args::try_parse_from(["iso-classify", "intron", "--isoseq", "input.bed", "--scan"])
+            Args::try_parse_from(["iso-classify", "intron", "--input", "input.bed", "--scan"])
                 .expect_err("ERROR: --scan should require --sequence");
 
         assert!(err.to_string().contains("--sequence"));
+    }
+
+    #[test]
+    fn test_nag_requires_reference_argument() {
+        let err =
+            Args::try_parse_from(["iso-classify", "intron", "--input", "input.bed", "--nag"])
+                .expect_err("ERROR: --nag should require --reference");
+
+        assert!(err.to_string().contains("--reference"));
     }
 }

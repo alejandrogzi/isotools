@@ -1,5 +1,14 @@
 # isotools Changelog
 
+## v0.0.42
+
+**BREAKING CHANGE: iso-classify v0.0.13 — generalizes TOGA-specific naming to reference sets; iso-intron v0.0.17 — matching TSV schema**
+
+- Iso-classify v0.0.13 renames the CLI flags of the intron subcommand: `--isoseq`/`-i` is now `--input`/`-i` (paths to input reads BED12, no longer Iso-Seq-specific) and `--toga`/`-t` is now `--reference`/`-r` (path to reference annotation .bed file). Existing command lines using the old long names must switch to `--input` and `--reference`.
+- The per-intron schema field `is_toga_supported` is renamed to `is_reference_supported`, and its textual representation changes from `TOGA_SUPPORT`/`NO_TOGA_SUPPORT` to `REFERENCE_SUPPORT`/`NO_REFERENCE_SUPPORT` (doc comments updated accordingly). The field's semantics are unchanged: it still reports whether the intron is supported by the annotation passed via the reference flag.
+- Iso-intron v0.0.17 updates its TSV reader to the renamed field (`is_reference_supported`, matching `REFERENCE_SUPPORT`/`NO_REFERENCE_SUPPORT`), so both crates agree on the new schema. Old-schema files containing `TOGA_SUPPORT`/`NO_TOGA_SUPPORT` no longer belong to this schema and should be regenerated.
+- Bumped the workspace to `0.0.42`, `iso-classify` to `0.0.13` and `iso-intron` to `0.0.17` (`Cargo.toml`/`Cargo.lock`).
+
 ## v0.0.41
 
 **iso-intron v0.0.16 — `--allow-missing` covers chromosomes missing from the reference index**
