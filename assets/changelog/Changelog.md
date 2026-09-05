@@ -1,5 +1,15 @@
 # isotools Changelog
 
+## v0.0.43
+
+**iso-fusion v0.0.15 — `--fuzzy-exclusion` masks same-locus parents split by heterogeneous annotation**
+
+- Iso-fusion previously reported false real fusions whenever a reference component contained more than one parent group built from the same gene but with heterogeneous CDS annotation. In these components every broad query read hit both parent groups and satisfied the ≥1 splice-site check against each, so self-fusions (e.g. `ARPC5` vs `ARPC5`) were emitted even though visually the locus is a single component. The root cause is that the internal grouping of a component relies on exact `coding_exons()` identity, so a transcript whose thick span is truncated (or whose boundaries shifted a few bp in a liftover) ends up isolated from the main group while sharing most of its exons, introns and splice sites with it.
+- Added `--fuzzy-exclusion` (opt-in, default off so existing behaviour is unchanged). When enabled, `group_components` stores each group's CDS exons and lowercased `#GENE` tags, and a per-component exclusion mask marks pairs of parents as non-fusible when they share the same gene tag (case-insensitive), at least one exact exon, at least one full intron, or overlapping CDS plus at least one shared splice site. The last rule covers liftover noise where a few bp of boundary drift defeats exact exon matching.
+- During fusion detection the mask collapses same-locus parents: a query whose exon hits all fall within one masked group is reported as a clean pass (no `FK` tag, counters untouched) instead of a fusion, and splice support is only counted across distinct fusible groups, so masked parents can no longer double-count toward the ≥2 splice-group requirement. Masked reads are flagged with a new `is_fuzzy_masked` field in the descriptor TSV (now 8 columns) for auditability.
+- Fixed two clap panics that aborted every debug-build invocation of iso-fusion: a duplicate short `-T` shared by `--threshold` and `--tag` (`--tag` is now long-only) and a dangling `requires_if` on `--overlap-type`.
+- Bumped the workspace to `0.0.43` and `iso-fusion` to `0.0.15` (`Cargo.toml`/`Cargo.lock`).
+
 ## v0.0.42
 
 **BREAKING CHANGE: iso-classify v0.0.13 — generalizes TOGA-specific naming to reference sets; iso-intron v0.0.17 — matching TSV schema**
