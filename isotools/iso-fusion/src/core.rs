@@ -78,6 +78,7 @@ pub fn detect_fusions(args: Args) {
             match_type,
             args.threshold,
             args.tag,
+            args.fuzzy_exclusion,
         );
     });
 
@@ -193,6 +194,7 @@ fn process_components(
     match_type: MatchType,
     threshold: f32,
     tag: bool,
+    fuzzy_exclusion: bool,
 ) {
     components.into_iter().for_each(|comp| {
         let (reference_regions, query_regions): (Vec<_>, Vec<_>) =
@@ -216,6 +218,7 @@ fn process_components(
             match_type,
             threshold,
             tag,
+            fuzzy_exclusion,
         )
         .unwrap_or_default();
 
@@ -261,6 +264,7 @@ fn process_components(
 ///     match_type
 /// );
 /// ```
+#[allow(clippy::too_many_arguments)]
 fn process_component(
     reference_regions: Vec<GenePred>,
     mut query_regions: Vec<GenePred>,
@@ -270,6 +274,7 @@ fn process_component(
     match_type: MatchType,
     threshold: f32,
     tag: bool,
+    fuzzy_exclusion: bool,
 ) -> Option<(
     Vec<String>,
     Vec<String>,
@@ -308,6 +313,14 @@ fn process_component(
     // INFO: if genes len = 1, we have a single gene in the component
     if parents.len() > 1 {
         let query_len = query_regions.len();
+        // Mask same-locus parents (opt-in): pairs sharing gene-tag /
+        // exact exons / full introns / overlapping CDS are non-fusible.
+        // Built once per component; empty when flag is off.
+        let mask = if fuzzy_exclusion {
+            build_exclusion_mask(&parents, parent_info)
+        } else {
+            HashSet::new()
+        };
         identify_fusions(
             &mut query_regions,
             query_len,
@@ -319,6 +332,7 @@ fn process_component(
             &mut fusions,
             match_type,
             tag,
+            &mask,
         );
     }
 
@@ -499,6 +513,45 @@ fn fill_schema(
 /// assert_eq!(fusions.len(), 0);
 /// assert_eq!(fake_fusions.len(), 0);
 /// ```
+/// Count distinct fusible groups among parent indices.
+///
+/// Parents linked by the exclusion mask are treated as the same locus.
+/// Uses union-find over the (tiny) hit set so transitivity holds.
+fn count_masked_groups(
+    hits: &[usize],
+    parent_list: &[Vec<u8>],
+    mask: &HashSet<(Vec<u8>, Vec<u8>)>,
+) -> usize {
+    let n = hits.len();
+    if n <= 1 {
+        return n;
+    }
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut [usize], mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if is_masked(mask, &parent_list[hits[i]], &parent_list[hits[j]]) {
+                let ri = find(&mut parent, i);
+                let rj = find(&mut parent, j);
+                if ri != rj {
+                    parent[rj] = ri;
+                }
+            }
+        }
+    }
+    let mut roots = HashSet::new();
+    for i in 0..n {
+        roots.insert(find(&mut parent, i));
+    }
+    roots.len()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn identify_fusions(
     query_regions: &mut Vec<GenePred>,
@@ -511,12 +564,16 @@ fn identify_fusions(
     fusions: &mut Vec<String>,
     match_type: MatchType,
     _tag: bool,
+    mask: &HashSet<(Vec<u8>, Vec<u8>)>,
 ) {
-    let reference_exons: Vec<BTreeSet<(u64, u64)>> = parents
+    // Deterministic parent order so mask lookups line up with exon/intron vecs.
+    let mut parent_list: Vec<Vec<u8>> = parents.iter().cloned().collect();
+    parent_list.sort();
+    let reference_exons: Vec<BTreeSet<(u64, u64)>> = parent_list
         .iter()
         .map(|p| parent_info.get(p).unwrap().exons.clone())
         .collect();
-    let reference_introns: Vec<BTreeSet<(u64, u64)>> = parents
+    let reference_introns: Vec<BTreeSet<(u64, u64)>> = parent_list
         .iter()
         .map(|p| parent_info.get(p).unwrap().introns.clone())
         .collect();
@@ -544,6 +601,28 @@ fn identify_fusions(
 
         // INFO: query read overlaps more than one gene exon collection
         if count > 1 {
+            // Fuzzy exclusion (opt-in): collapse same-locus parents. If all
+            // exon hits belong to one masked group, this is not a fusion —
+            // record a clean pass without touching real/fake counters and
+            // without the FK tag.
+            if !mask.is_empty() {
+                let exon_hits: Vec<usize> = reference_exons
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r_exons)| exonic_overlap(&query_exons, *r_exons))
+                    .map(|(i, _)| i)
+                    .collect();
+                if count_masked_groups(&exon_hits, &parent_list, mask) <= 1 {
+                    let query_line =
+                        unsafe { std::str::from_utf8_unchecked(&query.to_bed::<Bed12>()) }
+                            .to_string();
+                    no_fusions.push(query_line);
+                    schema.is_fused_read = false;
+                    schema.is_fuzzy_masked = true;
+                    descriptor.insert(query_name, schema);
+                    return;
+                }
+            }
             // INFO: we need to pass a 2nd check following this logic:
             //
             //  gene1:  XXXX---XXX--XXX
@@ -559,6 +638,27 @@ fn identify_fusions(
                 if splice_site_overlap(&query_introns, r_introns, match_type) {
                     splicing_overlaps += 1.0;
                 }
+            }
+
+            // Fuzzy exclusion: don't double-count splice support from masked
+            // same-locus parents. Require >=2 fusible groups with splice
+            // support; otherwise fall through to the fake path.
+            if !mask.is_empty() {
+                let splice_hits: Vec<usize> = reference_exons
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, r_exons)| {
+                        exonic_overlap(&query_exons, *r_exons)
+                            && splice_site_overlap(
+                                &query_introns,
+                                &reference_introns[*i],
+                                match_type,
+                            )
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                splicing_overlaps =
+                    count_masked_groups(&splice_hits, &parent_list, mask) as f32;
             }
 
             if splicing_overlaps > 1.0 {

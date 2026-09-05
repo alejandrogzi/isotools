@@ -96,7 +96,6 @@ pub struct Args {
         help = "Type of overlap to consider",
         value_name = "OVERLAP TYPE",
         required = false,
-        requires_if("map", "true"),
         default_value("exon")
     )]
     pub overlap_type: OverlapType,
@@ -123,7 +122,6 @@ pub struct Args {
     pub prefix: PathBuf,
 
     #[arg(
-        short = 'T',
         long = "tag",
         required = false,
         value_name = "FLAG",
@@ -140,4 +138,12 @@ pub struct Args {
         action = ArgAction::SetTrue,
     )]
     pub descriptor: bool,
+
+    #[arg(
+        long = "fuzzy-exclusion",
+        help = "Mask same-locus reference parents sharing exons/introns/gene-tags as non-fusible",
+        value_name = "FLAG",
+        action = ArgAction::SetTrue,
+    )]
+    pub fuzzy_exclusion: bool,
 }

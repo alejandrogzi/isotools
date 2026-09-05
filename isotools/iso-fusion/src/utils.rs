@@ -446,6 +446,7 @@ pub struct FusionSchema {
     pub real_component_fusion_ratio: f32,
     pub fake_component_fusion_ratio: f32,
     pub is_dirty_component: bool,
+    pub is_fuzzy_masked: bool,
 }
 
 impl FusionSchema {}
@@ -471,6 +472,7 @@ impl Default for FusionSchema {
             real_component_fusion_ratio: 0.0,
             fake_component_fusion_ratio: 0.0,
             is_dirty_component: false,
+            is_fuzzy_masked: false,
         }
     }
 }
@@ -479,14 +481,15 @@ impl std::fmt::Display for FusionSchema {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.is_fused_read,
             self.ref_component_size,
             self.query_component_size,
             self.whole_component_fusion_ratio,
             self.real_component_fusion_ratio,
             self.fake_component_fusion_ratio,
-            self.is_dirty_component
+            self.is_dirty_component,
+            self.is_fuzzy_masked
         )
     }
 }
@@ -832,6 +835,116 @@ type Exon = (u64, u64);
 pub struct GroupData {
     pub exons: BTreeSet<Exon>,
     pub introns: BTreeSet<Exon>,
+    pub cds: BTreeSet<Exon>,
+    pub genes: HashSet<Vec<u8>>,
+}
+
+/// Parse the `#GENE` tag from a record name (`TX#GENE#N`).
+/// Returns the lowercased gene symbol, or `None` if absent.
+pub fn parse_gene_tag(name: &[u8]) -> Option<Vec<u8>> {
+    let mut parts = name.split(|b| *b == b'#');
+    // part[0] = tx id, part[1] = gene symbol
+    let _tx = parts.next()?;
+    let gene = parts.next()?;
+    if gene.is_empty() {
+        return None;
+    }
+    let mut lower = gene.to_vec();
+    lower.make_ascii_lowercase();
+    Some(lower)
+}
+
+#[inline]
+fn intervals_overlap(a: (u64, u64), b: (u64, u64)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+fn cds_overlap(a: &BTreeSet<Exon>, b: &BTreeSet<Exon>) -> bool {
+    for x in a.iter() {
+        for y in b.iter() {
+            if intervals_overlap(*x, *y) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn shared_splice_sites(a: &BTreeSet<Exon>, b: &BTreeSet<Exon>) -> usize {
+    use std::collections::HashSet as StdHashSet;
+    let mut sa = StdHashSet::new();
+    for (s, e) in a.iter() {
+        sa.insert(*s);
+        sa.insert(*e);
+    }
+    let mut shared = StdHashSet::new();
+    for (s, e) in b.iter() {
+        if sa.contains(s) {
+            shared.insert(*s);
+        }
+        if sa.contains(e) {
+            shared.insert(*e);
+        }
+    }
+    shared.len()
+}
+
+/// Build the set of non-fusible (masked) parent pairs.
+///
+/// A pair is masked when both parents look like the same locus split by
+/// heterogeneous annotation (e.g. truncated CDS / liftover shifts):
+/// - same `#GENE` tag (case-insensitive), OR
+/// - >=1 exact shared exon, OR
+/// - >=1 exact shared intron (full intron match), OR
+/// - CDS overlap (any bp) + >=1 shared splice site.
+///
+/// Pairs are stored canonically ordered; lookup must use
+/// [`masked_pair`] / [`is_masked`].
+pub fn build_exclusion_mask(
+    parents: &HashSet<Vec<u8>>,
+    parent_info: &DashMap<Vec<u8>, GroupData>,
+) -> HashSet<(Vec<u8>, Vec<u8>)> {
+    let list: Vec<Vec<u8>> = parents.iter().cloned().collect();
+    let mut mask = HashSet::new();
+    for i in 0..list.len() {
+        for j in (i + 1)..list.len() {
+            let (a, b) = (&list[i], &list[j]);
+            let (da, db) = match (parent_info.get(a), parent_info.get(b)) {
+                (Some(x), Some(y)) => (x, y),
+                _ => continue,
+            };
+            let same_gene = !da.genes.is_empty()
+                && !db.genes.is_empty()
+                && da.genes.intersection(&db.genes).next().is_some();
+            let exact_exon = !da.exons.is_disjoint(&db.exons);
+            let full_intron = !da.introns.is_disjoint(&db.introns);
+            let fuzzy_cds =
+                cds_overlap(&da.cds, &db.cds) && shared_splice_sites(&da.introns, &db.introns) >= 1;
+            if same_gene || exact_exon || full_intron || fuzzy_cds {
+                let (x, y) = if a <= b {
+                    (a.clone(), b.clone())
+                } else {
+                    (b.clone(), a.clone())
+                };
+                mask.insert((x, y));
+            }
+        }
+    }
+    mask
+}
+
+#[inline]
+fn canonical_pair(a: &[u8], b: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    if a <= b {
+        (a.to_vec(), b.to_vec())
+    } else {
+        (b.to_vec(), a.to_vec())
+    }
+}
+
+/// Check whether two parents are masked as non-fusible.
+pub fn is_masked(mask: &HashSet<(Vec<u8>, Vec<u8>)>, a: &[u8], b: &[u8]) -> bool {
+    mask.contains(&canonical_pair(a, b))
 }
 
 /// Group components into records and their exons/introns by their parent.
@@ -934,19 +1047,137 @@ pub fn group_components(
 
                 let mut exons: BTreeSet<Exon> = BTreeSet::new();
                 let mut introns: BTreeSet<Exon> = BTreeSet::new();
+                let mut cds: BTreeSet<Exon> = BTreeSet::new();
+                let mut genes: HashSet<Vec<u8>> = HashSet::new();
 
                 for &i in &idxs {
                     let rec = &component[i];
                     exons.extend(rec.exons());
                     introns.extend(rec.introns());
+                    cds.extend(coding[i].iter().copied());
                     if let Some(name) = &rec.name {
                         record_to_parent.insert(name.clone(), group_name.clone());
+                        if let Some(g) = parse_gene_tag(name) {
+                            genes.insert(g);
+                        }
                     }
                 }
 
-                parent_info.insert(group_name, GroupData { exons, introns });
+                parent_info.insert(
+                    group_name,
+                    GroupData {
+                        exons,
+                        introns,
+                        cds,
+                        genes,
+                    },
+                );
             }
         });
 
     (record_to_parent, parent_info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(exons: &[(u64, u64)], introns: &[(u64, u64)], cds: &[(u64, u64)], genes: &[&str]) -> GroupData {
+        GroupData {
+            exons: exons.iter().copied().collect(),
+            introns: introns.iter().copied().collect(),
+            cds: cds.iter().copied().collect(),
+            genes: genes
+                .iter()
+                .map(|g| g.as_bytes().to_ascii_lowercase())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn gene_tag_is_case_insensitive() {
+        assert_eq!(
+            parse_gene_tag(b"HLbosTau10.ENSBTAT00000064442#ARPC5#34"),
+            Some(b"arpc5".to_vec())
+        );
+        assert_eq!(
+            parse_gene_tag(b"mm10.ENSMUST00000097536#Arpc5#16"),
+            Some(b"arpc5".to_vec())
+        );
+        assert_eq!(parse_gene_tag(b"HAP1_SUPER_2-g175.t1"), None);
+        assert_eq!(parse_gene_tag(b"TX##1"), None);
+    }
+
+    #[test]
+    fn arpc5_truncated_cds_parents_are_masked() {
+        // Main ARPC5 group vs truncated-CDS HLbosTau10.ENSBTAT group.
+        let main = group(
+            &[(48579271, 48579538), (48581899, 48581972), (48584202, 48584379)],
+            &[(48579538, 48581899), (48581972, 48584202)],
+            &[(48579395, 48579538), (48581899, 48581972)],
+            &["arpc5"],
+        );
+        let trunc = group(
+            &[(48579090, 48580309), (48581719, 48581972), (48584202, 48584379)],
+            &[(48580309, 48581719), (48581972, 48584202)],
+            &[(48579395, 48579894)],
+            &["arpc5"],
+        );
+        let info = DashMap::new();
+        info.insert(b"A".to_vec(), main);
+        info.insert(b"B".to_vec(), trunc);
+        let parents: HashSet<Vec<u8>> =
+            [b"A".to_vec(), b"B".to_vec()].into_iter().collect();
+        let mask = build_exclusion_mask(&parents, &info);
+        assert_eq!(mask.len(), 1);
+        assert!(is_masked(&mask, b"A", b"B"));
+        assert!(is_masked(&mask, b"B", b"A"));
+    }
+
+    #[test]
+    fn distant_genes_are_not_masked() {
+        let g1 = group(
+            &[(1000, 1200), (1500, 1700)],
+            &[(1200, 1500)],
+            &[(1000, 1700)],
+            &["gene1"],
+        );
+        let g2 = group(
+            &[(10000, 10200), (10500, 10700)],
+            &[(10200, 10500)],
+            &[(10000, 10700)],
+            &["gene2"],
+        );
+        let info = DashMap::new();
+        info.insert(b"A".to_vec(), g1);
+        info.insert(b"B".to_vec(), g2);
+        let parents: HashSet<Vec<u8>> =
+            [b"A".to_vec(), b"B".to_vec()].into_iter().collect();
+        let mask = build_exclusion_mask(&parents, &info);
+        assert!(mask.is_empty());
+    }
+
+    #[test]
+    fn liftover_shift_covered_by_cds_plus_splice() {
+        // No exact exon (3bp shift), but CDS overlaps + 1 shared splice site.
+        let a = group(
+            &[(1000, 1100)],
+            &[(1100, 1500)],
+            &[(1000, 1100)],
+            &[],
+        );
+        let b = group(
+            &[(1000, 1103)],
+            &[(1103, 1500)],
+            &[(1000, 1103)],
+            &[],
+        );
+        let info = DashMap::new();
+        info.insert(b"A".to_vec(), a);
+        info.insert(b"B".to_vec(), b);
+        let parents: HashSet<Vec<u8>> =
+            [b"A".to_vec(), b"B".to_vec()].into_iter().collect();
+        let mask = build_exclusion_mask(&parents, &info);
+        assert_eq!(mask.len(), 1);
+    }
 }
