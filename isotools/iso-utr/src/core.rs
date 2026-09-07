@@ -22,7 +22,7 @@ use std::{
 use genepred::{GenePred, Strand};
 use hashbrown::HashMap;
 use log::{info, warn};
-use packbed::{OverlapType, Role};
+use packbed::Role;
 use rayon::prelude::*;
 
 use crate::cli::Args;
@@ -41,7 +41,7 @@ pub fn detect_truncations(mut args: Args) -> Result<(), Box<dyn std::error::Erro
 
     log::info!("INFO: Packing BED12 files...");
 
-    let tracks = packbed::pack(args.refs, modes, OverlapType::Exon).unwrap_or_else(|e| {
+    let tracks = packbed::pack(args.refs, modes, args.overlap_type.into()).unwrap_or_else(|e| {
         log::error!("Failed to pack beds: {:?}", e);
         std::process::exit(1);
     });
@@ -175,6 +175,57 @@ fn terminal_exon(record: &GenePred) -> (u64, u64) {
     }
 }
 
+/// Returns the coordinates of the first coding exon of a record.
+///
+/// # Arguments
+///
+/// * `record` - The record to get the exons from.
+///
+/// # Returns
+///
+/// A tuple containing the first and last exon of the record.
+///
+/// # Example
+///
+/// ```ignore
+/// let record = GenePred::new(b"chr1", 100, 200, b"+", b"exon1", b"exon2");
+/// let (first, last) = terminal_cds_exon(&record);
+/// assert_eq!(first, 100);
+/// assert_eq!(last, 200);
+/// ```
+#[inline(always)]
+fn terminal_cds_exon(record: &GenePred) -> (u64, u64) {
+    let exons = record.coding_exons();
+
+    match record.strand() {
+        Some(Strand::Forward) => exons.first().copied().unwrap_or_else(|| {
+            log::error!(
+                "ERROR: Could not get first exon from record -> {:?}",
+                record.name()
+            );
+            std::process::exit(1);
+        }),
+        Some(Strand::Reverse) => {
+            let mut terminal_exon = exons.last().copied().unwrap_or_else(|| {
+                log::error!(
+                    "ERROR: Could not get last exon from record -> {:?}",
+                    record.name()
+                );
+                std::process::exit(1);
+            });
+            terminal_exon = (SCALE - terminal_exon.1, SCALE - terminal_exon.0);
+            terminal_exon
+        }
+        Some(Strand::Unknown) | None => {
+            log::error!(
+                "ERROR: Could not get strand from record -> {:?}",
+                record.name()
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Processes a component of reads and detects truncations
 ///
 /// # Arguments
@@ -216,6 +267,7 @@ pub fn process_component(
     refs.iter().for_each(|record| match record.strand() {
         Some(Strand::Forward) => {
             let exons = record.exons();
+
             reference_starts.insert(exons.first().copied().unwrap_or_else(|| {
                 log::error!(
                     "ERROR: Could not get first exon from record -> {:?}",
@@ -267,6 +319,7 @@ pub fn process_component(
     log::debug!("DEBUG: Middle exons -> {:?}", reference_middle_exons);
 
     let (mut truncations, totals) = (0_f32, queries.len() as f32);
+    let mut pass_cds_start_exons = BTreeSet::new();
 
     for query in queries.iter() {
         log::debug!("DEBUG: Processing query -> {:?}", query.name());
@@ -278,12 +331,18 @@ pub fn process_component(
         schema.id = query_name;
 
         let (query_first_exon_start, query_first_exon_end) = terminal_exon(query);
+        let query_cds_start_exon = terminal_cds_exon(query);
+
         log::debug!(
             "DEBUG: Query exons -> {:?}",
             (query_first_exon_start, query_first_exon_end)
         );
 
+        // INFO: completeness is determined by the first exon of the query being contained in
+        // the reference set of starts
         let is_complete = reference_starts.iter().any(|&(s, e)| {
+            // INFO: if the query first exon is less than the reference start (sorted),
+            // then it is a novel start
             if query_first_exon_end < s {
                 schema.is_novel_start = b"NOVEL_START";
                 return false;
@@ -291,6 +350,14 @@ pub fn process_component(
 
             (query_first_exon_start >= s) && (query_first_exon_start < e)
         });
+
+        let is_cds_seen_in_passes = pass_cds_start_exons.contains(&query_cds_start_exon);
+        if is_cds_seen_in_passes {
+            log::debug!(
+                "DEBUG: Query CDS start exon is in PASS CDS start exons -> {:?}",
+                query.name()
+            );
+        }
 
         if is_complete {
             log::debug!("DEBUG: Query is complete -> {:?}", query.name());
@@ -303,6 +370,7 @@ pub fn process_component(
                 "DEBUG: Checking middle exons -> {:?}",
                 reference_middle_exons
             );
+
             reference_middle_exons
                 .iter()
                 .for_each(|&(mid_exon_start, mid_exon_end)| {
@@ -312,7 +380,7 @@ pub fn process_component(
                     }
 
                     if (query_first_exon_start >= mid_exon_start)
-                        && (query_first_exon_start < mid_exon_end)
+                        && (query_first_exon_start < mid_exon_end) && !is_cds_seen_in_passes
                     {
                         log::debug!("DEBUG: Truncation found -> {:?}", query.name());
                         schema.status = b"TRUNCATED";
@@ -359,6 +427,7 @@ pub fn process_component(
                         log::debug!("DEBUG: Pass found -> {:?}", query.name());
                         schema.status = b"PASS";
                         schema.code = b"A";
+                        pass_cds_start_exons.insert(query_cds_start_exon);
                         return;
                     }
                 });
@@ -371,6 +440,7 @@ pub fn process_component(
                 );
                 schema.status = b"PASS";
                 schema.code = b"A";
+                pass_cds_start_exons.insert(query_cds_start_exon);
             };
         } else {
             // we do not have any overlap with consensus starts.
@@ -390,6 +460,7 @@ pub fn process_component(
                             && query_first_exon_end <= mid_exon_end)
                         || (query_first_exon_start < mid_exon_start
                             && query_first_exon_end > mid_exon_end)
+                            && !is_cds_seen_in_passes
                     {
                         schema.status = b"TRUNCATED";
                         schema.code = b"T";
@@ -429,6 +500,7 @@ pub fn process_component(
                         schema.status = b"PASS";
                         schema.code = b"A";
                         schema.is_novel_start = b"NOVEL_START";
+                        pass_cds_start_exons.insert(query_cds_start_exon);
                     }
                 });
 
@@ -440,6 +512,7 @@ pub fn process_component(
                 );
                 schema.status = b"PASS";
                 schema.code = b"A";
+                pass_cds_start_exons.insert(query_cds_start_exon);
             };
         }
 

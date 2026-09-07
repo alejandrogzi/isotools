@@ -115,4 +115,38 @@ pub struct Args {
         default_value_t = 0.5
     )]
     pub exon_recovery_threshold: f32,
+
+    #[arg(
+        short = 'O',
+        long = "overlap-type",
+        help = "Overlap type to define packed components",
+        value_name = "TYPE",
+        value_enum,
+        default_value_t = OverlapTypeArg::Exon,
+    )]
+    pub overlap_type: OverlapTypeArg,
+}
+
+/// Local CLI mapping for `packbed::OverlapType`.
+///
+/// `packbed` implements `FromStr` but not `Display`/`ValueEnum`,
+/// so it cannot be used directly with `default_value_t`.
+/// This wrapper provides clap value parsing + help text and
+/// converts into `packbed::OverlapType` at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OverlapTypeArg {
+    Exon,
+    Cds,
+    #[value(alias = "bounds")]
+    Boundary,
+}
+
+impl From<OverlapTypeArg> for packbed::OverlapType {
+    fn from(value: OverlapTypeArg) -> Self {
+        match value {
+            OverlapTypeArg::Exon => packbed::OverlapType::Exon,
+            OverlapTypeArg::Cds => packbed::OverlapType::CDS,
+            OverlapTypeArg::Boundary => packbed::OverlapType::Boundary,
+        }
+    }
 }

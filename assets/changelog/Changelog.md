@@ -1,5 +1,13 @@
 # isotools Changelog
 
+## v0.0.44
+
+**iso-utr v0.0.12 — `--overlap-type` selects the packbed overlap mode**
+
+- Iso-utr v0.0.12 adds `-O`/`--overlap-type` to choose how reference/query reads are packed into components before truncation detection. It accepts `exon` (default), `cds` or `boundary` (`bounds` kept as an alias), matching the `packbed::OverlapType` modes, and the selection is forwarded to `packbed::pack`.
+- The flag is parsed through a local `ValueEnum` wrapper (`OverlapTypeArg`) because `packbed::OverlapType` implements `FromStr` but not `Display`/`ValueEnum`, so it cannot back `default_value_t` directly.
+- Bumped the workspace to `0.0.44` and `iso-utr` to `0.0.12` (`Cargo.toml`/`Cargo.lock`).
+
 ## v0.0.43
 
 **iso-fusion v0.0.15 — `--fuzzy-exclusion` masks same-locus parents split by heterogeneous annotation**
