@@ -11,6 +11,7 @@ members = [
     "iso-cigar",
     "iso-adapter",
     "iso-align",
+    "iso-fastx",
 ]
 resolver = "2"
 

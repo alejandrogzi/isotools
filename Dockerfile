@@ -16,7 +16,8 @@ RUN cargo build --manifest-path Cargo.toml --release --locked --workspace && \
     strip target/release/iso-orphan && \
     strip target/release/iso-cigar && \
     strip target/release/iso-adapter && \
-    strip target/release/iso-align
+    strip target/release/iso-align && \
+    strip target/release/iso-fastx
 
 # ---------- Runtime Stage ----------
 FROM debian:bookworm-slim
@@ -38,6 +39,7 @@ COPY --from=builder /app/target/release/iso-orphan /usr/local/bin/iso-orphan
 COPY --from=builder /app/target/release/iso-cigar /usr/local/bin/iso-cigar
 COPY --from=builder /app/target/release/iso-adapter /usr/local/bin/iso-adapter
 COPY --from=builder /app/target/release/iso-align /usr/local/bin/iso-align
+COPY --from=builder /app/target/release/iso-fastx /usr/local/bin/iso-fastx
 
 # Set up non-root user
 RUN useradd -m -u 1000 isotoolsuser && \
@@ -51,7 +53,8 @@ RUN useradd -m -u 1000 isotoolsuser && \
     chmod +x /usr/local/bin/iso-orphan && \
     chmod +x /usr/local/bin/iso-cigar && \
     chmod +x /usr/local/bin/iso-adapter && \
-    chmod +x /usr/local/bin/iso-align
+    chmod +x /usr/local/bin/iso-align && \
+    chmod +x /usr/local/bin/iso-fastx
 
 USER isotoolsuser
 WORKDIR /data
@@ -66,4 +69,5 @@ RUN iso-segment --help && \
     iso-orphan --help && \
     iso-cigar --help && \
     iso-adapter --help && \
-    iso-align --help
+    iso-align --help && \
+    iso-fastx --help

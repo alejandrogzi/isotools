@@ -1,0 +1,22 @@
+[package]
+name = "iso-fastx"
+version = "0.0.1"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "inspect and orient long-read FASTA/FASTQ files before alignment"
+keywords = ["fastq", "fasta", "isoseq", "primer"]
+homepage = "https://github.com/alejandrogzi/isotools"
+repository = "https://github.com/alejandrogzi/isotools"
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+flate2.workspace = true
+iso-adapter = { path = "../iso-adapter" }
+needletail.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

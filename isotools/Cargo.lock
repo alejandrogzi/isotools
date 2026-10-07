@@ -1119,6 +1119,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "iso-fastx"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "iso-adapter",
+ "needletail",
+ "tempfile",
+]
+
+[[package]]
 name = "iso-fusion"
 version = "0.0.15"
 dependencies = [
