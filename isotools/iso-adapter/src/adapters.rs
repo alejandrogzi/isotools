@@ -73,6 +73,11 @@ pub static ADAPTER_DB: &[(&[u8], &str)] = &[
     // NEBNext Single-Cell / Low-Input cDNA primer.
     // Source: NEB E6421 manual.
     (b"AAGCAGTGGTATCAACGCAGAGT", "pacbio:isoseq:nebnext_primer"),
+    // NEB 5' primer of Iso-Seq Express libraries (`NEB_5p`).
+    (b"GCAATGAAGTCGCAGGGTTGGG", "pacbio:isoseq:primer_5p_neb"),
+    // Constant 5' prefix of the IsoSeqX / Iso-Seq Express 2.0 / Kinnex primers
+    // (`IsoSeq_v2_primers_12.fasta`); the barcode follows it.
+    (b"CTACACGACGCTCTTCCGATCT", "pacbio:isoseqx:primer_5p_prefix"),
 
     // SMARTer-Seq v4 (Clontech/Takara) TSO — commonly used upstream of
     // PacBio Iso-Seq library prep.

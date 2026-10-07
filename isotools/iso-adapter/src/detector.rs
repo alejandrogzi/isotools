@@ -89,10 +89,20 @@ struct DbEntry {
 impl AdapterDb {
     /// Builds the matcher from the static `ADAPTER_DB`.
     pub fn new(min_clip_len: usize, max_edit_dist: u32) -> Result<Self, AdapterError> {
+        Self::from_entries(ADAPTER_DB.iter().copied(), min_clip_len, max_edit_dist)
+    }
+
+    /// Builds the matcher from caller-chosen `(sequence, label)` entries, e.g. a filtered
+    /// `ADAPTER_DB` plus user primers labelled `user:<fasta_id>`.
+    pub fn from_entries<'a>(
+        source: impl IntoIterator<Item = (&'a [u8], &'static str)>,
+        min_clip_len: usize,
+        max_edit_dist: u32,
+    ) -> Result<Self, AdapterError> {
         let mut entries: Vec<DbEntry> = Vec::with_capacity(ADAPTER_DB.len() * 2);
         let mut patterns: Vec<Vec<u8>> = Vec::with_capacity(ADAPTER_DB.len() * 2);
 
-        for (seq, label) in ADAPTER_DB {
+        for (seq, label) in source {
             if seq.len() < MIN_ADAPTER_LEN {
                 continue;
             }
@@ -112,7 +122,7 @@ impl AdapterDb {
             });
 
             let rc = reverse_complement(seq);
-            if rc != *seq {
+            if rc != seq {
                 patterns.push(rc.clone());
                 entries.push(DbEntry {
                     label,
