@@ -19,6 +19,16 @@
 
 use genepred::GenePred;
 
+/// Support carried by a read: the `CN<n>` tag of its name (`name__FC0#TC0#...#CN12`), 1 when
+/// absent. A tagged record stands for `n` identical reads wherever reads are counted.
+pub fn cn_weight(read: &GenePred) -> usize {
+    let name = String::from_utf8_lossy(read.name().unwrap_or_default());
+    let tags = name.split_once("__").map_or("", |(_, tags)| tags);
+    tags.split('#')
+        .find_map(|tag| tag.strip_prefix("CN")?.parse().ok())
+        .unwrap_or(1)
+}
+
 /// Parameters controlling scoring and classification thresholds.
 #[derive(Debug, Clone)]
 pub struct ScoringParams {
@@ -494,7 +504,8 @@ pub fn overlaps_any_reference_exon(read: &GenePred, references: &[GenePred]) -> 
 // Per-intron support helpers
 // ---------------------------------------------------------------------------
 
-/// Per-junction support counted across the multi-exon reads of one group.
+/// Per-junction support counted across the multi-exon reads of one group, each read
+/// weighing its [`cn_weight`].
 ///
 /// Two properties matter for this to be evidence rather than an artefact:
 ///
@@ -510,10 +521,12 @@ pub fn overlaps_any_reference_exon(read: &GenePred, references: &[GenePred]) -> 
 pub struct IntronSupport {
     /// Canonical intron representatives, sorted ascending.
     canonical: Vec<(u64, u64)>,
-    /// Number of reads carrying each canonical intron, indexed as `canonical`.
+    /// Weight of the reads carrying each canonical intron, indexed as `canonical`.
     counts: Vec<usize>,
     /// Canonical intron indices carried by each read, indexed as the input reads.
     per_read: Vec<Vec<usize>>,
+    /// Weight of all the reads of the group.
+    total: usize,
     /// Tolerance used to canonicalize junctions.
     tolerance: u64,
 }
@@ -540,8 +553,11 @@ impl IntronSupport {
 
         let mut counts = vec![0usize; canonical.len()];
         let mut per_read: Vec<Vec<usize>> = Vec::with_capacity(reads.len());
+        let mut total = 0;
 
         for read in reads {
+            let weight = cn_weight(read);
+            total += weight;
             let mut carried: Vec<usize> = read
                 .introns()
                 .iter()
@@ -552,7 +568,7 @@ impl IntronSupport {
             carried.dedup();
 
             for &idx in &carried {
-                counts[idx] += 1;
+                counts[idx] += weight;
             }
 
             per_read.push(carried);
@@ -562,6 +578,7 @@ impl IntronSupport {
             canonical,
             counts,
             per_read,
+            total,
             tolerance,
         }
     }
@@ -582,7 +599,7 @@ impl IntronSupport {
             .map(|offset| from + offset)
     }
 
-    /// Number of reads carrying the canonical representative of `intron`.
+    /// Weight of the reads carrying the canonical representative of `intron`.
     pub fn support_of(&self, intron: (u64, u64)) -> usize {
         Self::lookup(&self.canonical, intron, self.tolerance)
             .map(|idx| self.counts[idx])
@@ -606,7 +623,7 @@ impl IntronSupport {
             return None;
         }
 
-        let others = self.per_read.len().checked_sub(1)?;
+        let others = self.total.checked_sub(1)?;
         if others == 0 {
             return None;
         }
@@ -614,7 +631,8 @@ impl IntronSupport {
         let supported = carried
             .iter()
             .filter(|&&intron| {
-                // INFO: leave-one-out — the read itself is excluded from its own support
+                // INFO: leave-one-out — the read itself is excluded from its own support; a
+                // CN-n record leaves out one of its n reads, as if they were n separate records
                 let by_others = self.counts[intron].saturating_sub(1);
                 (by_others as f64 / others as f64) >= threshold
             })

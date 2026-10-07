@@ -267,6 +267,7 @@ pub fn process_component(
     refs.iter().for_each(|record| match record.strand() {
         Some(Strand::Forward) => {
             let exons = record.exons();
+            let weight = cn_weight(record) as f32;
 
             reference_starts.insert(exons.first().copied().unwrap_or_else(|| {
                 log::error!(
@@ -280,12 +281,13 @@ pub fn process_component(
                 reference_middle_exons.insert(*exon);
                 reference_middle_exons_support
                     .entry(*exon)
-                    .and_modify(|x| *x += 1.0)
-                    .or_insert(1.0);
+                    .and_modify(|x| *x += weight)
+                    .or_insert(weight);
             });
         }
         Some(Strand::Reverse) => {
             let exons = record.exons();
+            let weight = cn_weight(record) as f32;
 
             let mut terminal_exon = exons.last().copied().unwrap_or_else(|| {
                 log::error!(
@@ -303,8 +305,8 @@ pub fn process_component(
                 reference_middle_exons.insert(exon);
                 reference_middle_exons_support
                     .entry(exon)
-                    .and_modify(|x| *x += 1.0)
-                    .or_insert(1.0);
+                    .and_modify(|x| *x += weight)
+                    .or_insert(weight);
             });
         }
         Some(Strand::Unknown) | None => {
@@ -318,12 +320,14 @@ pub fn process_component(
     log::debug!("DEBUG: Reference exons -> {:?}", reference_starts);
     log::debug!("DEBUG: Middle exons -> {:?}", reference_middle_exons);
 
-    let (mut truncations, totals) = (0_f32, queries.len() as f32);
+    // INFO: a `#CN<n>` record stands for n identical reads
+    let (mut truncations, totals) = (0_f32, queries.iter().map(cn_weight).sum::<usize>() as f32);
     let mut pass_cds_start_exons = BTreeSet::new();
 
     for query in queries.iter() {
         log::debug!("DEBUG: Processing query -> {:?}", query.name());
         let mut schema = Schema::default();
+        let weight = cn_weight(query) as f32;
         let query_name = query.name().unwrap_or_else(|| {
             log::error!("ERROR: Could not get name from record -> {:?}", query);
             std::process::exit(1);
@@ -416,7 +420,7 @@ pub fn process_component(
                             }
                         }
 
-                        truncations += 1.0;
+                        truncations += weight;
                         return;
                     } else {
                         if schema.code == b"T" {
@@ -495,7 +499,7 @@ pub fn process_component(
                             }
                         }
 
-                        truncations += 1.0;
+                        truncations += weight;
                     } else {
                         schema.status = b"PASS";
                         schema.code = b"A";
@@ -528,10 +532,11 @@ pub fn process_component(
         if ratio >= recovery_threshold {
             counter.inc_dirty();
             log::debug!("Bucket {:?} is dirty -> {}", queries, ratio);
+            let ref_weight = refs.iter().map(cn_weight).sum::<usize>() as f32;
             reference_middle_exons_support
                 .iter_mut()
                 .for_each(|(_k, v)| {
-                    *v = *v as f32 / refs.len() as f32;
+                    *v /= ref_weight;
                 });
 
             recover_reads(
@@ -664,6 +669,15 @@ fn recover_reads<'a>(
 
         accumulator.push(schema.to_line());
     }
+}
+
+/// Support of a record: the `CN<n>` tag of its name (`name__FC0#TC0#...#CN12`), 1 when absent.
+fn cn_weight(record: &GenePred) -> usize {
+    let name = String::from_utf8_lossy(record.name().unwrap_or_default());
+    let tags = name.split_once("__").map_or("", |(_, tags)| tags);
+    tags.split('#')
+        .find_map(|tag| tag.strip_prefix("CN")?.parse().ok())
+        .unwrap_or(1)
 }
 
 #[inline(always)]
@@ -843,6 +857,60 @@ mod tests {
             .any(|line| line.starts_with("unchanged\tTRUNCATED\tT\t")));
     }
 
+    #[test]
+    fn cn_tag_weighs_a_record_like_that_many_identical_records() {
+        let counter = ParallelCounter::default();
+        let (first, e1, e2) = ((100, 150), (200, 250), (300, 350));
+        // references share a first exon, then carry the middle exon e1, e2 or none
+        let refs = [
+            ("a", vec![first, e1], 3),
+            ("b", vec![first, e1], 2),
+            ("c", vec![first, e2], 2),
+            ("d", vec![first], 3),
+        ];
+        // one passing query, one inside e1 and one inside e2
+        let queries = [
+            ("p", vec![(110, 150)], 5),
+            ("t1", vec![(210, 240)], 3),
+            ("t2", vec![(310, 340)], 2),
+        ];
+        // a CN-n record is kept as is (`weighted`) or becomes n identical untagged records
+        let build = |records: &[(&str, Vec<(u64, u64)>, usize)], weighted: bool| {
+            let mut out = Vec::new();
+            for (name, exons, cn) in records {
+                match weighted {
+                    true => out.push(record(format!("{name}__FC0#CN{cn}").as_bytes(), exons)),
+                    false => out
+                        .extend((0..*cn).map(|k| record(format!("{name}_{k}").as_bytes(), exons))),
+                }
+            }
+            out
+        };
+        let run = |weighted| -> Vec<String> {
+            let (refs, queries) = (build(&refs, weighted), build(&queries, weighted));
+            process_component(refs, queries, true, 0.5, 0.5, &counter)
+                .into_iter()
+                .map(|line| String::from_utf8(line).unwrap())
+                .collect()
+        };
+        let (weighted, identical) = (run(true), run(false));
+
+        // 5 of 10 queries are truncated, so the component is dirty right on the 0.5 threshold;
+        // support is 5/10 for e1 (recovered, on the threshold) and 2/10 for e2 (not recovered)
+        assert!(weighted[0].contains("\tPASS\tAW\t"), "{}", weighted[0]);
+        assert!(weighted[1].contains("\tTRUNCATED\tTW\t"), "{}", weighted[1]);
+        assert!(weighted[2].contains("\tPASS\tFW\t"), "{}", weighted[2]);
+
+        // every tagged record reads like each of its identical copies
+        let tail = |line: &str| line.split_once('\t').unwrap().1.to_string();
+        let mut copies = identical.iter();
+        for (line, (_, _, cn)) in weighted.iter().zip(&queries) {
+            for _ in 0..*cn {
+                assert_eq!(tail(line), tail(copies.next().unwrap()));
+            }
+        }
+    }
+
     fn count_rows_for(lines: &[String], id: &str) -> usize {
         let prefix = format!("{id}\t");
         lines
@@ -860,6 +928,9 @@ mod tests {
         );
         record.set_name(Some(name.to_vec()));
         record.set_strand(Some(Strand::Forward));
+        // INFO: a CDS spanning the record, which `process_component` needs for every query
+        record.set_thick_start(Some(exons.first().unwrap().0));
+        record.set_thick_end(Some(exons.last().unwrap().1));
         record.set_block_count(Some(exons.len() as u32));
         record.set_block_starts(Some(exons.iter().map(|(start, _)| *start).collect()));
         record.set_block_ends(Some(exons.iter().map(|(_, end)| *end).collect()));
