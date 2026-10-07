@@ -1035,7 +1035,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "iso-adapter"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1119,6 +1119,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "iso-fastx"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "iso-adapter",
+ "needletail",
+ "tempfile",
+]
+
+[[package]]
 name = "iso-fusion"
 version = "0.0.15"
 dependencies = [
@@ -1171,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "iso-orphan"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "bigtools",
  "clap",
@@ -1187,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "iso-pas"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bigtools",
  "clap",
@@ -1221,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "iso-utr"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "clap",
  "dashmap",

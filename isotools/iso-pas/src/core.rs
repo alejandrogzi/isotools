@@ -391,7 +391,9 @@ fn process_component(
     let mut seen_positions = HashSet::new();
     let mut seen_reads = HashSet::new();
 
-    let (mut count, totals) = (0_f32, queries.len() as f32);
+    // INFO: a `#CN<n>` record stands for n identical reads
+    let size = queries.iter().map(cn_weight).sum::<usize>();
+    let (mut count, totals) = (0_f32, size as f32);
 
     queries.iter().for_each(|read| {
         let end = match read.strand() {
@@ -453,7 +455,7 @@ fn process_component(
         schema.clipped_a = clipped_a;
         schema.poly_a = poly_a;
         schema.gpa = gpa;
-        schema.size = queries.len();
+        schema.size = size;
 
         descriptor.insert(read.name(), schema);
     });
@@ -500,7 +502,7 @@ fn process_component(
             schema.forced = b"FORCED";
         } else {
             counter.inc_intrapriming();
-            count += 1.0;
+            count += cn_weight(read) as f32;
 
             schema.status = b"INTRAPRIMING";
             schema.support = b"POLYA_NOT_SUPPORTED";
@@ -851,6 +853,12 @@ fn get_polya_stats(read: &[u8]) -> (u32, u32, u32, u32) {
     (clip3, clipped_a, read_a, gpa)
 }
 
+/// Support of a read: the `#CN<n>` tag of its name, 1 when absent.
+fn cn_weight(read: &GenePred) -> usize {
+    let tags = get_tags(read.name().unwrap_or_default());
+    tags.get(b"CN").copied().unwrap_or(1)
+}
+
 /// Extracts two-letter key, usize value tags from a read's name field.
 ///
 /// This function is designed to parse a specific tag format, where tags are separated by a
@@ -937,5 +945,42 @@ mod tests {
 
         assert_eq!(get_location(175, &refs), Position::UTR);
         assert_eq!(get_location(130, &refs), Position::CDS);
+    }
+
+    #[test]
+    fn cn_tag_weighs_a_read_like_that_many_identical_reads() {
+        let config = Config {
+            aparent_threshold: 0.01,
+            max_gpa_length: 5,
+            min_polya_length: 50,
+            recover: true,
+            wiggle: 2,
+        };
+        let read = |name: &str, end: u64| {
+            let mut read = GenePred::from_coords(b"chr1".to_vec(), 100, end, Default::default());
+            read.set_name(Some(name.as_bytes().to_vec()));
+            read.set_strand(Some(Strand::Forward));
+            read
+        };
+        let run = |queries: Vec<GenePred>| -> Vec<String> {
+            let counter = ParallelCounter::default();
+            process_component(Vec::new(), queries, &HashMap::new(), &config, &counter)
+                .into_iter()
+                .map(|line| String::from_utf8(line).unwrap())
+                .collect()
+        };
+
+        // the whole polyA of `pass` is clipped; `ip` has 20 genomic A and no support
+        let pass = || read("pass__TC0#PA20#PR20", 1000);
+        let weighted = run(vec![pass(), read("ip__TC0#PA0#PR20#CN5", 2000)]);
+        let mut identical = vec![pass()];
+        identical.extend((0..5).map(|i| read(&format!("ip{i}__TC0#PA0#PR20"), 2000)));
+        let identical = run(identical);
+
+        // 5 of 6 reads are intrapriming; counting records, 1 of 2 would not pass `> 0.5`
+        assert!(weighted[0].contains("REVIEW"), "{}", weighted[0]);
+        assert_eq!(weighted[0], identical[0]);
+        let tail = |line: &str| line.split_once('\t').unwrap().1.to_string();
+        assert_eq!(tail(&weighted[1]), tail(&identical[1]));
     }
 }

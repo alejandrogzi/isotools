@@ -1,6 +1,6 @@
 [package]
 name = "iso-pas"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 description = "detect real 3' ends on isoseq reads"
 keywords = ["polyA", "retention", "transcript", "isoseq"]

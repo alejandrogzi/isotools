@@ -11,6 +11,7 @@ members = [
     "iso-cigar",
     "iso-adapter",
     "iso-align",
+    "iso-fastx",
 ]
 resolver = "2"
 
@@ -19,7 +20,7 @@ authors = ["alejandrogzi <alejandrxgzi@gmail.com>"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70.0"
-version = "0.0.44"
+version = "0.0.45"
 
 [workspace.dependencies]
 dashmap = { version = "6", features = ["rayon"] }

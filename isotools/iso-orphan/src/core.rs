@@ -28,7 +28,7 @@ use crate::{
         EvaluationPath, FinalDecision, ReadReport, RunMode,
     },
     scoring::{
-        best_boundary_match, best_junction_match, best_single_exon_match,
+        best_boundary_match, best_junction_match, best_single_exon_match, cn_weight,
         overlaps_any_reference_exon, IntronSupport, ScoringParams,
     },
     splice::{SpliceEvidence, SpliceScoreProvider},
@@ -443,15 +443,15 @@ fn is_reference(record: &GenePred) -> bool {
 /// that failed a routing test would make a read's support depend on how many *other*
 /// reads happened to touch a reference exon.
 struct ComponentEvidence {
-    /// Number of query reads in the component.
+    /// Number of query reads in the component, each weighing its `CN` tag.
     component_size: usize,
     /// Indices, into the component's query reads, of the multi-exon reads.
     multi_exon: Vec<usize>,
-    /// Intron-chain cluster size of each multi-exon read, indexed as `multi_exon`.
+    /// Intron-chain cluster size (read weight) of each multi-exon read, indexed as `multi_exon`.
     chain_cluster_size: Vec<usize>,
     /// Junction support across the multi-exon reads of the component.
     intron_support: IntronSupport,
-    /// Reciprocal-overlap cluster size of each single-exon read.
+    /// Reciprocal-overlap cluster size (read weight) of each single-exon read.
     ///
     /// Indexed as `single_exon`.
     overlap_cluster_size: Vec<usize>,
@@ -482,20 +482,28 @@ impl ComponentEvidence {
 
         let mut chain_cluster_size = vec![0usize; me_reads.len()];
         for members in cluster_multi_exon(&me_reads, params.junction_tolerance).values() {
+            let size = members
+                .iter()
+                .map(|&local| cn_weight(me_reads[local]))
+                .sum();
             for &local in members {
-                chain_cluster_size[local] = members.len();
+                chain_cluster_size[local] = size;
             }
         }
 
         let mut overlap_cluster_size = vec![0usize; se_reads.len()];
         for members in cluster_single_exon(&se_reads, params.min_overlap_frac).values() {
+            let size = members
+                .iter()
+                .map(|&local| cn_weight(se_reads[local]))
+                .sum();
             for &local in members {
-                overlap_cluster_size[local] = members.len();
+                overlap_cluster_size[local] = size;
             }
         }
 
         Self {
-            component_size: queries.len(),
+            component_size: queries.iter().map(cn_weight).sum(),
             multi_exon,
             chain_cluster_size,
             intron_support,
@@ -2231,5 +2239,52 @@ mod tests {
         assert_eq!(report.evaluation_path, EvaluationPath::DeNovo);
         assert_eq!(report.overlaps_reference_exon, None);
         assert_eq!(report.reference_count, 0);
+    }
+
+    #[test]
+    fn test_cn_tag_counts_like_that_many_identical_reads() {
+        let counter = ParallelCounter::default();
+        // a junction is supported when 0.3 of the other reads carry it: 3 of 10 for a CN4
+        // read (on the threshold) and 1 of 10 for a CN2 read (below it)
+        let params = ScoringParams {
+            intron_support_threshold: 0.3,
+            ..ScoringParams::default()
+        };
+        // the default support is 5 reads: CN5 sits on it, CN4 one below
+        #[rustfmt::skip]
+        let specs = [
+            ("mx", vec![100, 300, 500], vec![200, 400, 600], 5, "DOMINANT_INTRON_CHAIN_CLUSTER"),
+            ("my", vec![100, 350, 500], vec![250, 450, 600], 4, "LOW_INTRON_CHAIN_CLUSTER_SUPPORT/INTRON_SUPPORT_RESCUE/SPLICE_SCORE_UNAVAILABLE"),
+            ("mz", vec![100, 450, 600], vec![200, 550, 700], 2, "LOW_INTRON_CHAIN_CLUSTER_SUPPORT/LOW_INTRON_SUPPORT/SPLICE_SCORE_UNAVAILABLE"),
+            ("sa", vec![1000], vec![1100], 5, "SUPPORTED_SINGLE_EXON_CLUSTER"),
+            ("sb", vec![2000], vec![2100], 4, "LOW_SINGLE_EXON_CLUSTER_SUPPORT"),
+        ];
+        let read = |name: String, starts: &[u64], ends: &[u64]| {
+            make_record(
+                name.as_bytes(),
+                starts[0],
+                ends[ends.len() - 1],
+                starts.to_vec(),
+                ends.to_vec(),
+            )
+        };
+
+        let mut tagged = Vec::new();
+        let mut identical = Vec::new();
+        for (name, starts, ends, cn, _) in &specs {
+            tagged.push(read(format!("{name}__FC0#CN{cn}"), starts, ends));
+            identical.extend((0..*cn).map(|k| read(format!("{name}_{k}"), starts, ends)));
+        }
+        let tagged = de_novo(&tagged, &counter, &params, None);
+        let identical = de_novo(&identical, &counter, &params, None);
+
+        for (name, _, _, cn, reasons) in &specs {
+            let mut report = report_of(&tagged, format!("{name}__FC0#CN{cn}").as_bytes()).clone();
+            let first_copy = report_of(&identical, format!("{name}_0").as_bytes());
+            assert_eq!(report.reasons_field(), *reasons);
+            // same group size, cluster size, junction support, thresholds and decision
+            report.read_id = first_copy.read_id.clone();
+            assert_eq!(&report, first_copy);
+        }
     }
 }

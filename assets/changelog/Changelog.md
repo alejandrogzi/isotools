@@ -1,5 +1,28 @@
 # isotools Changelog
 
+## v0.0.45
+
+**iso-fastx v0.0.1 — new crate: `inspect` classifies a long-read FASTA/FASTQ file and `orient` flips its polyT reads**
+
+- `iso-fastx inspect --fastx <in.fa|fq[.gz]> --prefix <name> [--reads 5000] [--primers <fasta>]` samples the first `--reads` records and writes `<name>.inspect.tsv`: a header plus one row with `file reads state kit primer_rate polya3 polyt5 mean_len mean_qv qv_constant name_style note`. `state` is the first matching rule of `empty`, `clustered`, `subreads`, `ccs`, `ambiguous`, `mixed`, `fl` and `flnc`, and `kit` is `custom`, `isoseqx`, `express` or `none`. Constant QVs alone are not a subreads signal (SRA Lite sets every base to Q30). It exits 0 on any readable input, so the pipeline decides what to do with the state.
+- Primer hits come from iso-adapter's database, restricted to its Iso-Seq and Clontech entries plus the `--primers` FASTA (labelled `user:<fasta_id>`), exact or fuzzy, in either orientation, within 150 nt of either read end. Homopolymer, SMRTbell, ONT and Illumina entries are left out so that a polyA tail cannot shadow the 3' primer behind it.
+- `iso-fastx orient --fastx <in> --output <out> --prefix <name>` keeps polyA-only reads, reverse-complements polyT-only reads (reversing their qualities) and keeps reads with both or neither tail unchanged; no read is dropped or renamed. The output has the input's format (gzipped when `<out>` ends in `.gz`) and `<name>.orient.tsv` counts `reads kept flipped ambiguous no_signal`.
+- Added `iso-fastx` to the workspace and to the Dockerfile (strip, copy, `--help` smoke test).
+
+**iso-adapter v0.0.4 — NEB 5' and IsoSeqX 5' prefix primers in the database, `AdapterDb::from_entries`**
+
+- Added `GCAATGAAGTCGCAGGGTTGGG` (`pacbio:isoseq:primer_5p_neb`) and `CTACACGACGCTCTTCCGATCT` (`pacbio:isoseqx:primer_5p_prefix`), so the 5' primers of NEB Iso-Seq Express, IsoSeqX/Express 2.0 and Kinnex libraries are recognized. The command line is unchanged.
+- `AdapterDb::from_entries` builds the matcher from caller-chosen `(sequence, label)` entries. `AdapterDb::new` now calls it with the static database, which is how iso-fastx builds a restricted database plus user primers.
+
+**iso-orphan v0.0.6, iso-utr v0.0.13, iso-pas v0.0.2 — `#CN<n>` read weights**
+
+- A record whose name carries a `CN<n>` tag in the iso-segment tag block (`name__FC0#TC0#PA29#PR30#IY999#CN12`) counts as `n` identical reads wherever reads are compared against a support threshold or summed into a ratio. A record without the tag weighs 1, so existing inputs behave exactly as before.
+- iso-orphan sums weights for the component size, the intron-chain and single-exon cluster sizes (`--min-read-num-denovo`, `--min-single-exon-support`) and the intron support fractions, where the leave-one-out count leaves out one read per record, so a `CN<n>` record sees the same support as each of `n` identical records. The `group_size` and `cluster_size` report columns become weighted.
+- iso-utr sums weights for the truncated-query ratio (`--recovery-threshold`) and for the support of each reference middle exon (`--exon-recovery-threshold`).
+- iso-pas sums weights for the component intrapriming ratio behind `--recover`; the component size and events shown in the descriptor become weighted.
+- Fixed the iso-utr test helper to give its records a CDS, which `process_component` has required since the CDS-start check of v0.0.44 (a record without one ends the process, so `cargo test -p iso-utr` aborted).
+- Bumped the workspace to `0.0.45`, `iso-adapter` to `0.0.4`, `iso-orphan` to `0.0.6`, `iso-utr` to `0.0.13` and `iso-pas` to `0.0.2` (`Cargo.toml`/`Cargo.lock`).
+
 ## v0.0.44
 
 **iso-utr v0.0.12 — `--overlap-type` selects the packbed overlap mode**
