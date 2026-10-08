@@ -1,5 +1,13 @@
 # isotools Changelog
 
+## v0.0.46
+
+**iso-fusion — non-coding reference transcripts no longer crash the run**
+
+- `group_components` assigns parent genes by shared CDS exons, so non-coding reference transcripts (lncRNAs, non-coding isoforms) never get a parent. A component that contained one panicked with `Failed to get record_to_parent`, which made annotations such as GENCODE, knownGene or RefSeq unusable (TOGA output is coding-only and never hit it).
+- Such references are now skipped, since they cannot define a fusion. Each skip is logged at debug level, and one `WARN` reports the total (`Ignored <n> reference transcripts without a coding parent (non-coding)`).
+- Checked on mouse chr19 reads against UCSC knownGene (14,872 transcripts): previously a panic; now 1,444 references are skipped, giving the same 52 fusions as the coding-only annotation.
+
 ## v0.0.45
 
 **iso-fastx v0.0.1 — new crate: `inspect` classifies a long-read FASTA/FASTQ file and `orient` flips its polyT reads**
