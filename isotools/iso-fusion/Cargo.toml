@@ -1,6 +1,6 @@
 [package]
 name = "iso-fusion"
-version = "0.0.15"
+version = "0.0.16"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true

@@ -23,6 +23,7 @@ use rayon::prelude::*;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cli::Args;
 use crate::utils::*;
@@ -32,6 +33,9 @@ pub const FUSION_FREE: &str = "fusions.free.bed";
 pub const FUSION_REVIEW: &str = "fusions.review.bed";
 pub const FUSION_FAKES: &str = "fusions.fakes.bed";
 pub const FUSION_DESCRIPTOR: &str = "fusions.tsv";
+
+/// Reference transcripts overlapping reads that have no parent gene (non-coding)
+static UNPARENTED_REFS: AtomicUsize = AtomicUsize::new(0);
 
 // tag separators
 pub const SEP: &str = "#"; // WARN: should change to ':' -> breaks ORF caller [translationai hdf5]
@@ -81,6 +85,14 @@ pub fn detect_fusions(args: Args) {
             args.fuzzy_exclusion,
         );
     });
+
+    let unparented = UNPARENTED_REFS.load(Ordering::Relaxed);
+    if unparented > 0 {
+        log::warn!(
+            "Ignored {} reference transcripts without a coding parent (non-coding); they cannot define fusions",
+            unparented
+        );
+    }
 
     info!("Detected fusions: {}", accumulator.fusions.len());
     info!("Fusion-free reads: {}", accumulator.passes.len());
@@ -294,12 +306,16 @@ fn process_component(
 
     let mut parents = HashSet::new();
     for r in reference_regions.iter() {
-        let parent = record_to_parent.get(r.name().unwrap()).unwrap_or_else(|| {
-            panic!(
-                "ERROR: Failed to get record_to_parent for record: {:?}",
-                r.name()
-            )
-        });
+        // INFO: non-coding references get no parent (group_components groups by CDS), so they
+        // INFO: cannot define a fusion; skip them instead of failing the whole run
+        let Some(parent) = record_to_parent.get(r.name().unwrap()) else {
+            UNPARENTED_REFS.fetch_add(1, Ordering::Relaxed);
+            log::debug!(
+                "Skipping reference without a parent (non-coding): {}",
+                String::from_utf8_lossy(r.name().unwrap())
+            );
+            continue;
+        };
 
         if !parents.contains(parent.value()) {
             parents.insert(parent.clone());
