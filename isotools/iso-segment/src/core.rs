@@ -1298,6 +1298,8 @@ impl Read {
     /// ```
     fn set_mapping_features(&mut self, record: &Record) {
         let mut aligned_columns = 0usize; // M / = / X  (consume query AND ref)
+        let mut mismatch_columns = 0usize; // X bases
+        let mut has_eqx = false; // the CIGAR states matches / mismatches itself (=/X)
         let mut indels = 0usize; // I + D bases
         let mut ref_span = 0usize; // reference length: M/=/X + D + N
         let mut alignment_length = 0usize; // denominator: M/=/X + I + D  (excludes N)
@@ -1316,6 +1318,12 @@ impl Read {
 
         record.cigar().iter().for_each(|op| {
             let op = op.unwrap();
+            if matches!(op.kind(), Kind::SequenceMatch | Kind::SequenceMismatch) {
+                has_eqx = true;
+            }
+            if op.kind() == Kind::SequenceMismatch {
+                mismatch_columns += op.len();
+            }
             match op.kind() {
                 Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
                     aligned_columns += op.len();
@@ -1349,9 +1357,14 @@ impl Read {
             }
         });
 
-        // M can't be split into match/mismatch from the CIGAR, so use NM.
-        let nm = get_nm(record).unwrap_or(0);
-        let mismatches = nm.saturating_sub(indels);
+        // With =/X ops the CIGAR states the mismatches itself; this does not depend on NM, which tools that
+        // rewrite the CIGAR (e.g. iso-cigar) may have removed. M can't be split into match/mismatch from the
+        // CIGAR, so use NM there (a missing NM then counts as no mismatches).
+        let mismatches = if has_eqx {
+            mismatch_columns
+        } else {
+            get_nm(record).unwrap_or(0).saturating_sub(indels)
+        };
         let matches = aligned_columns.saturating_sub(mismatches);
 
         let end_site = start + ref_span - 1;
@@ -2236,6 +2249,8 @@ mod tests {
         strand: Strand,
     ) -> MappingFeatures {
         let mut aligned_columns = 0usize; // M / = / X  — consume both query and ref
+        let mut mismatch_columns = 0usize; // X bases
+        let mut has_eqx = false;
         let mut indels = 0usize; // I + D bases
         let mut ref_span = 0usize; // reference length: M/=/X + D + N
         let mut alignment_length = 0usize; // identity denominator: M/=/X + I + D (excludes N)
@@ -2247,6 +2262,10 @@ mod tests {
         let mut seen_aligned = false; // replaces the `alignment_length == 0` leading/trailing test
 
         for &(kind, len) in cigar {
+            has_eqx |= matches!(kind, Kind::SequenceMatch | Kind::SequenceMismatch);
+            if kind == Kind::SequenceMismatch {
+                mismatch_columns += len;
+            }
             match kind {
                 Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
                     aligned_columns += len;
@@ -2280,9 +2299,12 @@ mod tests {
             }
         }
 
-        // `M` can't be split into match/mismatch from the CIGAR alone, so use NM.
-        // For a well-formed record this also reproduces the =/X result exactly.
-        let mismatches = nm.saturating_sub(indels);
+        // =/X: mismatches from the CIGAR (independent of NM); M: from NM.
+        let mismatches = if has_eqx {
+            mismatch_columns
+        } else {
+            nm.saturating_sub(indels)
+        };
         let matches = aligned_columns.saturating_sub(mismatches);
 
         // Guard against ref_span == 0 (e.g. a fully clipped record) so we don't underflow.
@@ -2312,6 +2334,14 @@ mod tests {
             three_clip: three,
             has_hard_clip_three: hc_three,
         }
+    }
+
+    #[test]
+    fn eqx_identity_does_not_need_nm() {
+        // an iso-cigar-edited record: =/X CIGAR, NM removed (passed as 0)
+        let f = compute_mapping_features(&cig("50=2X48=100N20="), 1_000, 0, Strand::Forward);
+        assert_eq!(f.matches, 118); // 120 aligned columns minus the 2 X
+        assert!(approx(f.identity, 98.3));
     }
 
     fn approx(a: f32, b: f32) -> bool {

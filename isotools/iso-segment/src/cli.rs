@@ -172,7 +172,7 @@ pub struct Args {
     pub prefix: PathBuf,
 
     #[arg(
-        short = 'b',
+        short = 'n',
         long = "batch",
         required = false,
         value_name = "BATCH",
@@ -182,7 +182,7 @@ pub struct Args {
     pub batch: String,
 
     #[arg(
-        short = 'S',
+        short = 'g',
         long = "singleton",
         help = "Flag to add singleton (SG) tag to read",
         value_name = "FLAG",

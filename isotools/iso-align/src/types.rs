@@ -25,6 +25,114 @@ pub struct MiniAln {
     pub left_clip: u32,
     /// Sum of trailing S+H lengths.
     pub right_clip: u32,
+    /// True iff the record is supplementary (flag 0x800).
+    pub is_supplementary: bool,
+    /// True iff the record carries an `SA` tag.
+    pub has_sa: bool,
+    /// Longest `N` operation in the CIGAR (bp).
+    pub max_skip: u32,
+    /// True iff an insertion of at least `ins_min_len` lies within
+    /// `ins_max_dist` of its nearest `N`, and that `N` is at least
+    /// `ins_min_skip` long (see [`ScanConfig`]).
+    pub ins_near_skip: bool,
+}
+
+/// CIGAR thresholds that have to be resolved while the record is in hand,
+/// because [`MiniAln`] keeps a summary of the CIGAR, not the CIGAR itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanConfig {
+    pub ins_min_len: u32,
+    pub ins_max_dist: u32,
+    pub ins_min_skip: u32,
+}
+
+impl ScanConfig {
+    /// Thresholds that never flag an insertion.
+    pub const fn disabled() -> Self {
+        ScanConfig {
+            ins_min_len: u32::MAX,
+            ins_max_dist: 0,
+            ins_min_skip: u32::MAX,
+        }
+    }
+}
+
+/// One selection rule. A read is a candidate when any enabled rule fires.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, ValueEnum)]
+pub enum Rule {
+    /// Split alignment across a gap in `[min_gap, max_gap]` with a gap-facing
+    /// clip (the original iso-align predicate, on all records of the read).
+    Split,
+    /// Primary record: an insertion next to a long `N`, the shape of an exon
+    /// left unaligned between two long introns (bridge pseudo-exon).
+    Insertion,
+    /// Primary record: a clip on either end plus one very long `N` (an exon
+    /// beyond the intron cap was clipped off instead of split off).
+    LongIntronClip,
+    /// Primary record: a long clip and no supplementary alignment (`SA`),
+    /// i.e. a terminal exon minimap2 could not place at all.
+    OrphanClip,
+}
+
+impl Rule {
+    /// Bit used in a [`RuleSet`].
+    pub const fn bit(self) -> u8 {
+        match self {
+            Rule::Split => 1,
+            Rule::Insertion => 2,
+            Rule::LongIntronClip => 4,
+            Rule::OrphanClip => 8,
+        }
+    }
+
+    /// Label written to the report.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Rule::Split => "split",
+            Rule::Insertion => "insertion",
+            Rule::LongIntronClip => "long-intron-clip",
+            Rule::OrphanClip => "orphan-clip",
+        }
+    }
+
+    pub const ALL: [Rule; 4] = [
+        Rule::Split,
+        Rule::Insertion,
+        Rule::LongIntronClip,
+        Rule::OrphanClip,
+    ];
+}
+
+/// Bit set of [`Rule`]s.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct RuleSet(pub u8);
+
+impl RuleSet {
+    pub fn from_rules(rules: &[Rule]) -> Self {
+        RuleSet(rules.iter().fold(0, |acc, r| acc | r.bit()))
+    }
+
+    pub fn contains(self, rule: Rule) -> bool {
+        self.0 & rule.bit() != 0
+    }
+
+    pub fn insert(&mut self, rule: Rule) {
+        self.0 |= rule.bit();
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Comma-joined labels, in [`Rule::ALL`] order.
+    pub fn labels(self) -> String {
+        Rule::ALL
+            .iter()
+            .filter(|r| self.contains(**r))
+            .map(|r| r.label())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 /// Where the flank-clip threshold is checked, relative to the inter-segment gap.
@@ -60,4 +168,20 @@ pub struct PredicateConfig {
     pub max_gap: Option<u64>,
     pub min_flank_clip: u32,
     pub flank_side: FlankSide,
+    /// Enabled rules; `Split` alone reproduces iso-align <= 0.0.4.
+    pub rules: RuleSet,
+    /// `LongIntronClip`: minimum longest `N` on the primary record (bp).
+    pub long_intron_min_skip: u32,
+    /// `LongIntronClip`: minimum clip on either end of the primary record (bp).
+    pub long_intron_min_clip: u32,
+    /// `OrphanClip`: minimum clip on either end of the primary record (bp).
+    pub orphan_min_clip: u32,
+}
+
+/// Acceptance thresholds for a realigned record (the iso-segment hq test,
+/// without polyA trimming of the 3' clip).
+#[derive(Clone, Copy, Debug)]
+pub struct AcceptConfig {
+    pub min_identity: f32,
+    pub max_clip: u32,
 }

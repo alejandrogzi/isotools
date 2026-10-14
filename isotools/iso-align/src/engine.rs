@@ -9,20 +9,46 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use log::info;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
+use crate::accept::run_accept;
 use crate::bam_scan::{scan, AlnGroups};
 use crate::cli::Cli;
 use crate::extract::{write_fasta_from_bam, write_fasta_from_reads, write_names, CandidateSet};
 use crate::logging::elapsed;
-use crate::predicate::is_candidate;
-use crate::types::{MiniAln, OutputFormat, PredicateConfig};
+use crate::predicate::candidate_rules;
+use crate::types::{MiniAln, OutputFormat, PredicateConfig, RuleSet};
+
+/// Selected read names with the rules that fired for each.
+pub type CandidateRules = FxHashMap<Vec<u8>, RuleSet>;
 
 /// Runs the iso-align pipeline end-to-end.
 pub fn run(cli: Cli) -> Result<()> {
+    if let Some(realigned) = cli.realigned_bam.as_deref() {
+        info!(
+            "[{}] start accept pass1={} realigned={} output={} min_identity={} max_clip={}",
+            elapsed(),
+            cli.bam.display(),
+            realigned.display(),
+            cli.output.display(),
+            cli.min_identity,
+            cli.max_clip
+        );
+        run_accept(
+            &cli.bam,
+            realigned,
+            &cli.output,
+            cli.report.as_deref(),
+            &cli.accept_config(),
+            cli.bgzf_workers(),
+        )?;
+        info!("[{}] done!", elapsed());
+        return Ok(());
+    }
+
     info!(
-        "[{}] start bam={} output={} reads={:?} format={:?} threads={} min_gap={} max_gap={:?} min_flank_clip={} flank_side={:?}",
+        "[{}] start bam={} output={} reads={:?} format={:?} threads={} min_gap={} max_gap={:?} min_flank_clip={} flank_side={:?} rules={} scan={:?} long_intron_min_skip={} long_intron_min_clip={} orphan_min_clip={}",
         elapsed(),
         cli.bam.display(),
         cli.output.display(),
@@ -32,23 +58,37 @@ pub fn run(cli: Cli) -> Result<()> {
         cli.min_gap,
         cli.max_gap,
         cli.min_flank_clip,
-        cli.flank_side
+        cli.flank_side,
+        RuleSet::from_rules(&cli.rules).labels(),
+        cli.scan_config(),
+        cli.long_intron_min_skip,
+        cli.long_intron_min_clip,
+        cli.orphan_min_clip
     );
 
-    let groups = scan(&cli.bam, cli.bgzf_workers())?;
+    let groups = scan(&cli.bam, cli.bgzf_workers(), &cli.scan_config())?;
 
     let predicate_cfg = cli.predicate();
-    let candidates = select_candidates(&groups, &predicate_cfg);
+    let selected = select_candidate_rules(&groups, &predicate_cfg);
+    let mut per_rule: Vec<String> = Vec::new();
+    for rule in crate::types::Rule::ALL {
+        if predicate_cfg.rules.contains(rule) {
+            let n = selected.values().filter(|r| r.contains(rule)).count();
+            per_rule.push(format!("{}={n}", rule.label()));
+        }
+    }
     info!(
-        "[{}] predicate done candidates={} of {} qnames",
+        "[{}] predicate done candidates={} of {} qnames ({})",
         elapsed(),
-        candidates.len(),
-        groups.len()
+        selected.len(),
+        groups.len(),
+        per_rule.join(" ")
     );
 
     if let Some(report) = cli.report.as_deref() {
-        write_report(report, &groups, &candidates, &predicate_cfg)?;
+        write_report(report, &groups, &selected, &predicate_cfg)?;
     }
+    let candidates: CandidateSet = selected.keys().cloned().collect();
 
     match cli.output_format {
         OutputFormat::Names => {
@@ -72,9 +112,17 @@ pub fn run(cli: Cli) -> Result<()> {
 /// candidate names. Pulled out of `run` so it's straightforward to test.
 pub fn select_candidates(groups: &AlnGroups, cfg: &PredicateConfig) -> CandidateSet {
     let mut out: CandidateSet = FxHashSet::default();
+    out.extend(select_candidate_rules(groups, cfg).into_keys());
+    out
+}
+
+/// Like [`select_candidates`], keeping the rules that fired for each read.
+pub fn select_candidate_rules(groups: &AlnGroups, cfg: &PredicateConfig) -> CandidateRules {
+    let mut out: CandidateRules = FxHashMap::default();
     for (name, alns) in groups {
-        if is_candidate(alns, cfg) {
-            out.insert(name.clone());
+        let fired = candidate_rules(alns, cfg);
+        if !fired.is_empty() {
+            out.insert(name.clone(), fired);
         }
     }
     out
@@ -85,7 +133,7 @@ pub fn select_candidates(groups: &AlnGroups, cfg: &PredicateConfig) -> Candidate
 fn write_report(
     path: &Path,
     groups: &AlnGroups,
-    candidates: &CandidateSet,
+    candidates: &CandidateRules,
     _cfg: &PredicateConfig,
 ) -> Result<()> {
     let file =
@@ -93,10 +141,10 @@ fn write_report(
     let mut writer = BufWriter::new(file);
     writeln!(
         writer,
-        "name\trname\tmax_gap\tleft_clip_outer\tright_clip_outer\tn_alns"
+        "name\trname\tmax_gap\tleft_clip_outer\tright_clip_outer\tn_alns\trules"
     )?;
 
-    let mut rows: Vec<&Vec<u8>> = candidates.iter().collect();
+    let mut rows: Vec<&Vec<u8>> = candidates.keys().collect();
     rows.sort_unstable();
 
     for name in rows {
@@ -119,8 +167,9 @@ fn write_report(
         writer.write_all(name)?;
         writeln!(
             writer,
-            "\t{rname}\t{max_gap}\t{left_outer}\t{right_outer}\t{}",
-            alns.len()
+            "\t{rname}\t{max_gap}\t{left_outer}\t{right_outer}\t{}\t{}",
+            alns.len(),
+            candidates[name].labels()
         )?;
     }
     writer.flush()?;
@@ -142,6 +191,10 @@ mod tests {
             is_reverse: false,
             left_clip: lc,
             right_clip: rc,
+            is_supplementary: false,
+            has_sa: false,
+            max_skip: 0,
+            ins_near_skip: false,
         }
     }
 
@@ -163,6 +216,10 @@ mod tests {
             max_gap: None,
             min_flank_clip: 20,
             flank_side: FlankSide::Inner,
+            rules: RuleSet::from_rules(&[crate::types::Rule::Split]),
+            long_intron_min_skip: 150_000,
+            long_intron_min_clip: 21,
+            orphan_min_clip: 50,
         };
         let cands = select_candidates(&groups, &cfg);
         assert_eq!(cands.len(), 1);
