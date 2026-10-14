@@ -11,10 +11,27 @@
 //!    per-QNAME map of compact [`types::MiniAln`] records (no SEQ / QUAL).
 //! 2. **Predicate** ([`predicate`]) — flags QNAMEs whose alignment set is
 //!    a same-chrom / same-strand split with a sufficiently large gap and
-//!    a flank clip on the gap-facing side.
+//!    a flank clip on the gap-facing side, plus the optional single-record
+//!    rules (`--rules`).
 //! 3. **Extract** ([`extract`]) — re-scans the BAM, writing matching records
 //!    out as FASTA (default), or writes just a name list.
+//!
+//! With `--realigned-bam`, iso-align runs the **accept** stage ([`accept`])
+//! instead: it compares each realigned read with its pass-1 alignment and
+//! writes the names of reads whose realignment should replace it.
+//!
+//! Selection rules (`--rules`, any fires; see README.md for thresholds):
+//! - `split`: same-chrom / same-strand records with a gap in
+//!   `[min_gap, max_gap]` and a gap-facing clip;
+//! - `insertion`: primary insertion >= 20 bp within 10 bp of an `N` >= 20 kb
+//!   (bridge pseudo-exon);
+//! - `long-intron-clip`: primary `N` >= 150 kb plus a clip > 20 bp;
+//! - `orphan-clip`: primary clip >= 50 bp and no `SA` tag.
+//!
+//! Acceptance: `AS` realigned > `AS` pass-1, realigned identity >= 98 and
+//! both clips <= 20 bp (iso-segment hq).
 
+pub mod accept;
 pub mod bam_scan;
 pub mod cli;
 pub mod engine;
