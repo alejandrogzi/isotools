@@ -1,5 +1,27 @@
 # isotools Changelog
 
+## v0.0.47
+
+**iso-align v0.0.5 — selection rules for long-intron realignment and an accept mode**
+
+- `--rules` (comma-separated; a read is selected when any rule fires):
+  - `split`: the original predicate, a split alignment across a gap in `[--min-gap, --max-gap]` with a gap-facing clip;
+  - `insertion`: an insertion of ≥ 20 bp within 10 bp of an `N` of ≥ 20 kb, i.e. a bridge (an exon left unaligned between two long introns);
+  - `long-intron-clip`: a clip of > 20 bp plus an `N` of ≥ 150 kb;
+  - `orphan-clip`: a clip of ≥ 50 bp on a primary with no `SA` tag.
+  The default is `split`.
+- **Accept mode (`--realigned-bam`):** compares each realigned read with its pass-1 alignment (`--bam` = pass-1 BAM) and writes the names of reads whose realignment should replace it. A read is accepted only if `AS(realigned) > AS(pass-1)` and the realigned primary is hq: identity ≥ `--min-identity` (98) and clips ≤ `--max-clip` (20) on both ends.
+  - Identity uses iso-segment's formula, so accepted reads are hq downstream too.
+  - A record without `NM` is rejected.
+  - `--report` writes the per-read decision.
+- `README.md` documents every rule, the acceptance order and the threshold sweep.
+- **Benchmark (ARK, mouse):** the four rules plus acceptance cut bridges from 157 to 7.7 per million reads and raise ≥ 200 kb intron recall from 0.66 to 0.98 (simulation), with the precision of a 300 kb first pass on real data.
+
+**iso-segment v0.0.10 — identity from `=`/`X` CIGARs, and non-colliding short flags**
+
+- **Identity:** when the CIGAR has `=`/`X` operations, mismatches now come from the `X` bases instead of `NM`. Tools that rewrite the CIGAR (iso-cigar) remove `NM`, which iso-segment read as 0 mismatches, so the reads iso-cigar edited got an inflated identity and could pass the hq cut. `M` CIGARs still use `NM`.
+- **Short flags:** `--batch` is now `-n` and `--singleton` is `-g`. Before, `-b` (`--bam` / `--batch`) and `-S` (`--step-size` / `--singleton`) each named two options.
+
 ## v0.0.46
 
 **iso-fusion — non-coding reference transcripts no longer crash the run**
