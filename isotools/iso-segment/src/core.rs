@@ -776,6 +776,7 @@ fn read_bam(
 ///   - Identity threshold (`args.identity`)
 ///   - Maximum 5' clip length (`args.max_clip_five`)
 ///   - Maximum 3' clip length (`args.max_clip_three`)
+///   - Minimum mapping quality (`args.min_mapq`)
 ///
 /// # Example
 ///
@@ -840,9 +841,15 @@ fn process_record(
         read.set_three_clip(read.three_clip.saturating_sub(read.polya_len));
     }
 
+    // INFO: MAPQ 255 (unavailable) is reported as None and accepted
+    let mapq_ok = record
+        .mapping_quality()
+        .map_or(true, |q| q.get() >= args.min_mapq);
+
     let accepted = read.identity >= args.identity
         && read.five_clip <= args.max_clip_five
-        && read.three_clip <= args.max_clip_three;
+        && read.three_clip <= args.max_clip_three
+        && mapq_ok;
 
     let mut record = RecordBuf::try_from_alignment_record(header, &record)
         .unwrap_or_else(|err| panic!("ERROR: failed to convert record: {err:?}"));

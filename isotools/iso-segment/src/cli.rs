@@ -89,6 +89,15 @@ pub struct Args {
     pub max_clip_three: usize,
 
     #[arg(
+        short = 'q',
+        long = "min-mapq",
+        help = "Min mapping quality to accept a read (0 disables the rule; MAPQ 255 = unavailable is accepted)",
+        value_name = "VALUE",
+        default_value_t = MIN_MAPQ,
+    )]
+    pub min_mapq: u8,
+
+    #[arg(
         short = 'P',
         long = "p2p",
         help = "Transition probability of looping in the polyA state ",
