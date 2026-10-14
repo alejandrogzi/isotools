@@ -1,5 +1,18 @@
 # isotools Changelog
 
+## v0.0.48
+
+**iso-segment v0.0.11 — new hq defaults from the ARK filtering benchmark, and a MAPQ rule**
+
+- **Defaults:** identity `-I` 98 → **95**, 5′ clip `--clip5` 20 → **10**; the 3′ clip stays at 20.
+- **`-q / --min-mapq` (default 1):** reads with a lower MAPQ go to lq. `0` disables the rule; MAPQ 255 (unavailable) is accepted.
+- **Why (ARK benchmark Q2, mouse Iso-Seq, 10 mice + two simulations):**
+  - The old 98% identity rule mostly removed correct reads.
+  - Under the new defaults the simulations lose far fewer good reads (2.8% → 0.6%; defect spike: 11.3% → 6.8%) and still drop > 99.5% of chimeras and adapter reads. Combined alignment F1 improves (+0.7 / +2.0 points).
+  - On real data intron, exon and CDS-exon F1 improve by +0.04–0.05 points (10/10 mice), and long-intron F1 is level.
+  - MAPQ ≥ 1 removes wrong-locus reads in the simulation and is neutral on real data.
+- To keep the old behaviour, pass `-I 98 --clip5 20 -q 0`.
+
 ## v0.0.47
 
 **iso-align v0.0.5 — selection rules for long-intron realignment and an accept mode**

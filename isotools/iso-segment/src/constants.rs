@@ -15,7 +15,7 @@
 pub const MIN_PER_ID: usize = 98;
 
 /// Maximum allowed 5' soft or hard clip length
-pub const MAX_CLIP5: usize = 20;
+pub const MAX_CLIP5: usize = 10;
 
 /// Maximum allowed 3' soft or hard clip length
 pub const MAX_CLIP3: usize = 20;
@@ -27,7 +27,10 @@ pub const POLYA_SUFFIX: usize = 30;
 pub const SUFFIX_STEP_SIZE: usize = 50;
 
 /// Minimum identity threshold for accepting reads (percent)
-pub const IDENTITY_THRESHOLD: f32 = 98.0;
+pub const IDENTITY_THRESHOLD: f32 = 95.0;
+
+/// Minimum mapping quality for accepting reads (MAPQ 0 = multi-mapped / wrong-locus reads)
+pub const MIN_MAPQ: u8 = 1;
 
 /// Minimum identity to discard extremely low quality reads (percent)
 pub const MINIMUM_IDENTITY: f32 = 60.0;
