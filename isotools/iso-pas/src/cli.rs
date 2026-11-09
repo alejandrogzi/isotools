@@ -9,6 +9,12 @@ pub const GENOMIC_POLYA_THRESHOLD: usize = 5; // INFO: 5 A's in genome
 pub const APARENT_THRESHOLD: f32 = 0.01;
 pub const WIGGLE: usize = 2;
 pub const INTRAPRIMING_RATIO_THRESHOLD: f32 = 0.5;
+// INFO: max APARENT score is taken over [end - w, end + w]; cleavage sites jitter by a few nt
+pub const APARENT_WINDOW: usize = 25;
+// INFO: a 3' end within this distance of an annotated transcript end (TES) is annotated
+pub const TES_WINDOW: usize = 50;
+// INFO: genomic A-run is searched in this many nt downstream of the 3' end [--genome]
+pub const GPA_WINDOW: usize = 20;
 
 #[derive(Debug, Parser)]
 #[clap(
@@ -103,6 +109,42 @@ pub struct Args {
         default_value_t = APARENT_THRESHOLD,
     )]
     pub aparent_threshold: f32,
+
+    #[arg(
+        long = "aparent-window",
+        required = false,
+        help = "APARENT window [max score over 3' end +/- VALUE nt; 0 = exact base]",
+        value_name = "VALUE",
+        default_value_t = APARENT_WINDOW,
+    )]
+    pub aparent_window: usize,
+
+    #[arg(
+        long = "tes-window",
+        required = false,
+        help = "3' ends within VALUE nt of an annotated transcript end (TES) are annotated [rescue when refs carry no 3' UTR]",
+        value_name = "VALUE",
+        default_value_t = TES_WINDOW,
+    )]
+    pub tes_window: usize,
+
+    #[arg(
+        short = 'g',
+        long = "genome",
+        required = false,
+        value_name = "PATH",
+        help = "Path to genome .2bit file; when given, the genomic A-run (GPA) is the longest A-run (T-run on '-') in the --gpa-window nt downstream of the model 3' end instead of the read-name tags [PR - TC - PA]"
+    )]
+    pub genome: Option<PathBuf>,
+
+    #[arg(
+        long = "gpa-window",
+        required = false,
+        help = "Window downstream of the 3' end scanned for the genomic A-run [only with --genome]",
+        value_name = "VALUE",
+        default_value_t = GPA_WINDOW,
+    )]
+    pub gpa_window: usize,
 
     #[arg(
         long = "outdir",

@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "iso-classify"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "anyhow",
  "bigtools",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "iso-intron"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "clap",
  "dashmap",
@@ -1199,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "iso-pas"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "bigtools",
  "clap",
@@ -1212,6 +1212,7 @@ dependencies = [
  "rayon",
  "rust-lapper",
  "simple_logger",
+ "twobit",
 ]
 
 [[package]]
@@ -1233,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "iso-utr"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "clap",
  "dashmap",

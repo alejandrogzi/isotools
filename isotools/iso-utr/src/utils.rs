@@ -13,7 +13,6 @@
 //! A recovery step can be performed by evaluating the support of the middle
 //! exon in the reference set of reads.
 
-use dashmap::DashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 pub struct ParallelCounter {
@@ -57,17 +56,5 @@ impl ParallelCounter {
 impl Default for ParallelCounter {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-pub struct ParallelAccumulator {
-    pub lines: DashSet<Vec<u8>>,
-}
-
-impl Default for ParallelAccumulator {
-    fn default() -> Self {
-        Self {
-            lines: DashSet::new(),
-        }
     }
 }

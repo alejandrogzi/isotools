@@ -51,6 +51,14 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
         .unwrap_or_else(|e| panic!("ERROR: Could not pack query -> {e}!"));
     let (index, reference_introns) = load_introns(&args.introns)
         .unwrap_or_else(|| panic!("ERROR: Could not load introns from {:?}!", args.introns));
+    // INFO: --retention-source query -> a record can only retain an intron that another query
+    // INFO: record splices; the table also holds introns of reads that never reach the query set
+    let query_source = args.retention_source == RetentionSource::Query;
+    let index = if query_source {
+        query_retention_index(&tracks, &reference_introns)
+    } else {
+        index
+    };
     let blacklist = unpack_blacklist(args.blacklist).unwrap_or_default();
 
     let accumulator = DashSet::new();
@@ -86,9 +94,13 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
             } else {
                 // INFO: weird edge case where all chr components are made up by single exons only
                 // INFO: test if anything in components has introns > 0, if not, return empty index
+                // INFO: with --retention-source query a strand without indexed introns has no query
+                // INFO: intron in the table, so nothing on it can be retained
                 if components
                     .iter()
-                    .all(|comp| comp.iter().all(|read| read.introns().is_empty())) || args.allow_missing
+                    .all(|comp| comp.iter().all(|read| read.introns().is_empty()))
+                    || args.allow_missing
+                    || query_source
                 {
                     log::warn!(
                         "WARN: No introns found for {} in input -> {}. This is an edge case a whole chromsome of single exons. All reads will be free of IRs!",
@@ -127,6 +139,76 @@ pub fn detect_intron_retentions(args: Args) -> Result<(), Box<dyn std::error::Er
     info!("Reads with retained introns: {}", counter.num_retentions());
     info!("Reads with ignored introns: {}", counter.num_ignored());
     Ok(())
+}
+
+/// Builds the retention index from the table introns that at least one query record splices
+///
+/// # Arguments
+///
+/// * `tracks` - The packed query records, keyed by `chr:strand`
+/// * `reference_introns` - The iso-classify table, keyed by `chr:start-end(strand)`
+///
+/// # Returns
+///
+/// * `IntronIndex` - One Lapper per `chr:strand`, holding only the query-spliced table introns
+fn query_retention_index(
+    tracks: &packbed::Map<String, Vec<Vec<GenePred>>>,
+    reference_introns: &HashMap<Vec<u8>, Intron>,
+) -> IntronIndex {
+    let mut spliced: HashSet<Vec<u8>> = HashSet::new();
+    for entry in tracks.iter() {
+        for read in entry.value().iter().flatten() {
+            let Some(strand) = read.strand() else {
+                continue;
+            };
+            let strand = strand.to_string();
+            for (start, end) in read.introns() {
+                spliced.insert(intron_key(&read.chrom, start, end, &strand));
+            }
+        }
+    }
+
+    let mut collector: HashMap<Vec<u8>, Vec<Iv>> = HashMap::new();
+    for (key, intron) in reference_introns.iter() {
+        if !spliced.contains(key) {
+            continue;
+        }
+
+        let mut chr_stranded = intron.chrom.clone();
+        chr_stranded.push(b':');
+        chr_stranded.extend_from_slice(intron.strand.to_string().as_bytes());
+        collector.entry(chr_stranded).or_default().push(Iv {
+            start: intron.start,
+            stop: intron.end,
+            val: (),
+        });
+    }
+
+    let kept: usize = collector.values().map(Vec::len).sum();
+    info!(
+        "INFO: --retention-source query keeps {} of {} table introns as retention candidates",
+        kept,
+        reference_introns.len()
+    );
+
+    collector
+        .into_iter()
+        .map(|(chr_stranded, ivs)| (chr_stranded, Lapper::new(ivs)))
+        .collect()
+}
+
+/// Lookup key of the intron table: `chr:start-end(strand)`
+fn intron_key(chrom: &[u8], start: u64, end: u64, strand: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(chrom.len() + 32);
+    key.extend_from_slice(chrom);
+    key.push(b':');
+    key.extend_from_slice(start.to_string().as_bytes());
+    key.push(b'-');
+    key.extend_from_slice(end.to_string().as_bytes());
+    key.push(b'(');
+    key.extend_from_slice(strand.as_bytes());
+    key.push(b')');
+    key
 }
 
 /// Processes the components of reads and introns in parallel
@@ -378,8 +460,7 @@ impl Schema<'_> {
             body.push_str("none<br>");
         } else {
             for intron in &self.ir_html {
-                // Replace any newlines the Display impl might emit
-                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+                body.push_str(&intron_html(intron));
             }
         }
 
@@ -388,7 +469,7 @@ impl Schema<'_> {
             body.push_str("none<br>");
         } else {
             for intron in &self.fr_html {
-                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+                body.push_str(&intron_html(intron));
             }
         }
 
@@ -397,7 +478,7 @@ impl Schema<'_> {
             body.push_str("none<br>");
         } else {
             for intron in &self.ig_html {
-                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+                body.push_str(&intron_html(intron));
             }
         }
 
@@ -406,7 +487,7 @@ impl Schema<'_> {
             body.push_str("none<br>");
         } else {
             for intron in &self.rt_html {
-                body.push_str(&format!("{}<br>", intron).replace('\n', ""));
+                body.push_str(&intron_html(intron));
             }
         }
 
@@ -423,6 +504,17 @@ impl Schema<'_> {
 
         out
     }
+}
+
+/// One intron as an html table row of the descriptor column
+///
+/// The Display impl is the tab-separated iso-classify row: its tabs would split the
+/// html into extra TSV/BED columns downstream (POLISH BEDs with 22-94 columns), so
+/// tabs become spaces and newlines are dropped; the descriptor stays one column.
+fn intron_html(intron: &Intron) -> String {
+    format!("{}<br>", intron)
+        .replace('\n', "")
+        .replace('\t', " ")
 }
 
 /// Detects if a read has any RT introns
@@ -659,5 +751,138 @@ fn detect_retention<'a>(
     if !flawed {
         schema.code.push(b'A');
         schema.status = b"PASS".to_vec();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // iso-classify row: 25 tab-separated columns, `seen` is column 5
+    fn intron_row(start: u64, end: u64, seen: usize) -> Intron {
+        let line = format!(
+            "chr1\t{start}\t{end}\t+\t{seen}\t{seen}\t0.9\t0.9\t8.0\t8.0\tGT\tAG\tCAGGTAAGT\tTTTTTTTTTTTTTTTTTTTCAGG\tNEW\tNO_REFERENCE_SUPPORT\tIN_FRAME\tAAAAAAAAAAAA\tCCCCCCCCCCCC\tNOT_RT_INTRON\tNOT_NAG_SS\tU2\tNO_REPEAT\t{}\tSPLICED",
+            end - start
+        );
+        Intron::from(&line).unwrap()
+    }
+
+    fn run(model: &str, seen: usize) -> String {
+        let intron = intron_row(2000, 3000, seen);
+        let mut introns = HashMap::new();
+        introns.insert(b"chr1:2000-3000(+)".to_vec(), intron);
+        let index = Lapper::new(vec![Iv {
+            start: 2000,
+            stop: 3000,
+            val: (),
+        }]);
+
+        // single-exon model over the intron
+        let mut read = GenePred::from_coords(b"chr1".to_vec(), 1000, 5000, Default::default());
+        read.set_name(Some(model.as_bytes().to_vec()));
+        read.set_strand(Some(genepred::Strand::Forward));
+
+        let counter = ParallelCounter::default();
+        let lines = process_component(
+            vec![read],
+            &introns,
+            &index,
+            &HashSet::new(),
+            &counter,
+            false,
+            false,
+            false,
+        );
+        String::from_utf8(lines[0].clone()).unwrap()
+    }
+
+    #[test]
+    fn retained_spliced_intron_is_a_retention_regardless_of_support() {
+        // owner rule: a retention of a true intron is a retention; read support is not
+        // required (every intron is validated separately downstream)
+        for seen in [1, 40] {
+            let line = run("R632@54__TC0#CN150", seen);
+            assert!(line.contains("\tRETENTION\tR\t"), "{line}");
+        }
+    }
+
+    #[test]
+    fn descriptor_html_stays_one_column() {
+        // Q4 5a: tabs of the iso-classify row split the html into 22-94 BED columns
+        for seen in [1, 40] {
+            let line = run("R632@54__TC0#CN150", seen);
+            assert_eq!(line.trim_end().split('\t').count(), 4, "{line}");
+            assert!(line.contains("chr1 2000 3000 +"), "{line}");
+        }
+    }
+
+    /// Runs the binary entry point on a two-record query and returns the `wide` model's row
+    fn run_source(source: &str) -> String {
+        use clap::Parser;
+
+        let dir = std::env::temp_dir().join(format!(
+            "iso_intron_source_{}_{}",
+            source,
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // `wide` is one exon over both table introns; `spliced` splices only 2000-3000.
+        // 3500-4000 comes from a read outside the query set (e.g. one that never got an ORF)
+        let query = dir.join("query.bed");
+        std::fs::write(
+            &query,
+            "chr1\t1000\t5000\twide\t0\t+\t1000\t5000\t0,0,0\t1\t4000,\t0,\n\
+             chr1\t1000\t5000\tspliced\t0\t+\t1000\t5000\t0,0,0\t2\t1000,2000,\t0,2000,\n",
+        )
+        .unwrap();
+        let introns = dir.join("introns.tsv");
+        let rows: Vec<String> = [(2000, 3000), (3500, 4000)]
+            .iter()
+            .map(|(start, end)| {
+                format!(
+                    "chr1\t{start}\t{end}\t+\t5\t5\t0.9\t0.9\t8.0\t8.0\tGT\tAG\tCAGGTAAGT\tTTTTTTTTTTTTTTTTTTTCAGG\tNEW\tNO_REFERENCE_SUPPORT\tIN_FRAME\tAAAAAAAAAAAA\tCCCCCCCCCCCC\tNOT_RT_INTRON\tNOT_NAG_SS\tU2\tNO_REPEAT\t{}\tSPLICED\n",
+                    end - start
+                )
+            })
+            .collect();
+        std::fs::write(&introns, rows.concat()).unwrap();
+
+        let args = Args::parse_from([
+            "iso-intron",
+            "--introns",
+            introns.to_str().unwrap(),
+            "--query",
+            query.to_str().unwrap(),
+            "--outdir",
+            dir.to_str().unwrap(),
+            "--prefix",
+            "t",
+            "--threads",
+            "1",
+            "--retention-source",
+            source,
+        ]);
+        detect_intron_retentions(args).unwrap();
+
+        let out = std::fs::read_to_string(dir.join("t.retentions.tsv")).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        out.lines()
+            .find(|line| line.starts_with("wide\t"))
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn retention_source_query_ignores_introns_no_query_record_splices() {
+        let all = run_source("all");
+        assert!(all.contains("- events: 2<br>"), "{all}");
+        assert!(all.contains("chr1 3500 4000 +"), "{all}");
+
+        let query = run_source("query");
+        assert!(query.contains("\tRETENTION\tR\t"), "{query}");
+        assert!(query.contains("- events: 1<br>"), "{query}");
+        assert!(query.contains("chr1 2000 3000 +"), "{query}");
+        assert!(!query.contains("chr1 3500 4000 +"), "{query}");
     }
 }

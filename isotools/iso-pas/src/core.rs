@@ -88,6 +88,12 @@ pub fn pas_caller(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let accumulator = ParallelAccumulator::default();
     let empty_scores = HashMap::new();
 
+    if args.genome.is_none() {
+        log::warn!(
+            "WARN: No --genome given; the genomic A-run (GPA) falls back to the read-name tags [PR - TC - PA]"
+        );
+    }
+
     tracks.into_par_iter().for_each(|(chr, components)| {
         counter.inc_comp(components.len() as u32);
 
@@ -99,7 +105,20 @@ pub fn pas_caller(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             &empty_scores
         });
 
-        process_components(components, local_scores, &counter, &config, &accumulator);
+        // INFO: one chromosome sequence per task; keys are '<chr>:<strand>'
+        let sequence = args
+            .genome
+            .as_ref()
+            .and_then(|genome| load_chromosome(genome, chr.split(':').next().unwrap_or(&chr)));
+
+        process_components(
+            components,
+            local_scores,
+            sequence.as_deref(),
+            &counter,
+            &config,
+            &accumulator,
+        );
     });
 
     log::info!(
@@ -151,9 +170,12 @@ pub fn pas_caller(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug, Clone)]
 struct Config {
     aparent_threshold: f32,
+    aparent_window: usize,
+    gpa_window: usize,
     max_gpa_length: usize,
     min_polya_length: usize,
     recover: bool,
+    tes_window: usize,
     wiggle: usize,
 }
 
@@ -176,9 +198,12 @@ impl Config {
     fn new(args: &Args) -> Self {
         Self {
             aparent_threshold: args.aparent_threshold,
+            aparent_window: args.aparent_window,
+            gpa_window: args.gpa_window,
             max_gpa_length: args.max_gpa_length,
             min_polya_length: args.min_polya_length,
             recover: args.recover,
+            tes_window: args.tes_window,
             wiggle: args.wiggle,
         }
     }
@@ -209,6 +234,7 @@ impl Config {
 fn process_components(
     components: Vec<Vec<GenePred>>,
     scores: &HashMap<usize, f32>,
+    sequence: Option<&[u8]>,
     counter: &ParallelCounter,
     config: &Config,
     accumulator: &ParallelAccumulator,
@@ -224,7 +250,7 @@ fn process_components(
             role == Some(b"reference".to_vec())
         });
 
-        let result = process_component(refs, queries, scores, config, counter);
+        let result = process_component(refs, queries, scores, sequence, config, counter);
 
         result.into_iter().for_each(|descriptor| {
             if !descriptor.is_empty() {
@@ -377,6 +403,7 @@ fn process_component(
     refs: Vec<GenePred>,
     queries: Vec<GenePred>,
     scores: &HashMap<usize, f32>,
+    sequence: Option<&[u8]>,
     config: &Config,
     counter: &ParallelCounter,
 ) -> Vec<Vec<u8>> {
@@ -406,22 +433,25 @@ fn process_component(
         };
 
         let mut schema = Schema::default();
-        let score = scores.get(&(end as usize)).copied().unwrap_or_else(|| {
-            // INFO: we cannot panic because peak_threshold in APARENT side drops
-            // very low scores
-            log::warn!(
-                "WARN: Could not get aparent score for read {:?} in scores",
-                read,
-            );
-            0.0
-        });
+        // INFO: max over a window around the 3' end, not a point lookup: a cleavage
+        // site a few nt away from the model end otherwise reads as 0. Missing positions
+        // are expected (peak_threshold in APARENT drops very low scores)
+        let score = get_aparent_score(scores, end, config.aparent_window);
 
-        let (clip, clipped_a, poly_a, gpa) = get_polya_stats(
+        let (clip, clipped_a, poly_a, tag_gpa) = get_polya_stats(
             read.name()
                 .unwrap_or_else(|| panic!("ERROR: Could not get read name {:?}", read.name())),
         );
 
-        let location = get_location(read.end, &refs);
+        // INFO: with a genome, the genomic A-run is read downstream of the model's
+        // 3' end, not taken from the tags of the one read that named the model
+        let gpa = match sequence {
+            Some(seq) => get_genomic_a_run(seq, end, read.strand, config.gpa_window),
+            None => tag_gpa,
+        };
+
+        // WARN: strand-aware 3' end; `read.end` is the 5' end on the minus strand
+        let location = get_location(end, read.strand, &refs, config.tes_window);
         schema.position = location;
 
         if any_true!(
@@ -431,7 +461,7 @@ fn process_component(
             seen_positions.contains(&(end - config.wiggle as u64)),
             seen_positions.contains(&(end + config.wiggle as u64)),
             score > config.aparent_threshold,
-            location == Position::UTR
+            matches!(location, Position::UTR | Position::TES)
         ) {
             // passes.push(read.line.clone());
             schema.status = b"PASS";
@@ -455,6 +485,7 @@ fn process_component(
         schema.clipped_a = clipped_a;
         schema.poly_a = poly_a;
         schema.gpa = gpa;
+        schema.gpa_source = if sequence.is_some() { "genome" } else { "tags" };
         schema.size = size;
 
         descriptor.insert(read.name(), schema);
@@ -549,6 +580,7 @@ struct Schema<'a> {
     clipped_a: u32,
     poly_a: u32,
     gpa: u32,
+    gpa_source: &'static str,
     position: Position,
     score: f32,
     ratio: f32,
@@ -582,7 +614,7 @@ impl Schema<'_> {
         body.push_str(&format!("- component events: {}<br>", self.events));
         body.push_str(&format!("- ratio: {}<br>", self.ratio));
         body.push_str(&format!("- APARENT score: {}<br>", self.score));
-        body.push_str(&format!("- GPA: {}<br>", self.gpa));
+        body.push_str(&format!("- GPA: {} [{}]<br>", self.gpa, self.gpa_source));
         body.push_str(&format!("- polyA: {}<br>", self.poly_a));
         body.push_str(&format!("- clipped A: {}<br>", self.clipped_a));
         body.push_str(&format!("- clip: {}<br>", self.clip));
@@ -608,6 +640,7 @@ impl Schema<'_> {
 enum Position {
     CDS,
     UTR,
+    TES, // INFO: within --tes-window of an annotated transcript end
     #[default]
     Unknown,
 }
@@ -617,46 +650,137 @@ impl std::fmt::Display for Position {
         match self {
             Position::CDS => write!(f, "CDS"),
             Position::UTR => write!(f, "UTR"),
+            Position::TES => write!(f, "TES"),
             Position::Unknown => write!(f, "UNKNOWN"),
         }
     }
 }
 
-/// Get the read location using TOGA
+/// Get the location of a strand-aware 3' end against the references
+///
+/// Priority: inside an annotated 3' UTR (UTR), else within `tes_window` nt of an
+/// annotated transcript end (TES), else inside a reference body (CDS), else UNKNOWN.
+/// The TES test is what rescues annotated ends when references carry no UTRs
+/// (TOGA2 projections: thickEnd == txEnd), where the UTR test cannot fire.
 ///
 /// # Arguments
 ///
-/// * `read_end` - End position of the read
-/// * `toga` - Vector of GenePred to process
-/// * `handle` - ModuleMap to set the value
+/// * `three_prime` - 3' end of the model [end on '+', start on '-']
+/// * `strand` - Strand of the model
+/// * `refs` - Vector of reference GenePred in the component
+/// * `tes_window` - Max distance to an annotated transcript end
 ///
 /// # Example
 ///
 /// ```ignore
-/// let read_end = 100;
-/// let mut toga = vec![GenePred::default()];
-/// let mut handle = ModuleMap::default();
-///
-/// get_location(read_end, &mut toga, &mut handle);
+/// let location = get_location(175, Some(Strand::Forward), &refs, 50);
 /// ```
-fn get_location(read_end: u64, refs: &Vec<GenePred>) -> Position {
-    let location = Position::Unknown;
+fn get_location(
+    three_prime: u64,
+    strand: Option<Strand>,
+    refs: &[GenePred],
+    tes_window: usize,
+) -> Position {
+    let mut location = Position::Unknown;
+
+    // WARN: intervals are half-open [start, end); `three_prime` is the exclusive end on
+    // '+' and the inclusive start on '-'. Test the last transcribed base, so that a model
+    // ending exactly at an annotated txEnd/UTR end is inside it [the old strict `<` on
+    // both sides left such ends UNKNOWN with --tes-window 0]
+    let base = match strand {
+        Some(Strand::Reverse) => three_prime,
+        _ => three_prime.saturating_sub(1),
+    };
 
     for projection in refs.iter() {
-        if projection.start < read_end && read_end < projection.end {
+        if projection.start <= base && base < projection.end {
             let utr = projection.three_prime_utr();
             if utr
                 .iter()
-                .any(|(utr_start, utr_end)| *utr_start < read_end && read_end < *utr_end)
+                .any(|(utr_start, utr_end)| *utr_start <= base && base < *utr_end)
             {
                 return Position::UTR;
             }
 
-            return Position::CDS;
+            location = Position::CDS;
         }
     }
 
+    let near_tes = refs.iter().any(|projection| {
+        let tes = match projection.strand {
+            Some(Strand::Reverse) => projection.start,
+            _ => projection.end,
+        };
+        tes.abs_diff(three_prime) <= tes_window as u64
+    });
+
+    if near_tes {
+        return Position::TES;
+    }
+
     location
+}
+
+/// Max APARENT score over `[end - window, end + window]`; 0.0 when no peak is there
+///
+/// # Example
+///
+/// ```ignore
+/// let score = get_aparent_score(&scores, 1000, 25);
+/// ```
+fn get_aparent_score(scores: &HashMap<usize, f32>, end: u64, window: usize) -> f32 {
+    let end = end as usize;
+    (end.saturating_sub(window)..=end.saturating_add(window))
+        .filter_map(|pos| scores.get(&pos).copied())
+        .fold(0.0, f32::max)
+}
+
+/// Longest genomic A-run downstream of a strand-aware 3' end
+///
+/// On '+' scans `seq[end..end + window]` for A; on '-' scans
+/// `seq[start - window..start]` for T (A on the transcript strand).
+///
+/// # Example
+///
+/// ```ignore
+/// let gpa = get_genomic_a_run(b"CCCCAAAAAAG", 4, Some(Strand::Forward), 20);
+/// assert_eq!(gpa, 6);
+/// ```
+fn get_genomic_a_run(seq: &[u8], end: u64, strand: Option<Strand>, window: usize) -> u32 {
+    let end = (end as usize).min(seq.len());
+    let (slice, base) = match strand {
+        Some(Strand::Reverse) => (&seq[end.saturating_sub(window)..end], b'T'),
+        _ => (&seq[end..(end + window).min(seq.len())], b'A'),
+    };
+
+    let (mut best, mut run) = (0, 0);
+    for nt in slice {
+        if nt.to_ascii_uppercase() == base {
+            run += 1;
+            best = best.max(run);
+        } else {
+            run = 0;
+        }
+    }
+
+    best
+}
+
+/// Loads one chromosome sequence from a .2bit file; None when it is absent
+fn load_chromosome(genome: &std::path::Path, chr: &str) -> Option<Vec<u8>> {
+    let mut reader = twobit::TwoBitFile::open(genome)
+        .unwrap_or_else(|e| panic!("ERROR: Cannot open 2bit file {:?} -> {e}", genome));
+
+    match reader.read_sequence(chr, ..) {
+        Ok(seq) => Some(seq.into_bytes()),
+        Err(e) => {
+            log::warn!(
+                "WARN: No sequence for {chr} in {:?} -> {e}; using read tags",
+                genome
+            );
+            None
+        }
+    }
 }
 
 /// Parallel accumulator
@@ -943,18 +1067,278 @@ mod tests {
             extras: std::collections::HashMap::new(),
         }];
 
-        assert_eq!(get_location(175, &refs), Position::UTR);
-        assert_eq!(get_location(130, &refs), Position::CDS);
+        let fwd = Some(Strand::Forward);
+        assert_eq!(get_location(175, fwd, &refs, 0), Position::UTR);
+        assert_eq!(get_location(130, fwd, &refs, 0), Position::CDS);
+        assert_eq!(get_location(130, fwd, &refs, 50), Position::CDS);
+    }
+
+    #[test]
+    fn end_exactly_at_the_annotated_tx_end_is_inside_the_utr() {
+        // half-open coordinates: a '+' model ending at txEnd (200) has its last base (199)
+        // in the 3' UTR [150, 200); a '-' model starting at txStart (100) has its first
+        // base in the 3' UTR [100, 120). Both read UNKNOWN with the old strict `<` tests
+        let utr_ref = |strand| GenePred {
+            chrom: b"chr1".to_vec(),
+            start: 100,
+            end: 200,
+            name: Some(b"tx1".to_vec()),
+            strand: Some(strand),
+            thick_start: Some(120),
+            thick_end: Some(150),
+            block_count: Some(1),
+            block_starts: Some(vec![100]),
+            block_ends: Some(vec![200]),
+            extras: std::collections::HashMap::new(),
+        };
+
+        let fwd = vec![utr_ref(Strand::Forward)];
+        assert_eq!(
+            get_location(200, Some(Strand::Forward), &fwd, 0),
+            Position::UTR
+        );
+        // one past txEnd is outside the record
+        assert_eq!(
+            get_location(201, Some(Strand::Forward), &fwd, 0),
+            Position::Unknown
+        );
+        // first base of the UTR [end = 151 -> base 150] is UTR, the last CDS base is not
+        assert_eq!(
+            get_location(151, Some(Strand::Forward), &fwd, 0),
+            Position::UTR
+        );
+        assert_eq!(
+            get_location(150, Some(Strand::Forward), &fwd, 0),
+            Position::CDS
+        );
+
+        let rev = vec![utr_ref(Strand::Reverse)];
+        assert_eq!(
+            get_location(100, Some(Strand::Reverse), &rev, 0),
+            Position::UTR
+        );
+        assert_eq!(
+            get_location(119, Some(Strand::Reverse), &rev, 0),
+            Position::UTR
+        );
+        assert_eq!(
+            get_location(120, Some(Strand::Reverse), &rev, 0),
+            Position::CDS
+        );
+        assert_eq!(
+            get_location(99, Some(Strand::Reverse), &rev, 0),
+            Position::Unknown
+        );
+    }
+
+    fn test_config() -> Config {
+        Config {
+            aparent_threshold: 0.01,
+            aparent_window: APARENT_WINDOW,
+            gpa_window: GPA_WINDOW,
+            max_gpa_length: 5,
+            min_polya_length: 50,
+            recover: false,
+            tes_window: TES_WINDOW,
+            wiggle: 2,
+        }
+    }
+
+    fn model(name: &str, start: u64, end: u64, strand: Strand) -> GenePred {
+        let mut read = GenePred::from_coords(b"chr1".to_vec(), start, end, Default::default());
+        read.set_name(Some(name.as_bytes().to_vec()));
+        read.set_strand(Some(strand));
+        read
+    }
+
+    fn status(
+        refs: Vec<GenePred>,
+        query: GenePred,
+        scores: &HashMap<usize, f32>,
+        sequence: Option<&[u8]>,
+        config: &Config,
+    ) -> String {
+        let counter = ParallelCounter::default();
+        let line = process_component(refs, vec![query], scores, sequence, config, &counter);
+        String::from_utf8(line[0].clone()).unwrap()
+    }
+
+    // Q4 3a: AP2D-like model, GPA 21 from the tags, APARENT ~0, UNKNOWN position
+    const IP_NAME: &str = "R16@53__TC0#PA0#PR21#CN33";
+
+    #[test]
+    fn minus_strand_end_inside_three_prime_utr_is_rescued() {
+        // '-' reference: 3' UTR is [1000, 1200), CDS [1200, 1800)
+        let mut reference = model("ref", 1000, 2000, Strand::Reverse);
+        reference.thick_start = Some(1200);
+        reference.thick_end = Some(1800);
+        // the model's 3' end (start = 1100) is in the UTR; its 5' end (2500) is not
+        let query = model(IP_NAME, 1100, 2500, Strand::Reverse);
+        let config = Config {
+            tes_window: 0,
+            ..test_config()
+        };
+
+        let line = status(vec![reference], query, &HashMap::new(), None, &config);
+        assert!(line.contains("\tPASS\t"), "{line}");
+        assert!(line.contains("position: UTR"), "{line}");
+    }
+
+    #[test]
+    fn reference_without_utr_rescues_ends_at_the_annotated_tes() {
+        // TOGA2-like '+' projection: thickEnd == txEnd, no 3' UTR to test
+        let mut reference = model("ref", 1000, 2000, Strand::Forward);
+        reference.thick_start = Some(1000);
+        reference.thick_end = Some(2000);
+        let near = model(IP_NAME, 1000, 2030, Strand::Forward);
+        let far = model(IP_NAME, 1000, 2300, Strand::Forward);
+
+        let line = status(
+            vec![reference.clone()],
+            near,
+            &HashMap::new(),
+            None,
+            &test_config(),
+        );
+        assert!(
+            line.contains("\tPASS\t") && line.contains("position: TES"),
+            "{line}"
+        );
+        let line = status(vec![reference], far, &HashMap::new(), None, &test_config());
+        assert!(line.contains("\tINTRAPRIMING\t"), "{line}");
+    }
+
+    #[test]
+    fn tes_window_is_inclusive_and_strand_aware() {
+        // '+' TES = txEnd (2000, exclusive), '-' TES = txStart (1000)
+        let fwd = vec![model("ref", 1000, 2000, Strand::Forward)];
+        let rev = vec![model("ref", 1000, 2000, Strand::Reverse)];
+        let f = Some(Strand::Forward);
+        let r = Some(Strand::Reverse);
+
+        assert_eq!(get_location(2050, f, &fwd, 50), Position::TES);
+        assert_eq!(get_location(2051, f, &fwd, 50), Position::Unknown);
+        assert_eq!(get_location(950, r, &rev, 50), Position::TES);
+        assert_eq!(get_location(949, r, &rev, 50), Position::Unknown);
+        // a '-' end near txEnd (its 5' end) is not a TES
+        assert_eq!(get_location(1990, r, &rev, 50), Position::CDS);
+        // window 0: only the exact TES
+        assert_eq!(get_location(2001, f, &fwd, 0), Position::Unknown);
+        assert_eq!(get_location(1000, r, &rev, 0), Position::TES);
+    }
+
+    #[test]
+    fn aparent_peak_a_few_nt_from_the_end_is_found() {
+        let query = || model(IP_NAME, 1000, 2000, Strand::Forward);
+        let scores: HashMap<usize, f32> = [(2003, 0.4)].into_iter().collect();
+
+        let line = status(vec![], query(), &scores, None, &test_config());
+        assert!(
+            line.contains("\tPASS\t") && line.contains("APARENT score: 0.4"),
+            "{line}"
+        );
+        // the old point lookup misses it
+        let config = Config {
+            aparent_window: 0,
+            ..test_config()
+        };
+        let line = status(vec![], query(), &scores, None, &config);
+        assert!(line.contains("\tINTRAPRIMING\t"), "{line}");
+    }
+
+    #[test]
+    fn load_chromosome_reads_a_two_bit_sequence() {
+        // minimal .2bit: one sequence "chr1" = CCCCAAAAAAGT, no N/mask blocks
+        let seq = b"CCCCAAAAAAGT";
+        let code = |nt: u8| match nt {
+            b'T' => 0u8,
+            b'C' => 1,
+            b'A' => 2,
+            _ => 3,
+        };
+        let mut bytes = Vec::new();
+        for word in [0x1A412743_u32, 0, 1, 0] {
+            bytes.extend(word.to_le_bytes());
+        }
+        bytes.push(4);
+        bytes.extend(b"chr1");
+        bytes.extend(((bytes.len() + 4) as u32).to_le_bytes());
+        for word in [seq.len() as u32, 0, 0, 0] {
+            bytes.extend(word.to_le_bytes());
+        }
+        bytes.extend(seq.chunks(4).map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u8, |acc, (i, nt)| acc | (code(*nt) << (6 - 2 * i)))
+        }));
+
+        let path = std::env::temp_dir().join(format!("iso_pas_{}.2bit", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        let chr1 = load_chromosome(&path, "chr1");
+        let missing = load_chromosome(&path, "chr2");
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(chr1.as_deref(), Some(&seq[..]));
+        assert_eq!(missing, None);
+        assert_eq!(
+            get_genomic_a_run(seq, 4, Some(Strand::Forward), GPA_WINDOW),
+            6
+        );
+    }
+
+    #[test]
+    fn genomic_a_run_comes_from_the_genome_downstream_of_the_end() {
+        // tags claim 21 genomic A; the genome downstream of the '+' end has none
+        let mut genome = vec![b'C'; 3000];
+        let query = || model(IP_NAME, 1000, 2000, Strand::Forward);
+        let line = status(
+            vec![],
+            query(),
+            &HashMap::new(),
+            Some(&genome),
+            &test_config(),
+        );
+        assert!(
+            line.contains("\tPASS\t") && line.contains("GPA: 0 [genome]"),
+            "{line}"
+        );
+
+        // an A-run of 8 starting 3 nt downstream is intrapriming
+        genome[2003..2011].copy_from_slice(b"AAAAAAAA");
+        let line = status(
+            vec![],
+            query(),
+            &HashMap::new(),
+            Some(&genome),
+            &test_config(),
+        );
+        assert!(
+            line.contains("\tINTRAPRIMING\t") && line.contains("GPA: 8 [genome]"),
+            "{line}"
+        );
+
+        // '-' strand: the run is upstream in genome coordinates and made of T
+        genome[990..998].copy_from_slice(b"TTTTTTTT");
+        let query = model(IP_NAME, 1000, 2000, Strand::Reverse);
+        let line = status(
+            vec![],
+            query,
+            &HashMap::new(),
+            Some(&genome),
+            &test_config(),
+        );
+        assert!(
+            line.contains("\tINTRAPRIMING\t") && line.contains("GPA: 8 [genome]"),
+            "{line}"
+        );
     }
 
     #[test]
     fn cn_tag_weighs_a_read_like_that_many_identical_reads() {
         let config = Config {
-            aparent_threshold: 0.01,
-            max_gpa_length: 5,
-            min_polya_length: 50,
             recover: true,
-            wiggle: 2,
+            ..test_config()
         };
         let read = |name: &str, end: u64| {
             let mut read = GenePred::from_coords(b"chr1".to_vec(), 100, end, Default::default());
@@ -964,10 +1348,17 @@ mod tests {
         };
         let run = |queries: Vec<GenePred>| -> Vec<String> {
             let counter = ParallelCounter::default();
-            process_component(Vec::new(), queries, &HashMap::new(), &config, &counter)
-                .into_iter()
-                .map(|line| String::from_utf8(line).unwrap())
-                .collect()
+            process_component(
+                Vec::new(),
+                queries,
+                &HashMap::new(),
+                None,
+                &config,
+                &counter,
+            )
+            .into_iter()
+            .map(|line| String::from_utf8(line).unwrap())
+            .collect()
         };
 
         // the whole polyA of `pass` is clipped; `ip` has 20 genomic A and no support

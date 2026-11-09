@@ -1,10 +1,19 @@
 // Copyright (c) 2026 Alejandro Gonzales-Irribarren <alejandrxgzi@gmail.com>
 // Distributed under the terms of the Apache License, Version 2.0.
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use std::path::PathBuf;
 
 pub const RETENTION_RATIO_THRESHOLD: f32 = 0.5;
+
+/// Which introns of the `--introns` table can be retained
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RetentionSource {
+    /// Every intron in the table
+    All,
+    /// Only introns spliced by at least one record of the --query BED
+    Query,
+}
 
 #[derive(Debug, Parser)]
 #[clap(
@@ -108,4 +117,14 @@ pub struct Args {
         action = ArgAction::SetTrue
     )]
     pub allow_missing: bool,
+
+    #[arg(
+        short = 's',
+        long = "retention-source",
+        help = "Introns a record can retain: 'all' table introns, or only those spliced by at least one --query record (the table can hold introns of reads that never reach the query set)",
+        value_name = "SOURCE",
+        value_enum,
+        default_value_t = RetentionSource::All
+    )]
+    pub retention_source: RetentionSource,
 }
