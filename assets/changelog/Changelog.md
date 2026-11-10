@@ -1,5 +1,29 @@
 # isotools Changelog
 
+## v0.0.49
+
+**Finishing-stage fixes from the ARK Q4 diagnosis (iso-pas v0.0.3, iso-classify v0.0.14, iso-intron v0.0.18, iso-utr v0.0.14)**
+
+- **iso-pas v0.0.3 — intrapriming rescues that can fire**
+  - The "3′ end inside an annotated 3′ UTR" rescue tested `read.end`, which is the 5′ end on the minus strand. It now tests the strand-aware 3′ end.
+  - References without 3′ UTRs (TOGA2: thickEnd == txEnd) could never rescue an end. A 3′ end within `--tes-window` (default **50** nt) of an annotated transcript end now passes too (`position: TES`).
+  - The UTR/body tests now use the last transcribed base of the half-open interval (end − 1 on `+`, start on `−`); a model ending exactly at an annotated txEnd/UTR end was UNKNOWN with `--tes-window 0`.
+  - APARENT is read as the max over 3′ end ± `--aparent-window` (default **25** nt) instead of one exact base; `0` restores the point lookup.
+  - New `-g / --genome <.2bit>`: the genomic A-run (GPA) is the longest A-run (T-run on `-`) in the `--gpa-window` (default **20**) nt downstream of the model's 3′ end, instead of the read-name tags of the one read that named the model. Without `--genome` the tags are used, as before, with a warning. The descriptor reports the source (`GPA: n [genome|tags]`).
+- **iso-classify v0.0.14 — a frequent intron is not an ARTIFACT because of one weak site**
+  - A non-RT, unannotated intron < 50 kb that fell to ARTIFACT only because one SpliceAI/MaxEnt site is weak is now UNCLEAR when it is read-supported: the other SpliceAI site is ≥ `-S`, `seen` ≥ `--artifact-rescue-min-reads` (default **3**) and `seen/spanned` ≥ `--artifact-rescue-min-freq` (default **0.5**). `--artifact-rescue-min-reads 0` restores the old behaviour.
+- **iso-intron v0.0.18 — one-column descriptors, and retentions only of query-spliced introns**
+  - The html descriptor embedded the tab-separated iso-classify rows, so POLISH BEDs had 22–94 columns. Tabs are now spaces; the descriptor is one column. Retention classification is unchanged.
+  - New `-s / --retention-source <all|query>` (default `all`, the old behaviour). With `query`, a record can only retain an intron that at least one `--query` record splices. ARK builds the iso-classify table from every read that passed fusion detection, so it also holds introns of reads whose models never reach POLISH (no ORF, collapse-excluded, NMD). One such read with a SPLICED intron sent good models to retentions. RT/artifact detection of a record's own introns still uses the whole table. On the ARK CI set, `query` keeps 23 of 47 table introns as retention candidates.
+- **iso-utr v0.0.14 — truncations check the intron chain and are deterministic**
+  - A model is TRUNCATED only when its start lies inside a non-first exon of a container **and** its intron chain continues the container's chain from that exon on. An alternative first exon inside another isoform's exon is no longer a truncation.
+  - The `pass_cds_start_exons` guard (a truncated model sharing its first coding exon with a PASS model passes) is applied in a second pass over the full PASS set, so results no longer depend on the query order. The guard could also be polluted by a query marked PASS before a later container exon truncated it; that is gone too.
+  - Novel start: with `--ref == --query` (ARK) every query was its own reference start, so the novel-start branch never ran. The separate branch is removed and NOVEL_START is now a reachable, informational label: a start is novel when no *other* record starts there. It does not change the status. With `--ref != --query` this narrows truncation calls: the old branch also flagged first exons that only overlapped a reference middle exon; those now pass, except a start in the upstream intron that shares the exon's donor (see below).
+  - New `-s / --start-junction` (default off): decide truncations by the query's first (start) junction instead of its whole intron chain. A query that starts inside a non-first exon k of another model is truncated when its first intron is the intron leaving exon k; its downstream chain may differ. This catches 5′ fragments whose chain diverges later; an alternative first exon that splices elsewhere still passes. On the ARK benchmark simulation (S2) it adds 3,585 truncation calls, of which 3,077 are fragments of a true transcript, 156 simulated 5′-truncated isoforms and 258 real isoforms (measured when `-s` also held the intronic-start rule below with a full first-intron match).
+  - **Intronic starts sharing a donor, in both modes:** a first exon that starts inside the intron upstream of a middle exon k of another model, without reaching exon k−1 (so it does not retain that intron), and ends at exon k's donor is TRUNCATED (`exon:` names exon k). Only the donor must match; the acceptor and the downstream chain may differ. Both strands. Before, this was `-s` only and needed the whole first intron to match. The rule only adds calls. On the HLepoLabi3A metassembly hq set (71,966 models) default-mode TRUNCATED goes from 1,889 to 10,236. The extension into the intron has a median of 241 nt (90th percentile 1.2 kb), and ~94% of the new calls also continue the container's whole chain.
+  - **Deterministic output:** labels were already stable after the second-pass guard, but rows were written in thread-completion order, so two runs gave byte-different files. Rows are now sorted by id and exact duplicates dropped; outputs are byte-identical across runs and thread counts. Records sharing a name no longer collapse into whichever was inserted last into a name-keyed map; each keeps its own row.
+  - `--threads` had no effect (`main` built a thread pool and dropped it); the run now uses a pool of that size. The component count in the log was doubled; fixed.
+
 ## v0.0.48
 
 **iso-segment v0.0.11 — new hq defaults from the ARK filtering benchmark, and a MAPQ rule**

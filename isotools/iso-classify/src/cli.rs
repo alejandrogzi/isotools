@@ -203,6 +203,26 @@ pub struct IntronArgs {
     pub maxent_min_ss_signal: f32,
 
     #[arg(
+        long = "artifact-rescue-min-reads",
+        required = false,
+        value_name = "INT",
+        num_args = 1,
+        help = "Read-supported introns with one weak SpliceAI site are UNCLEAR, not ARTIFACT, when seen in >= INT reads [0 disables the rescue]",
+        default_value_t = 3
+    )]
+    pub artifact_rescue_min_reads: usize,
+
+    #[arg(
+        long = "artifact-rescue-min-freq",
+        required = false,
+        value_name = "FLOAT",
+        num_args = 1,
+        help = "... and when seen/spanned >= FLOAT [see --artifact-rescue-min-reads]",
+        default_value_t = 0.5
+    )]
+    pub artifact_rescue_min_freq: f32,
+
+    #[arg(
         short = 'p',
         long = "prefix",
         required = false,

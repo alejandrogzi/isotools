@@ -24,10 +24,6 @@ fn main() {
 
     let args: Args = Args::parse();
     init_with_level(args.level).unwrap();
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads)
-        .build()
-        .unwrap();
 
     detect_truncations(args).unwrap_or_else(|e| {
         error!("{}", e);

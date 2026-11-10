@@ -50,6 +50,26 @@ type ScanScores = Option<(SpliceScoreMap, SpliceScoreMap)>;
 const INTRON_SIZE_THRESHOLD: u64 = 50000; // 50kb
 const MINIMUM_SPLICEAI_SS_SIGNAL: f32 = 0.001;
 
+/// Read support that keeps a frequent intron with one weak splice site out of ARTIFACT
+///
+/// # Fields
+///
+/// * `min_reads` - Min reads splicing the intron [`seen`; 0 disables the rescue]
+/// * `min_freq` - Min fraction `seen / spanned`
+#[derive(Debug, Clone, Copy)]
+pub struct ReadRescue {
+    pub min_reads: usize,
+    pub min_freq: f32,
+}
+
+impl ReadRescue {
+    fn is_supported(&self, descriptor: &Intron) -> bool {
+        self.min_reads > 0
+            && descriptor.seen >= self.min_reads
+            && (descriptor.seen as f32 / descriptor.spanned as f32) >= self.min_freq
+    }
+}
+
 /// Classifies introns based on various criteria,
 /// including splice site scores, genomic context,
 /// and repeat sequences.
@@ -174,6 +194,10 @@ pub fn classify_introns(args: Args) -> Result<()> {
     };
 
     let accumulator = ParallelAccumulator::default();
+    let rescue = ReadRescue {
+        min_reads: args.artifact_rescue_min_reads,
+        min_freq: args.artifact_rescue_min_freq,
+    };
 
     isoseqs.into_par_iter().for_each(|bucket| {
         log::debug!("INFO: Processing bucket key -> {:?}", bucket.0);
@@ -202,6 +226,7 @@ pub fn classify_introns(args: Args) -> Result<()> {
             args.spliceai_min_ss_signal,
             args.intron_freq_threshold,
             args.maxent_min_ss_signal,
+            rescue,
             &spliceosome,
             repeats,
             args.do_intron_track,
@@ -304,6 +329,7 @@ fn distribute(
     spliceai_min_ss_signal: f32,
     intron_frequency_threshold: f32,
     maxent_min_ss_signal: f32,
+    rescue: ReadRescue,
     spliceosome: &HashMap<String, USpliceType>,
     repeats: Option<&Lapper<u64, ()>>,
     do_intron_track: bool,
@@ -330,6 +356,7 @@ fn distribute(
             spliceai_min_ss_signal,
             intron_frequency_threshold,
             maxent_min_ss_signal,
+            rescue,
             spliceosome,
             repeats,
             do_intron_track,
@@ -393,6 +420,7 @@ fn process_component(
     spliceai_min_ss_signal: f32,
     intron_frequency_threshold: f32,
     maxent_min_ss_signal: f32,
+    rescue: ReadRescue,
     spliceosome: &HashMap<String, USpliceType>,
     repeats: Option<&Lapper<u64, ()>>,
     do_intron_track: bool,
@@ -575,6 +603,7 @@ fn process_component(
         spliceai_min_ss_signal,
         intron_frequency_threshold,
         maxent_min_ss_signal,
+        rescue,
     );
 
     let mut rows = Vec::new();
@@ -617,6 +646,7 @@ fn process_component(
 /// * `spliceai_min_ss_signal`: A float representing the spliceAI minimum splice signal threshold.
 /// * `intron_frequency_threshold`: A float representing the intron frequency threshold.
 /// * `maxent_min_ss_signal`: A float representing the MaxEnt minimum splice signal threshold.
+/// * `rescue`: Read support that keeps a frequent intron with one weak site out of ARTIFACT.
 ///
 /// # Example
 ///
@@ -627,6 +657,7 @@ fn process_component(
 ///     spliceai_min_ss_signal,
 ///     intron_frequency_threshold,
 ///     maxent_min_ss_signal,
+///     rescue,
 /// );
 /// ```
 #[allow(clippy::collapsible_else_if)]
@@ -636,6 +667,7 @@ pub fn __veredict(
     spliceai_min_ss_signal: f32,
     intron_frequency_threshold: f32,
     maxent_min_ss_signal: f32,
+    rescue: ReadRescue,
 ) {
     query_introns
         .iter_mut()
@@ -744,6 +776,14 @@ pub fn __veredict(
                     } else if descriptor.splice_u_type == USpliceType::U12 {
                         descriptor.support = SupportType::Splicing;
                     } else if has_minimum_signal {
+                        descriptor.support = SupportType::Unclear;
+                    } else if rescue.is_supported(descriptor)
+                        && (descriptor.splice_ai_donor >= spliceai_min_ss_signal
+                            || descriptor.splice_ai_acceptor >= spliceai_min_ss_signal)
+                    {
+                        // INFO: one weak site (SpliceAI/MaxEnt) does not make an intron
+                        // INFO: that most covering reads splice an artifact [Q4 3b: TEFF2,
+                        // INFO: 382 reads, SpliceAI 0.756/0.017, MaxEnt 8.2/-0.8]
                         descriptor.support = SupportType::Unclear;
                     } else {
                         // INFO: intron type is unknown but is high frequency OR has ss signal -> unclear
@@ -1676,5 +1716,70 @@ impl std::fmt::Display for SpanRepeat {
             SpanRepeat::Spans => write!(f, "SPANS_REPEAT"),
             SpanRepeat::Null => write!(f, "NO_REPEAT"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Q4 3b: TEFF2 ENSMUST00000114565.8, chr1:50982382-51018458, GT-AG, 382 reads
+    fn teff2_intron() -> Intron {
+        let mut intron = Intron::new();
+        intron.start = 50982382;
+        intron.end = 51018458;
+        intron.intron_len = intron.end - intron.start;
+        intron.seen = 382;
+        intron.spanned = 409;
+        intron.splice_ai_donor = 0.756;
+        intron.splice_ai_acceptor = 0.017;
+        intron.max_ent_donor = 8.2;
+        intron.max_ent_acceptor = -0.8;
+        intron.donor_sequence = b"GT".to_vec();
+        intron.acceptor_sequence = b"AG".to_vec();
+        intron
+    }
+
+    fn classify(intron: Intron, rescue: ReadRescue) -> SupportType {
+        let mut introns = HashMap::new();
+        introns.insert((intron.start, intron.end), intron);
+        __veredict(&mut introns, 0.5, 0.02, 0.5, 1.5, rescue);
+        introns.into_values().next().unwrap().support
+    }
+
+    const RESCUE: ReadRescue = ReadRescue {
+        min_reads: 3,
+        min_freq: 0.5,
+    };
+
+    #[test]
+    fn frequent_intron_with_one_weak_site_is_not_an_artifact() {
+        assert_eq!(classify(teff2_intron(), RESCUE), SupportType::Unclear);
+        // the old behaviour: rescue disabled
+        let off = ReadRescue {
+            min_reads: 0,
+            ..RESCUE
+        };
+        assert_eq!(classify(teff2_intron(), off), SupportType::Artifact);
+    }
+
+    #[test]
+    fn weakly_supported_or_two_weak_sites_stay_artifact() {
+        // too few reads
+        let mut intron = teff2_intron();
+        intron.seen = 2;
+        intron.spanned = 2;
+        assert_eq!(classify(intron, RESCUE), SupportType::Artifact);
+
+        // both SpliceAI sites weak
+        let mut intron = teff2_intron();
+        intron.splice_ai_donor = 0.01;
+        assert_eq!(classify(intron, RESCUE), SupportType::Artifact);
+
+        // spliced by a minority of covering reads (and no ss signal)
+        let mut intron = teff2_intron();
+        intron.seen = 10;
+        intron.spanned = 100;
+        assert_eq!(classify(intron, RESCUE), SupportType::Artifact);
     }
 }

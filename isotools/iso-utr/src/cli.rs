@@ -67,6 +67,23 @@ pub struct Args {
     pub recover: bool,
 
     #[arg(
+        short = 's',
+        long = "start-junction",
+        help = "Decide truncations by the query's first (start) junction instead of its whole intron chain: \
+a query that starts inside a non-first exon k of another model is truncated when its first intron is the \
+intron leaving exon k; its downstream chain may differ. Default: the whole chain from exon k must match. \
+In both modes, a first exon that starts inside the intron upstream of a middle exon k (without reaching \
+exon k-1) and ends at exon k's donor is truncated",
+        value_name = "FLAG",
+        default_missing_value("true"),
+        default_value("false"),
+        num_args(0..=1),
+        require_equals(true),
+        action = ArgAction::Set,
+    )]
+    pub start_junction: bool,
+
+    #[arg(
         short = 'p',
         long = "prefix",
         required = false,
